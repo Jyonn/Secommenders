@@ -7,7 +7,7 @@ from processors.base_processor import BaseProcessor
 class ClassHub:
     @staticmethod
     def processors():
-        return ClassHub(BaseProcessor, 'processors', 'Processor')
+        return ClassHub(BaseProcessor, '../processors', 'Processor')
 
     def __init__(self, base_class, module_dir: str, module_type: str):
         self.base_class = base_class

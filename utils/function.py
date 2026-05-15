@@ -1,4 +1,4 @@
-from class_hub import ClassHub
+from utils.class_hub import ClassHub
 
 
 def load_processor(dataset, data_dir=None):
