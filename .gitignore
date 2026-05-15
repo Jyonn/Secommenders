@@ -1,0 +1,5 @@
+.gitignore
+.idea
+AGENTS.md
+.pycache/
+__pycache__/
