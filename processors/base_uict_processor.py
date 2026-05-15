@@ -1,16 +1,12 @@
 import abc
 
-from seq_process.base_seqprocessor import BaseSeqProcessor
+
+from processors.base_processor import BaseProcessor
 
 
-class UICTSeqProcessor(BaseSeqProcessor, abc.ABC):
-    """
-    user-item-click-time processor, for those have negative samples here but no user sequence
-    """
+class UICTProcessor(BaseProcessor, abc.ABC):
     DAT_COL: str
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    LBL_COL: str
 
     def _load_users(self, interactions):
         item_set = set(self.items[self.IID_COL].unique())

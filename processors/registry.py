@@ -1,26 +1,26 @@
-from seq_process.base_amazon_seqprocessor import AmazonSeqProcessor
-from seq_process.cds_clean_seqprocessor import CDsCleanSeqProcessor
-from seq_process.cds_seqprocessor import CDsSeqProcessor
-from seq_process.goodreads_seqprocessor import GoodreadsSeqProcessor
-from seq_process.hm_seqprocessor import HMSeqProcessor
-from seq_process.microlens_seqprocessor import MicroLensSeqProcessor
-from seq_process.mind_seqprocessor import MINDSeqProcessor
-from seq_process.movielens_seqprocessor import MovieLensSeqProcessor
-from seq_process.pens_seqprocessor import PENSSeqProcessor
-from seq_process.yelp_seqprocessor import YelpSeqProcessor
+from processors.base_amazon_processor import AmazonProcessor
+from processors.cds_clean_processor import CDsCleanProcessor
+from processors.cds_processor import CDsProcessor
+from processors.goodreads_processor import GoodreadsProcessor
+from processors.hm_processor import HMProcessor
+from processors.microlens_processor import MicroLensProcessor
+from processors.mind_processor import MINDProcessor
+from processors.movielens_processor import MovieLensProcessor
+from processors.pens_processor import PENSProcessor
+from processors.yelp_processor import YelpProcessor
 
 
 PROCESSOR_REGISTRY = {
-    'amazon': AmazonSeqProcessor,
-    'cds': CDsSeqProcessor,
-    'cdsclean': CDsCleanSeqProcessor,
-    'goodreads': GoodreadsSeqProcessor,
-    'hm': HMSeqProcessor,
-    'microlens': MicroLensSeqProcessor,
-    'mind': MINDSeqProcessor,
-    'movielens': MovieLensSeqProcessor,
-    'pens': PENSSeqProcessor,
-    'yelp': YelpSeqProcessor,
+    'amazon': AmazonProcessor,
+    'cds': CDsProcessor,
+    'cdsclean': CDsCleanProcessor,
+    'goodreads': GoodreadsProcessor,
+    'hm': HMProcessor,
+    'microlens': MicroLensProcessor,
+    'mind': MINDProcessor,
+    'movielens': MovieLensProcessor,
+    'pens': PENSProcessor,
+    'yelp': YelpProcessor,
 }
 
 

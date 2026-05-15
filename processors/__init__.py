@@ -1,17 +1,16 @@
+from processors.base_amazon_processor import AmazonProcessor
+from processors.base_processor import BaseProcessor
+from processors.base_uict_processor import UICTProcessor
+from processors.cds_clean_processor import CDsCleanProcessor
+from processors.cds_processor import CDsProcessor
+from processors.goodreads_processor import GoodreadsProcessor
+from processors.hm_processor import HMProcessor
+from processors.microlens_processor import MicroLensProcessor
+from processors.mind_processor import MINDProcessor
+from processors.movielens_processor import MovieLensProcessor
+from processors.pens_processor import PENSProcessor
 from processors.registry import PROCESSOR_REGISTRY, get_processor, list_processors
-
-from seq_process.base_amazon_seqprocessor import AmazonSeqProcessor as AmazonProcessor
-from seq_process.base_seqprocessor import BaseSeqProcessor as BaseProcessor
-from seq_process.base_uict_seqprocessor import UICTSeqProcessor as UICTProcessor
-from seq_process.cds_clean_seqprocessor import CDsCleanSeqProcessor as CDsCleanProcessor
-from seq_process.cds_seqprocessor import CDsSeqProcessor as CDsProcessor
-from seq_process.goodreads_seqprocessor import GoodreadsSeqProcessor as GoodreadsProcessor
-from seq_process.hm_seqprocessor import HMSeqProcessor as HMProcessor
-from seq_process.microlens_seqprocessor import MicroLensSeqProcessor as MicroLensProcessor
-from seq_process.mind_seqprocessor import MINDSeqProcessor as MINDProcessor
-from seq_process.movielens_seqprocessor import MovieLensSeqProcessor as MovieLensProcessor
-from seq_process.pens_seqprocessor import PENSSeqProcessor as PENSProcessor
-from seq_process.yelp_seqprocessor import YelpSeqProcessor as YelpProcessor
+from processors.yelp_processor import YelpProcessor
 
 __all__ = [
     'AmazonProcessor',
@@ -20,8 +19,8 @@ __all__ = [
     'CDsProcessor',
     'GoodreadsProcessor',
     'HMProcessor',
-    'MicroLensProcessor',
     'MINDProcessor',
+    'MicroLensProcessor',
     'MovieLensProcessor',
     'PENSProcessor',
     'PROCESSOR_REGISTRY',
