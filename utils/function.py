@@ -1,6 +1,11 @@
-from processors.registry import get_processor
+from class_hub import ClassHub
 
 
 def load_processor(dataset, data_dir=None):
-    processor = get_processor(dataset)
+    processors = ClassHub.processors()
+    key = dataset.lower()
+    if key not in processors:
+        available = ', '.join(sorted(processors.class_dict))
+        raise ValueError(f'Unknown processor: {dataset}. Available: {available}')
+    processor = processors[key]
     return processor(data_dir=data_dir)
