@@ -3,3 +3,5 @@
 AGENTS.md
 .pycache/
 __pycache__/
+cache/
+data/

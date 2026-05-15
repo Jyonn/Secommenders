@@ -1,5 +1,5 @@
-import glob
 import importlib
+from pathlib import Path
 
 from processors.base_processor import BaseProcessor
 
@@ -7,7 +7,12 @@ from processors.base_processor import BaseProcessor
 class ClassHub:
     @staticmethod
     def processors():
-        return ClassHub(BaseProcessor, '../processors', 'Processor')
+        return ClassHub(BaseProcessor, 'processors', 'Processor')
+
+    @staticmethod
+    def embedders():
+        from embedders.base_model import BaseModel
+        return ClassHub(BaseModel, 'embedders', 'Model')
 
     def __init__(self, base_class, module_dir: str, module_type: str):
         self.base_class = base_class
@@ -22,11 +27,12 @@ class ClassHub:
             self.class_dict[name] = class_
 
     def get_class_list(self):
-        file_paths = glob.glob(f'{self.module_dir}/*_{self.module_type}.py')
+        package_dir = Path(__file__).resolve().parents[1] / self.module_dir
+        file_paths = sorted(package_dir.glob(f'*_{self.module_type}.py'))
+
         class_list = []
         for file_path in file_paths:
-            file_name = file_path.split('/')[-1].split('.')[0]
-            module = importlib.import_module(f'{self.module_dir.replace("/", ".")}.{file_name}')
+            module = importlib.import_module(f'{self.module_dir}.{file_path.stem}')
             for _, obj in module.__dict__.items():
                 if isinstance(obj, type) and issubclass(obj, self.base_class) and obj is not self.base_class:
                     class_list.append(obj)
