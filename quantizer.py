@@ -19,24 +19,13 @@ from utils.data import get_data_dir
 from utils.function import load_processor
 
 
-def _mapping_or_empty(value):
-    if not value:
-        return {}
-    if isinstance(value, dict):
-        return value
-    if callable(value):
-        return value()
-    return dict(value)
-
-
 class Quantizer:
-    def __init__(self, configurations):
-        self.args = configurations
-        self.config = configurations
+    def __init__(self, data, model, config):
+        self.config = config
 
-        self.data = configurations.data.lower()
-        self.embedding_model = configurations.model.replace('.', '').lower()
-        self.quantizer_name = self.config.quantizer.name.lower()
+        self.data = data
+        self.embedding_model = model.replace('.', '').lower()
+        self.quantizer_name = self.config.quantizer.name
 
         self.processor = load_processor(self.data, data_dir=get_data_dir(self.data))
         self.processor.load()
@@ -253,5 +242,5 @@ if __name__ == '__main__':
         makedirs=[],
     ).parse()
 
-    quantizer = Quantizer(configurations)
+    quantizer = Quantizer(configurations.data, configurations.model, configurations.config)
     quantizer.run()
