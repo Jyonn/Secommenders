@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-import sys
 
 import numpy as np
 import pandas as pd
@@ -9,10 +8,6 @@ import torch
 from pigmento import pnt
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
-AUTOENCODERS_SOURCE = Path.home() / 'Projects' / 'Libraries' / 'autoencoders'
-if AUTOENCODERS_SOURCE.exists():
-    sys.path.insert(0, str(AUTOENCODERS_SOURCE))
 
 from autoencoders.data.base import TensorSpec, create_dataloaders, split_dataset
 from autoencoders.data.embeddings import EmbeddingMatrix, EmbeddingTensorDataset
@@ -129,21 +124,21 @@ class Quantizer:
         decoder_config = None
         if getattr(self.config, 'decoder', None):
             decoder_name = self.config.decoder.name or None
-            decoder_config = _mapping_or_empty(self.config.decoder.config)
+            decoder_config = self.config.decoder.config() if self.config.decoder.config else None
 
         self.model = load_model(
             self.config.quantizer.name,
             sample_spec=sample_spec,
             encoder=self.config.encoder.name or None,
-            encoder_config=_mapping_or_empty(self.config.encoder.config),
+            encoder_config=self.config.encoder.config() if self.config.encoder.config else None,
             decoder=decoder_name,
             decoder_config=decoder_config,
-            **_mapping_or_empty(self.config.quantizer.config),
+            **self.config.quantizer.config(),
         )
         return self.model
 
     def build_trainer(self):
-        self.trainer_args = TrainingConfig(**_mapping_or_empty(self.config.trainer))
+        self.trainer_args = TrainingConfig(**self.config.trainer())
         return VQTrainer(model=self.model, args=self.trainer_args)
 
     def train(self):
@@ -227,7 +222,7 @@ class Quantizer:
             'quantized_latents_path': str(self.quantized_path),
             'item_ids_path': str(self.item_ids_path),
             'trainer_args': self.trainer_args.to_dict(),
-            'quantizer_config': _mapping_or_empty(self.config.quantizer.config),
+            'quantizer_config': self.config.quantizer.config(),
         }
         if codebooks is not None:
             meta['codebooks_path'] = str(self.codebooks_path)
