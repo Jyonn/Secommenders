@@ -12,13 +12,14 @@ class CausalLMModel(BaseModel, abc.ABC):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.key)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.key, trust_remote_code=True)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.model = AutoModelForCausalLM.from_pretrained(
             self.key,
             torch_dtype=self.get_dtype(),
+            trust_remote_code=True,
         )
         self.model.to(self.device)
         self.max_len = getattr(self.model.config, 'max_position_embeddings', 2048)
@@ -55,5 +56,69 @@ class Llama3Model(CausalLMModel):
     KEY = 'meta-llama/Meta-Llama-3-8B'
 
 
-class Qwen2Model(CausalLMModel):
+class LlamaModel(CausalLMModel):
+    KEY = 'huggyllama/llama-7b'
+
+
+class Llama1Model(LlamaModel):
+    pass
+
+
+class Llama2Model(CausalLMModel):
+    KEY = 'meta-llama/Llama-2-7b-hf'
+
+
+class QwenModel(CausalLMModel):
     KEY = 'Qwen/Qwen2-7B-Instruct'
+
+
+class Qwen2th7bModel(QwenModel):
+    pass
+
+
+class OptModel(CausalLMModel):
+    KEY = 'facebook/opt-1.3b'
+
+
+class Opt1bModel(OptModel):
+    pass
+
+
+class Opt350mModel(CausalLMModel):
+    KEY = 'facebook/opt-350m'
+
+
+class GLMModel(CausalLMModel):
+    KEY = 'THUDM/glm-4-9b-chat'
+
+
+class GLM4th9bModel(GLMModel):
+    pass
+
+
+class MistralModel(CausalLMModel):
+    KEY = 'mistralai/Mistral-7B-Instruct-v0.3'
+
+
+class Mistral7bModel(MistralModel):
+    pass
+
+
+class PhiModel(CausalLMModel):
+    KEY = 'microsoft/Phi-3-small-8k-instruct'
+
+
+class Phi3th7bModel(PhiModel):
+    pass
+
+
+class Phi2th3bModel(CausalLMModel):
+    KEY = 'microsoft/phi-2'
+
+
+class RecgptModel(CausalLMModel):
+    KEY = 'vinai/RecGPT-7B'
+
+
+class Recgpt7bModel(RecgptModel):
+    pass

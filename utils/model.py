@@ -14,11 +14,23 @@ def _load_models():
 
         name, value = line.split('=', 1)
         name = name.strip().lower()
-        keys = value.strip().split(',')
-        keys = [item.split(':', 1) for item in keys]
-        keys = {key.strip(): mapped.strip() for key, mapped in keys}
-        for key, mapped in keys.items():
+        entries = []
+        for item in value.strip().split(','):
+            key, mapped = item.split(':', 1)
+            key = key.strip()
+            mapped = mapped.strip().split('$', 1)[0].strip()
+            entries.append((key, mapped))
             model_map[f'{name}{key}'] = mapped
+
+        if name not in model_map and entries:
+            default = None
+            for key, mapped in entries:
+                if key in {'', 'base'}:
+                    default = mapped
+                    break
+            if default is None:
+                default = entries[0][1]
+            model_map[name] = default
 
     return model_map
 
