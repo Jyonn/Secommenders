@@ -103,7 +103,6 @@ class Quantizer:
         dataloaders = create_dataloaders(
             splits,
             batch_size=int(self.config.trainer.batch_size),
-            num_workers=int(getattr(self.config.trainer, 'num_workers', 0)),
         )
         return dataloaders
 
