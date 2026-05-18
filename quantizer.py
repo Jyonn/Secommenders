@@ -194,11 +194,18 @@ class Quantizer:
         best_dir = self.output_dir / 'best'
         if not best_dir.exists():
             raise FileNotFoundError(f'Best checkpoint not found: {best_dir}')
-        model = self.model.__class__.from_pretrained(best_dir, map_location='cpu')
+
+        weights_name = getattr(self.model.__class__, 'weights_name', 'pytorch_model.bin')
+        weights_path = best_dir / weights_name
+        if not weights_path.exists():
+            raise FileNotFoundError(f'Best checkpoint weights not found: {weights_path}')
+
+        state_dict = torch.load(weights_path, map_location='cpu')
+        self.model.load_state_dict(state_dict)
         device = resolve_device(self.trainer_args.device)
-        model.to(device)
-        model.eval()
-        return model, device
+        self.model.to(device)
+        self.model.eval()
+        return self.model, device
 
     def export_codes(self):
         if self.embedding_matrix is None:
