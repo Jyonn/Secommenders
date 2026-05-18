@@ -13,10 +13,52 @@ from autoencoders.data.base import TensorSpec, create_dataloaders, split_dataset
 from autoencoders.data.embeddings import EmbeddingMatrix, EmbeddingTensorDataset
 from autoencoders.function import resolve_device, set_seed
 from autoencoders.models.loading import load_model
+from autoencoders.training.display import style
 from autoencoders.training.trainer import TrainingConfig, VQTrainer
 from utils.config_init import ConfigInit
 from utils.data import get_data_dir
 from utils.function import load_processor
+
+
+def _format_spec(spec):
+    return style(str(spec), fg='green')
+
+
+def _print_pipeline_trace(model):
+    if not hasattr(model, 'get_pipeline_trace'):
+        return
+
+    print(style(' Shape Trace ', fg='white', bg='magenta', bold=True))
+    pipeline = model.get_pipeline_trace()
+    if not pipeline:
+        print(style('  <empty>', fg='yellow', dim=True))
+        print(style(' End Trace ', fg='black', bg='yellow', bold=True))
+        print()
+        return
+
+    first_step = pipeline[0]
+    print(
+        f"{style(first_step.name, fg='cyan', bold=True)} "
+        f"{style(':', fg='magenta', dim=True)} "
+        f'{_format_spec(first_step.output_spec)}'
+    )
+
+    for step in pipeline[1:]:
+        print(
+            f"{style(step.name, fg='cyan', bold=True)} "
+            f"{style('->', fg='magenta', dim=True)} "
+            f'{_format_spec(step.output_spec)}'
+        )
+        for child in step.children or []:
+            print(
+                f"  {style('↳', fg='yellow', bold=True)} "
+                f"{style(child.name, fg='blue')} "
+                f"{style('->', fg='magenta', dim=True)} "
+                f'{_format_spec(child.output_spec)}'
+            )
+
+    print(style(' End Trace ', fg='black', bg='yellow', bold=True))
+    print()
 
 
 class Quantizer:
@@ -134,6 +176,7 @@ class Quantizer:
         self.load_embedding_matrix()
         dataloaders = self.build_dataloaders()
         self.build_model()
+        _print_pipeline_trace(self.model)
         trainer = self.build_trainer()
 
         pnt(f'training {self.quantizer_name} on {self.data}/{self.embedding_model}')
