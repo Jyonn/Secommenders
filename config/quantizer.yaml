@@ -1,0 +1,40 @@
+quantizer:
+  name: rqvae
+  config:
+    latent_dim: ${latent_dim:64}$
+    reconstruction_loss: mse
+    codebook_size: ${codebook_size:256}$
+    commitment_weight: ${commitment_weight:0.25}$
+    codebook_weight: ${codebook_weight:1.0}$
+    use_ema_codebook: ${use_ema_codebook:true}$
+    ema_decay: ${ema_decay:0.99}$
+    ema_epsilon: ${ema_epsilon:0.00001}$
+    dead_code_reset: ${dead_code_reset:true}$
+    dead_code_threshold: ${dead_code_threshold:0}$
+    num_quantizers: ${num_quantizers:4}$
+
+encoder:
+  name: mlp
+  config:
+    hidden_dims: [256, 128]
+    activation: relu
+    use_bias: true
+
+decoder:
+  name: mlp
+  config:
+    hidden_dims: [128, 256]
+    activation: relu
+    use_bias: true
+
+trainer:
+  output_dir: data/${data}/embeddings/${model}.rqvae
+  validation_ratio: ${validation_ratio:0.1}$
+  test_ratio: ${test_ratio:0.1}$
+  seed: ${seed:42}$
+  epochs: ${epoch:5}$
+  batch_size: ${batch_size:128}$
+  learning_rate: ${lr:0.001}$
+  device: ${device:auto}$
+  patience: ${patience:null}$
+  advice: ${advice:false}$
