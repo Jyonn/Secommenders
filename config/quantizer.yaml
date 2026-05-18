@@ -31,3 +31,4 @@ trainer:
   device: ${device:auto}$
   patience: ${patience:null}$
   advice: ${advice:false}$
+  show_only_best_epochs: false
