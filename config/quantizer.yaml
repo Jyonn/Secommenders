@@ -1,7 +1,7 @@
 quantizer:
   name: rqvae
   config:
-    latent_dim: ${latent_dim:64}$
+    latent_dim: ${latent_dim:32}$
     reconstruction_loss: mse
     codebook_size: ${codebook_size:256}$
     commitment_weight: ${commitment_weight:0.25}$
@@ -12,11 +12,16 @@ quantizer:
     dead_code_reset: ${dead_code_reset:true}$
     dead_code_threshold: ${dead_code_threshold:0}$
     num_quantizers: ${num_quantizers:4}$
+    assignment_strategy: sinkhorn
+    sinkhorn_epsilon: [0.0, 0.0, 0.0, 0.003]
+    sinkhorn_iters: 50
+    kmeans_init: true
+    kmeans_iters: 100
 
 encoder:
   name: mlp
   config:
-    hidden_dims: [256, 128]
+    hidden_dims: [2048, 1024, 512, 256, 128, 64]
     activation: relu
     use_bias: true
 
