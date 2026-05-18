@@ -17,9 +17,10 @@ class Embedder:
         self.data = conf.data.lower()
         self.model_name = conf.model.replace('.', '').lower()
 
-        data_dir = conf.data_dir or get_data_dir(self.data)
+        data_dir = get_data_dir(self.data)
         self.processor = load_processor(self.data, data_dir=data_dir)
         self.processor.load()
+        self.items_path = Path(self.processor.store_dir) / 'items.parquet'
 
         self.caller = load_embedder(
             self.model_name,
@@ -27,12 +28,12 @@ class Embedder:
             batch_size=self.conf.batch_size,
         ).post_init()
 
-        self.cache_dir = Path('cache') / 'embeddings' / self.data / self.model_name
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.embedding_dir = Path(self.processor.store_dir) / 'embeddings'
+        self.embedding_dir.mkdir(parents=True, exist_ok=True)
 
-        self.embedding_path = self.cache_dir / 'embeddings.npy'
-        self.item_ids_path = self.cache_dir / 'item_ids.parquet'
-        self.meta_path = self.cache_dir / 'meta.json'
+        self.embedding_path = self.embedding_dir / f'{self.model_name}.npy'
+        self.item_ids_path = self.embedding_dir / f'{self.model_name}.item_ids.parquet'
+        self.meta_path = self.embedding_dir / f'{self.model_name}.meta.json'
 
     def get_contents(self):
         contents = []
@@ -60,6 +61,7 @@ class Embedder:
             pnt(f'cached embeddings found at {self.embedding_path}')
             return
 
+        pnt(f'loading item content from {self.items_path}')
         contents = self.get_contents()
         embeddings = []
         total = len(contents)
@@ -87,7 +89,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Extract item embeddings from items.parquet content.')
     parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
     parser.add_argument('--model', required=True, help='Embedder model name.')
-    parser.add_argument('--data_dir', default=None, help='Optional raw data directory override.')
     parser.add_argument('--device', default='cpu', help='Device string, such as cpu or cuda:0.')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for encoding.')
     parser.add_argument('--normalize', action='store_true', help='Apply L2 normalization to embeddings.')
