@@ -20,13 +20,6 @@ encoder:
     activation: relu
     use_bias: true
 
-decoder:
-  name: mlp
-  config:
-    hidden_dims: [128, 256]
-    activation: relu
-    use_bias: true
-
 trainer:
   output_dir: data/${data}/embeddings/${model}.rqvae
   validation_ratio: ${validation_ratio:0.1}$
