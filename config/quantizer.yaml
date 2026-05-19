@@ -9,8 +9,8 @@ quantizer:
     use_ema_codebook: ${use_ema_codebook:true}$
     ema_decay: ${ema_decay:0.99}$
     ema_epsilon: ${ema_epsilon:0.00001}$
-    dead_code_reset: ${dead_code_reset:true}$
-    dead_code_threshold: ${dead_code_threshold:0}$
+    dead_code_reset: false
+    dead_code_threshold: 0
     num_quantizers: ${num_quantizers:4}$
     assignment_strategy: sinkhorn
     sinkhorn_epsilon: [0.0, 0.0, 0.0, 0.003]
@@ -35,5 +35,19 @@ trainer:
   learning_rate: ${lr:0.001}$
   device: ${device:auto}$
   patience: ${patience:null}$
-  advice: ${advice:false}$
+  advice: ${advice:true}$
   show_only_best_epochs: false
+  display_metrics:
+    coll: true
+    commit: false
+    codes: true
+    recon: true
+    dead: true
+    ppl: false
+    usage: false
+  save_best_by: [ loss, coll, codes, recon ]
+  save_best_mode:
+    loss: min
+    coll: min
+    codes: max
+    recon: min
