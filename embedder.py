@@ -8,6 +8,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from utils import get_data_dir, load_embedder, load_processor
+from utils.gpu import GPU
 
 
 class Embedder:
@@ -16,6 +17,7 @@ class Embedder:
 
         self.data = conf.data.lower()
         self.model_name = conf.model.replace('.', '').lower()
+        self.device = conf.device or GPU.auto_choose(torch_format=True)
 
         data_dir = get_data_dir(self.data)
         self.processor = load_processor(self.data, data_dir=data_dir)
@@ -24,7 +26,7 @@ class Embedder:
 
         self.caller = load_embedder(
             self.model_name,
-            device=self.conf.device,
+            device=self.device,
             batch_size=self.conf.batch_size,
         ).post_init()
 
@@ -89,7 +91,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Extract item embeddings from items.parquet content.')
     parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
     parser.add_argument('--model', required=True, help='Embedder model name.')
-    parser.add_argument('--device', default='cpu', help='Device string, such as cpu or cuda:0.')
+    parser.add_argument('--device', default=None, help='Device string, such as cpu or cuda:0.')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for encoding.')
     parser.add_argument('--normalize', action='store_true', help='Apply L2 normalization to embeddings.')
     parser.add_argument('--overwrite', action='store_true', help='Overwrite existing cached embeddings.')

@@ -18,6 +18,7 @@ from autoencoders.training.trainer import TrainingConfig, VQTrainer
 from utils.config_init import ConfigInit
 from utils.data import get_data_dir
 from utils.function import load_processor
+from utils.gpu import GPU
 
 
 def _format_spec(spec):
@@ -96,6 +97,12 @@ class Quantizer:
         self.trainer_args = None
         self.model = None
 
+    def _resolve_device(self):
+        device = getattr(self.config.trainer, 'device', None)
+        if device is not None and device != 'auto':
+            return device
+        return GPU.auto_choose(torch_format=True)
+
     def _load_item_ids(self, expected_size):
         if self.embedding_item_ids_path.exists():
             item_ids = pd.read_parquet(self.embedding_item_ids_path)[self.processor.IID_COL].tolist()
@@ -167,7 +174,9 @@ class Quantizer:
         return self.model
 
     def build_trainer(self):
-        self.trainer_args = TrainingConfig(**self.config.trainer())
+        trainer_config = self.config.trainer()
+        trainer_config['device'] = self._resolve_device()
+        self.trainer_args = TrainingConfig(**trainer_config)
         return VQTrainer(model=self.model, args=self.trainer_args)
 
     def train(self):
