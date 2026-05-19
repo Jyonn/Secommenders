@@ -29,6 +29,7 @@ trainer:
   output_dir: data/${data}/embeddings/${model}
   validation_ratio: ${validation_ratio:0.1}$
   test_ratio: ${test_ratio:0.1}$
+  full_dataset_as_splits: true
   seed: ${seed:42}$
   epochs: ${epoch:5}$
   batch_size: ${batch_size:128}$
