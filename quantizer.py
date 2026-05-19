@@ -13,7 +13,7 @@ from autoencoders.data.base import TensorSpec, create_dataloaders, split_dataset
 from autoencoders.data.embeddings import EmbeddingMatrix, EmbeddingTensorDataset
 from autoencoders.function import resolve_device, set_seed
 from autoencoders.models.loading import load_model
-from autoencoders.training.display import style
+from autoencoders.training.display import SCALAR_METRIC_SPECS, TrainerDisplay, style
 from autoencoders.training.trainer import TrainingConfig, VQTrainer
 from utils.config_init import ConfigInit
 from utils.data import get_data_dir
@@ -59,6 +59,58 @@ def _print_pipeline_trace(model):
 
     print(style(' End Trace ', fg='black', bg='yellow', bold=True))
     print()
+
+
+class QuantizerTrainerDisplay(TrainerDisplay):
+    def log_best_epoch(
+        self,
+        *,
+        epoch_label: str,
+        epoch_metrics: dict[str, float | int],
+        metric_name: str = 'loss',
+    ) -> None:
+        metric_key = self.resolve_metric_key(metric_name)
+
+        if metric_name == 'codes':
+            if 'validation_active_codes' not in epoch_metrics or 'validation_codebook_size' not in epoch_metrics:
+                return
+            value = (
+                f"{int(epoch_metrics['validation_active_codes'])}/"
+                f"{int(epoch_metrics['validation_codebook_size'])}"
+            )
+            value_fg = self.config.meta_value_fg
+        else:
+            spec = next(
+                (
+                    metric_spec
+                    for metric_spec in SCALAR_METRIC_SPECS
+                    if metric_spec[1] == metric_name or metric_spec[0] == metric_key
+                ),
+                None,
+            )
+            if spec is None:
+                metric_value = epoch_metrics.get(f'validation_{metric_key}')
+                if metric_value is None:
+                    return
+                value = str(metric_value)
+                value_fg = self.config.metric_value_fg
+            else:
+                _metric_key_name, _short_name, color_attr, format_spec = spec
+                value = format(float(epoch_metrics[f'validation_{metric_key}']), format_spec)
+                value_fg = getattr(self.config, color_attr)
+
+        parts = [
+            style(epoch_label, fg=self.config.epoch_index_fg, bold=True),
+            self.format_metric(metric_name, value, value_fg=value_fg),
+        ]
+        parts.extend(
+            self._summary_metric_segments(
+                epoch_metrics,
+                train_validation=False,
+                exclude_short_names={metric_name},
+            )
+        )
+        self._print_log('BEST', self._join_segments(*parts), fg=self.config.best_label_fg, bg=self.config.best_label_bg)
 
 
 class Quantizer:
@@ -169,7 +221,7 @@ class Quantizer:
 
     def build_trainer(self):
         self.trainer_args = TrainingConfig(**self.config.trainer())
-        return VQTrainer(model=self.model, args=self.trainer_args)
+        return VQTrainer(model=self.model, args=self.trainer_args, display=QuantizerTrainerDisplay())
 
     def train(self):
         set_seed(int(self.config.trainer.seed))
