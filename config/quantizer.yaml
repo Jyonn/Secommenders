@@ -46,8 +46,3 @@ trainer:
     ppl: false
     usage: false
   save_best_by: [ loss, coll, codes, recon ]
-  save_best_mode:
-    loss: min
-    coll: min
-    codes: max
-    recon: min
