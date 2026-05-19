@@ -103,6 +103,9 @@ class Quantizer:
             return device
         return GPU.auto_choose(torch_format=True)
 
+    def _use_textual_display(self):
+        return getattr(self.config.trainer, 'display_backend', 'cli') == 'textual'
+
     def _load_item_ids(self, expected_size):
         if self.embedding_item_ids_path.exists():
             item_ids = pd.read_parquet(self.embedding_item_ids_path)[self.processor.IID_COL].tolist()
@@ -185,7 +188,8 @@ class Quantizer:
         self.load_embedding_matrix()
         dataloaders = self.build_dataloaders()
         self.build_model()
-        _print_pipeline_trace(self.model)
+        if not self._use_textual_display():
+            _print_pipeline_trace(self.model)
         trainer = self.build_trainer()
 
         pnt(f'training {self.quantizer_name} on {self.data}/{self.embedding_model}')
