@@ -144,6 +144,7 @@ class Quantizer:
         self.dataset = EmbeddingTensorDataset(self.embedding_matrix)
         splits = split_dataset(
             self.dataset,
+            full_dataset_as_splits=bool(getattr(self.config.trainer, 'full_dataset_as_splits', False)),
             validation_ratio=float(self.config.trainer.validation_ratio),
             test_ratio=float(self.config.trainer.test_ratio),
             seed=int(self.config.trainer.seed),
