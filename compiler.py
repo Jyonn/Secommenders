@@ -1,6 +1,5 @@
 import argparse
 import json
-import re
 from dataclasses import asdict, dataclass
 from itertools import combinations
 from pathlib import Path
@@ -8,11 +7,11 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from pigmento import pnt
 from tqdm import tqdm
-from transformers import AutoConfig, AutoTokenizer
 
+from models import BaseBackbone, build_backbone
 from processors.base_processor import Processor
-from utils import model as model_utils
 from utils.artifact import ArtifactStore
 from utils.function import load_processor
 
@@ -81,246 +80,6 @@ class VocabularyRegistry:
         return {'namespaces': self.entries}
 
 
-class ModelAdapter:
-    DEFAULT_MAX_LENGTH = 512
-
-    def __init__(self, model_name: str):
-        self.model_name = model_name
-        self.prompt_spec = None
-
-    @property
-    def namespace_name(self):
-        return self.model_name
-
-    @property
-    def max_length(self):
-        raise NotImplementedError
-
-    @property
-    def kind(self):
-        raise NotImplementedError
-
-    def build_vocab_artifact(self):
-        raise NotImplementedError
-
-    def build_prompt_spec(self):
-        raise NotImplementedError
-
-    def tokenize_texts(self, texts: list[str], max_tokens: int):
-        raise NotImplementedError
-
-    def estimate_main_length(self, history_values: list, target_value, task_type: str):
-        raise NotImplementedError
-
-    def build_alignment_spec(self):
-        raise NotImplementedError
-
-
-class LLMAdapter(ModelAdapter):
-    HISTORY_PREFIX = 'A user has browsed the following items:'
-    ITEM_SEPARATOR = ','
-    QUERY_PREFIX = 'Which item would the user probably interact with:'
-
-    ALIGN_PREFIX = 'An item featured'
-    ALIGN_BRIDGE = 'can be mapped to'
-
-    def __init__(self, model_name: str, model_key: str):
-        super().__init__(model_name)
-        self.model_key = model_key
-        self.tokenizer = AutoTokenizer.from_pretrained(model_key, trust_remote_code=True)
-        if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.config = AutoConfig.from_pretrained(model_key, trust_remote_code=True)
-        self._max_length = self._resolve_max_length()
-
-    @property
-    def kind(self):
-        return 'llm'
-
-    @property
-    def max_length(self):
-        return self._max_length
-
-    def _resolve_max_length(self):
-        tokenizer_max = getattr(self.tokenizer, 'model_max_length', None)
-        if tokenizer_max and tokenizer_max < 1_000_000:
-            return int(tokenizer_max)
-
-        for attr in ['max_position_embeddings', 'n_positions', 'seq_length', 'max_seq_len', 'model_max_length']:
-            value = getattr(self.config, attr, None)
-            if isinstance(value, int) and 0 < value < 1_000_000:
-                return int(value)
-        return self.DEFAULT_MAX_LENGTH
-
-    def _encode(self, text: str):
-        return self.tokenizer.encode(text, add_special_tokens=False)
-
-    def tokenize_texts(self, texts: list[str], max_tokens: int):
-        return [
-            self.tokenizer.encode(text or '[Empty Content]', add_special_tokens=False, truncation=True, max_length=max_tokens)
-            for text in texts
-        ]
-
-    def build_vocab_artifact(self):
-        vocab = self.tokenizer.get_vocab()
-        size = max(vocab.values()) + 1 if vocab else 0
-        tokens = [''] * size
-        for token, index in vocab.items():
-            tokens[index] = token
-        return {
-            'tokens': tokens,
-            'bos_token_id': getattr(self.tokenizer, 'bos_token_id', None),
-            'eos_token_id': getattr(self.tokenizer, 'eos_token_id', None),
-            'pad_token_id': getattr(self.tokenizer, 'pad_token_id', None),
-            'unk_token_id': getattr(self.tokenizer, 'unk_token_id', None),
-            'model_key': self.model_key,
-        }
-
-    def build_prompt_spec(self):
-        if self.prompt_spec is not None:
-            return self.prompt_spec
-        self.prompt_spec = {
-            'history_prefix_ids': self._encode(self.HISTORY_PREFIX),
-            'item_separator_ids': self._encode(self.ITEM_SEPARATOR),
-            'query_prefix_ids': self._encode(self.QUERY_PREFIX),
-            'max_length': self.max_length,
-            'kind': self.kind,
-        }
-        return self.prompt_spec
-
-    def build_alignment_spec(self):
-        return {
-            'align_prefix_ids': self._encode(self.ALIGN_PREFIX),
-            'align_bridge_ids': self._encode(self.ALIGN_BRIDGE),
-            'kind': self.kind,
-        }
-
-    @staticmethod
-    def _value_length(value, task_type):
-        if task_type == 'embedding':
-            return 0
-        if isinstance(value, list):
-            return len(value)
-        return 1
-
-    def estimate_main_length(self, history_values: list, target_value, task_type: str):
-        prompt = self.build_prompt_spec()
-        history_len = sum(len(value) if isinstance(value, list) else 1 for value in history_values)
-        separator_len = len(prompt['item_separator_ids']) * max(0, len(history_values) - 1)
-        target_len = self._value_length(target_value, task_type)
-        return (
-            len(prompt['history_prefix_ids'])
-            + history_len
-            + separator_len
-            + len(prompt['query_prefix_ids'])
-            + target_len
-        )
-
-
-class ScratchTokenizer:
-    TOKEN_PATTERN = re.compile(r"\w+|[^\w\s]", re.UNICODE)
-    PAD_TOKEN = '<pad>'
-    UNK_TOKEN = '<unk>'
-    HISTORY_TOKEN = '<history>'
-    SEP_TOKEN = '<sep>'
-    NEXT_TOKEN = '<next>'
-    ALIGN_TOKEN = '<align>'
-    TO_TOKEN = '<to>'
-
-    def __init__(self, texts: list[str]):
-        base_tokens = [
-            self.PAD_TOKEN,
-            self.UNK_TOKEN,
-            self.HISTORY_TOKEN,
-            self.SEP_TOKEN,
-            self.NEXT_TOKEN,
-            self.ALIGN_TOKEN,
-            self.TO_TOKEN,
-        ]
-        vocab = {}
-        tokens = []
-        for token in base_tokens:
-            vocab[token] = len(tokens)
-            tokens.append(token)
-
-        for text in texts:
-            for token in self.tokenize(text):
-                if token not in vocab:
-                    vocab[token] = len(tokens)
-                    tokens.append(token)
-
-        self.vocab = vocab
-        self.tokens = tokens
-
-    @classmethod
-    def tokenize(cls, text: str):
-        text = (text or '').lower().strip()
-        if not text:
-            return []
-        return cls.TOKEN_PATTERN.findall(text)
-
-    def encode(self, text: str, max_tokens: Optional[int] = None):
-        tokens = [self.vocab.get(token, self.vocab[self.UNK_TOKEN]) for token in self.tokenize(text)]
-        if max_tokens is not None:
-            tokens = tokens[:max_tokens]
-        return tokens
-
-
-class ScratchAdapter(ModelAdapter):
-    def __init__(self, model_name: str, texts: list[str]):
-        super().__init__(model_name)
-        self.tokenizer = ScratchTokenizer(texts)
-
-    @property
-    def kind(self):
-        return 'scratch'
-
-    @property
-    def max_length(self):
-        return self.DEFAULT_MAX_LENGTH
-
-    def tokenize_texts(self, texts: list[str], max_tokens: int):
-        return [self.tokenizer.encode(text or '[Empty Content]', max_tokens=max_tokens) for text in texts]
-
-    def build_vocab_artifact(self):
-        return {
-            'tokens': self.tokenizer.tokens,
-            'pad_token_id': self.tokenizer.vocab[ScratchTokenizer.PAD_TOKEN],
-            'unk_token_id': self.tokenizer.vocab[ScratchTokenizer.UNK_TOKEN],
-        }
-
-    def build_prompt_spec(self):
-        if self.prompt_spec is not None:
-            return self.prompt_spec
-        self.prompt_spec = {
-            'history_prefix_ids': [self.tokenizer.vocab[ScratchTokenizer.HISTORY_TOKEN]],
-            'item_separator_ids': [self.tokenizer.vocab[ScratchTokenizer.SEP_TOKEN]],
-            'query_prefix_ids': [self.tokenizer.vocab[ScratchTokenizer.NEXT_TOKEN]],
-            'max_length': self.max_length,
-            'kind': self.kind,
-        }
-        return self.prompt_spec
-
-    def build_alignment_spec(self):
-        return {
-            'align_prefix_ids': [self.tokenizer.vocab[ScratchTokenizer.ALIGN_TOKEN]],
-            'align_bridge_ids': [self.tokenizer.vocab[ScratchTokenizer.TO_TOKEN]],
-            'kind': self.kind,
-        }
-
-    def estimate_main_length(self, history_values: list, target_value, task_type: str):
-        prompt = self.build_prompt_spec()
-        history_len = sum(len(value) if isinstance(value, list) else 1 for value in history_values)
-        separator_len = len(prompt['item_separator_ids']) * max(0, len(history_values) - 1)
-        if task_type == 'embedding':
-            target_len = 0
-        elif isinstance(target_value, list):
-            target_len = len(target_value)
-        else:
-            target_len = 1
-        return len(prompt['history_prefix_ids']) + history_len + separator_len + len(prompt['query_prefix_ids']) + target_len
-
-
 class Compiler:
     VER = 'v1.2'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
@@ -332,7 +91,7 @@ class Compiler:
         self.store = ArtifactStore(config.data)
         self.output_dir = self.store.compiled_dir(config.prepare_id)
         self.processor: Optional[Processor] = None
-        self.model_adapter: Optional[ModelAdapter] = None
+        self.backbone: Optional[BaseBackbone] = None
         self.registry = VocabularyRegistry()
         self.uid_raw_items: list = []
         self.uid_item_map = {}
@@ -351,9 +110,6 @@ class Compiler:
         self.alignment_dir = self.output_dir / 'alignment'
         for path in [self.vocab_dir, self.prompts_dir, self.item_views_dir, self.samples_dir, self.alignment_dir]:
             path.mkdir(parents=True, exist_ok=True)
-
-    def _log(self, message: str):
-        print(f'|Compiler| {message}')
 
     @staticmethod
     def _preview_list(values, limit=3):
@@ -471,7 +227,7 @@ class Compiler:
         lines.append(
             f'  user_id   : {user_id} | sequence_len={len(sequence)} | target_pos={target_pos + 1} '
             f'| history_span=[{history_start + 1}, {target_pos}] | target_raw={target_raw} '
-            f'| input_len={total_input_length}/{self.model_adapter.max_length}'
+            f'| input_len={total_input_length}/{self.backbone.max_length}'
         )
         lines.append('  legend    : '
                      + self._ansi(' skip ', fg=30, bg=47, dim=True)
@@ -556,19 +312,19 @@ class Compiler:
 
     def run(self):
         self.validate()
-        self._log(
+        pnt(
             f'start compile data={self.config.data} model={self.config.model} '
             f'repr={self.config.repr_type} combine={self.config.repr_combine} '
             f'task={self.config.task_type} maxitems={self.config.maxitems} '
             f'textlen={self.config.item_text_max_tokens} alignment={self.config.alignment}'
         )
         if self.is_cached():
-            self._log(f'compiled dataset cached at {self.output_dir}')
+            pnt(f'compiled dataset cached at {self.output_dir}')
             return
 
-        self._log(f'cache miss, compiling into {self.output_dir}')
+        pnt(f'cache miss, compiling into {self.output_dir}')
         self.load_processor()
-        self.init_model_adapter()
+        self.init_backbone()
         self.build_vocab_and_prompts()
         self.build_item_views()
         self.build_samples('finetune', self.processor.finetune_set)
@@ -577,10 +333,10 @@ class Compiler:
         self.save_meta()
         self.save_stats()
         self.log_sample_visuals()
-        self._log(f'compile finished: outputs written to {self.output_dir}')
+        pnt(f'compile finished: outputs written to {self.output_dir}')
 
     def load_processor(self):
-        self._log(f'loading processed dataset {self.config.data}')
+        pnt(f'loading processed dataset {self.config.data}')
         self.processor = load_processor(self.config.data)
         self.processor.load()
         self.uid_raw_items = self.processor.items[self.processor.IID_COL].tolist()
@@ -589,26 +345,21 @@ class Compiler:
             self.processor.organize_item(item_id, item_attrs=self.processor.default_attrs) or '[Empty Content]'
             for item_id in self.uid_raw_items
         ]
-        self._log(
+        pnt(
             f'loaded processed assets: items={len(self.uid_raw_items)} '
             f'finetune_users={len(self.processor.finetune_set)} test_users={len(self.processor.test_set)}'
         )
 
-    def init_model_adapter(self):
-        model_key = model_utils.match(self.config.model)
-        if model_key:
-            self.model_adapter = LLMAdapter(self.config.model, model_key)
-            self._log(
-                f'initialized llm adapter model={self.config.model} '
-                f'hf_key={model_key} max_length={self.model_adapter.max_length}'
-            )
-            return
-        self.model_adapter = ScratchAdapter(self.config.model, self.item_texts)
-        self._log(
-            f'initialized scratch adapter model={self.config.model} '
-            f'max_length={self.model_adapter.max_length} '
-            f'vocab_size={len(self.model_adapter.tokenizer.tokens)}'
+    def init_backbone(self):
+        self.backbone = build_backbone(self.config.model, self.item_texts)
+        pnt(
+            f'initialized backbone model={self.config.model} '
+            f'kind={self.backbone.kind} max_length={self.backbone.max_length}'
         )
+        if getattr(self.backbone.tokenizer, 'tokens', None) is not None:
+            pnt(f'scratch backbone vocab_size={len(self.backbone.tokenizer.tokens)}')
+        if getattr(self.backbone, 'model_key', None) is not None:
+            pnt(f'llm backbone hf_key={self.backbone.model_key}')
 
     def _save_json(self, path: Path, data):
         path.write_text(json.dumps(data, indent=2) + '\n')
@@ -620,16 +371,16 @@ class Compiler:
         return path
 
     def build_vocab_and_prompts(self):
-        self._log('building vocab registry and prompt assets')
+        pnt('building vocab registry and prompt assets')
         model_vocab_path = self.vocab_dir / 'model.json'
-        model_vocab_artifact = self.model_adapter.build_vocab_artifact()
+        model_vocab_artifact = self.backbone.build_vocab_artifact()
         self._save_json(model_vocab_path, model_vocab_artifact)
         self.registry.register(
-            self.model_adapter.namespace_name,
+            self.backbone.namespace_name,
             kind='model',
             size=len(model_vocab_artifact.get('tokens', [])),
             path=model_vocab_path,
-            model_kind=self.model_adapter.kind,
+            model_kind=self.backbone.kind,
         )
 
         uid_vocab_path = self.vocab_dir / 'uid.json'
@@ -665,17 +416,17 @@ class Compiler:
                 num_quantizers=sid_meta['num_quantizers'],
                 codebook_size=sid_meta['codebook_size'],
             )
-            self._log(
+            pnt(
                 f"registered sid vocab size={len(tokens)} "
                 f"num_quantizers={sid_meta['num_quantizers']} codebook_size={sid_meta['codebook_size']}"
             )
 
         self._save_json(self.vocab_dir / 'meta.json', self.registry.to_dict())
-        main_prompt = self.model_adapter.build_prompt_spec()
-        alignment_prompt = self.model_adapter.build_alignment_spec()
+        main_prompt = self.backbone.build_prompt_spec()
+        alignment_prompt = self.backbone.build_alignment_spec()
         self._save_json(self.prompts_dir / 'main.json', main_prompt)
         self._save_json(self.prompts_dir / 'alignment.json', alignment_prompt)
-        self._log(
+        pnt(
             f'vocab ready namespaces={len(self.registry.entries)} '
             f'main_prompt=(history_prefix={len(main_prompt["history_prefix_ids"])}, '
             f'separator={len(main_prompt["item_separator_ids"])}, '
@@ -690,12 +441,12 @@ class Compiler:
 
     def build_item_views(self):
         required_views = [view for view in ['uid', 'text', 'sid', 'embedding'] if self.requires_view(view)]
-        self._log(f'building item views {required_views} for {len(self.uid_raw_items)} items')
+        pnt(f'building item views {required_views} for {len(self.uid_raw_items)} items')
         self._write_view('uid', list(range(len(self.uid_raw_items))))
-        self._log('uid view ready')
+        pnt('uid view ready')
 
         if self.requires_view('text'):
-            self._log(
+            pnt(
                 f'tokenizing text view with model={self.config.model} '
                 f'max_tokens={self.config.item_text_max_tokens}'
             )
@@ -709,36 +460,36 @@ class Compiler:
             for start in text_progress:
                 batch_texts = self.item_texts[start:start + chunk_size]
                 text_values.extend(
-                    self.model_adapter.tokenize_texts(
+                    self.backbone.tokenize_texts(
                         batch_texts,
                         max_tokens=self.config.item_text_max_tokens,
                     )
                 )
             self._write_view('text', text_values)
             text_lengths = [len(value) for value in text_values]
-            self._log(
+            pnt(
                 f'text view ready avg_len={np.mean(text_lengths):.2f} '
                 f'max_len={max(text_lengths) if text_lengths else 0}'
             )
 
         if self.requires_view('sid'):
-            self._log(
+            pnt(
                 f'loading sid view from model={self.config.repr_model} '
                 f'checkpoint={self.config.repr_best}'
             )
             sid_values = self.load_sid_view()
             self._write_view('sid', sid_values)
             sid_lengths = [len(value) for value in sid_values]
-            self._log(
+            pnt(
                 f'sid view ready avg_codes={np.mean(sid_lengths):.2f} '
                 f'max_codes={max(sid_lengths) if sid_lengths else 0}'
             )
 
         if self.requires_view('embedding'):
-            self._log(f'loading embedding view from model={self.config.repr_model}')
+            pnt(f'loading embedding view from model={self.config.repr_model}')
             embedding_values = self.load_embedding_view()
             self._write_view('embedding', embedding_values)
-            self._log(
+            pnt(
                 f'embedding view ready indices={len(embedding_values)} '
                 f'preview={self._preview_list(embedding_values)}'
             )
@@ -750,7 +501,7 @@ class Compiler:
                 'views': sorted(self.item_views),
             },
         )
-        self._log(f'item view manifest saved: {sorted(self.item_views)}')
+        pnt(f'item view manifest saved: {sorted(self.item_views)}')
 
     def _load_quantized_export(self):
         model_name = _normalize_model_name(self.config.repr_model)
@@ -763,11 +514,11 @@ class Compiler:
                 f'Quantized export not found under {export_dir}. '
                 f'Run quantizer first.'
             )
-        self._log(f'loading quantized export from {export_dir}')
+        pnt(f'loading quantized export from {export_dir}')
         meta = json.loads(meta_path.read_text())
         codes = np.load(codes_path)
         item_ids = pd.read_parquet(item_ids_path)[self.processor.IID_COL].tolist()
-        self._log(f'loaded quantized export rows={len(item_ids)} shape={list(codes.shape)}')
+        pnt(f'loaded quantized export rows={len(item_ids)} shape={list(codes.shape)}')
         return export_dir, meta, item_ids, codes
 
     def load_sid_view(self, build_only_meta=False):
@@ -812,7 +563,7 @@ class Compiler:
                 f'Embedding item ids not found under {embedding_dir}. '
                 f'Run embedder first.'
             )
-        self._log(f'loading embedding index mapping from {embedding_dir}')
+        pnt(f'loading embedding index mapping from {embedding_dir}')
         item_ids = pd.read_parquet(item_ids_path)[self.processor.IID_COL].tolist()
         embedding_index_map = {item_id: index for index, item_id in enumerate(item_ids)}
         missing = []
@@ -858,17 +609,17 @@ class Compiler:
 
         target_value = self._target_value(target_uid)
         best_history = []
-        best_total_length = None
+        best_total_length: int = None
 
         for start_index in range(len(prefix_uids) - 1, -1, -1):
             candidate_history = prefix_uids[start_index:]
             candidate_values = self._history_values(candidate_history)
-            total_input_length = self.model_adapter.estimate_main_length(
+            total_input_length = self.backbone.estimate_main_length(
                 candidate_values,
                 target_value,
                 self.config.task_type,
             )
-            if total_input_length <= self.model_adapter.max_length:
+            if total_input_length <= self.backbone.max_length:
                 best_history = candidate_history
                 best_total_length = total_input_length
             else:
@@ -876,10 +627,10 @@ class Compiler:
 
         if best_total_length is None:
             return None, None
-        return best_history, int(best_total_length)
+        return best_history, best_total_length
 
     def build_samples(self, split_name: str, dataframe: pd.DataFrame):
-        self._log(
+        pnt(
             f'building {split_name} samples from {len(dataframe)} user sequences '
             f'(task={self.config.task_type}, repr={self.config.repr_type})'
         )
@@ -958,7 +709,7 @@ class Compiler:
         }
         avg_history_items = float(np.mean([row['history_item_count'] for row in rows])) if rows else 0.0
         avg_input_length = float(np.mean([row['total_input_length'] for row in rows])) if rows else 0.0
-        self._log(
+        pnt(
             f'{split_name} samples ready count={len(rows)}/{total_candidate_targets} '
             f'invalid={invalid_target_count} dropped_short_seq={dropped_short_sequence_count} '
             f'avg_history_items={avg_history_items:.2f} avg_input_length={avg_input_length:.2f} '
@@ -979,7 +730,7 @@ class Compiler:
                 'pairs': pairs,
             },
         )
-        self._log(
+        pnt(
             f'alignment meta saved enabled={self.config.alignment} '
             f'views={available_views} pairs={pairs}'
         )
@@ -993,12 +744,12 @@ class Compiler:
                 'data': self.config.data,
                 'prepare_id': self.config.prepare_id,
                 'config': self.config.config_dict,
-                'model_kind': self.model_adapter.kind,
-                'model_max_length': int(self.model_adapter.max_length),
+                'model_kind': self.backbone.kind,
+                'model_max_length': int(self.backbone.max_length),
                 'processed_dir': str(self.store.processed_dir()),
             },
         )
-        self._log(f'meta saved to {self.meta_path}')
+        pnt(f'meta saved to {self.meta_path}')
 
     def save_stats(self):
         stats = {
@@ -1014,7 +765,7 @@ class Compiler:
         }
         stats_path = self.output_dir / 'stats.json'
         self._save_json(stats_path, stats)
-        self._log(
+        pnt(
             f"stats saved to {stats_path}: item_count={stats['item_count']} "
             f"finetune_samples={stats['finetune_sample_count']} test_samples={stats['test_sample_count']} "
             f"resolved_maxitems={stats['resolved_maxitems']}"
@@ -1024,7 +775,7 @@ class Compiler:
         for split_name in ['finetune', 'test']:
             visual = self.sample_visuals.get(split_name)
             if visual:
-                self._log(f'{split_name} sample visualization:\n{visual}')
+                pnt(f'{split_name} sample visualization:\n{visual}')
 
 
 if __name__ == '__main__':
