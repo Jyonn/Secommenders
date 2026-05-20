@@ -29,3 +29,6 @@ class ArtifactStore:
 
     def prepared_dir(self, prepare_id: str) -> Path:
         return self.compiled_dir(prepare_id)
+
+    def trained_dir(self, run_id: str) -> Path:
+        return self._dir('trained', self.dataset, run_id)

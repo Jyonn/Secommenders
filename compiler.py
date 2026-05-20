@@ -1,6 +1,5 @@
 import argparse
 import json
-from dataclasses import asdict, dataclass
 from itertools import combinations
 from pathlib import Path
 from typing import Optional
@@ -13,55 +12,9 @@ from tqdm import tqdm
 from models import BaseBackbone, build_backbone
 from processors.base_processor import Processor
 from utils.artifact import ArtifactStore
+from utils.compile import CompileConfig, normalize_model_name
 from utils.function import load_processor
 from utils.logging import setup_logging
-
-
-def _normalize_model_name(name: Optional[str]):
-    if not name:
-        return None
-    return name.replace('.', '').lower()
-
-
-@dataclass
-class CompileConfig:
-    data: str
-    model: str
-    repr_type: str
-    repr_model: Optional[str]
-    repr_best: Optional[str]
-    task_type: str
-    maxitems: int
-    model_max_length: Optional[int] = None
-    item_text_max_tokens: int = 50
-    repr_combine: str = 'concat'
-
-    @property
-    def repr_types(self):
-        return [part.strip().lower() for part in self.repr_type.split('+') if part.strip()]
-
-    @property
-    def prepare_id(self):
-        parts = [
-            f'model-{self.model}',
-            f'repr-{self.repr_type}',
-            f'combine-{self.repr_combine}',
-            f'task-{self.task_type}',
-            f'maxitems-{"auto" if self.maxitems == 0 else self.maxitems}',
-            f'textlen-{self.item_text_max_tokens}',
-        ]
-        if self.model_max_length:
-            parts.append(f'modellen-{self.model_max_length}')
-        if self.repr_model:
-            parts.append(f'reprmodel-{self.repr_model}')
-        if self.repr_best:
-            parts.append(f'reprbest-{self.repr_best}')
-        return '__'.join(parts)
-
-    @property
-    def config_dict(self):
-        return asdict(self)
-
 
 class VocabularyRegistry:
     def __init__(self):
@@ -804,7 +757,7 @@ if __name__ == '__main__':
         data=args.data.lower(),
         model=args.model.lower(),
         repr_type=args.repr_type.lower(),
-        repr_model=_normalize_model_name(args.repr_model),
+        repr_model=normalize_model_name(args.repr_model),
         repr_best=args.repr_best.lower() if args.repr_best else None,
         repr_combine=args.repr_combine.lower(),
         task_type=args.task_type.lower(),
