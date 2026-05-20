@@ -40,7 +40,7 @@ class ClassHub:
                     and issubclass(obj, self.base_class)
                     and obj is not self.base_class
                     and not inspect.isabstract(obj)
-                    and getattr(obj, 'REGISTER', True)
+                    and obj.__dict__.get('REGISTER', True)
                 ):
                     class_list.append(obj)
         return class_list
