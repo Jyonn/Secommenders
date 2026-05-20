@@ -1,4 +1,3 @@
-import argparse
 import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -19,6 +18,7 @@ from transformers import AutoModel
 from models import build_backbone
 from utils.artifact import ArtifactStore
 from utils.compile import CompileConfig, normalize_model_name
+from utils.config_init import ConfigInit
 from utils.gpu import GPU
 from utils.logging import setup_logging
 from utils.pipeline import ensure_compiled
@@ -67,6 +67,39 @@ class TrainConfig:
     num_layers: int
     num_heads: int
     dropout: float
+
+    @classmethod
+    def from_refconfig(cls, configurations):
+        trainer = configurations.config.trainer
+        return cls(
+            data=configurations.data.lower(),
+            model=configurations.model.lower(),
+            repr_type=configurations.repr_type.lower(),
+            repr_model=normalize_model_name(getattr(configurations, 'repr_model', None)),
+            repr_best=configurations.repr_best.lower() if getattr(configurations, 'repr_best', None) else None,
+            repr_combine=getattr(configurations, 'repr_combine', 'concat').lower(),
+            task_type=configurations.task_type.lower(),
+            maxitems=int(trainer.maxitems),
+            model_max_length=int(trainer.model_max_length) or None,
+            item_text_max_tokens=int(trainer.item_text_max_tokens),
+            batch_size=int(trainer.batch_size),
+            epochs=int(trainer.epochs),
+            learning_rate=float(trainer.learning_rate),
+            weight_decay=float(trainer.weight_decay),
+            valid_ratio=float(trainer.valid_ratio),
+            seed=int(trainer.seed),
+            device=trainer.device,
+            freeze_backbone=str(trainer.freeze_backbone).lower(),
+            use_lora=str(trainer.use_lora).lower(),
+            lora_rank=int(trainer.lora_rank),
+            lora_alpha=int(trainer.lora_alpha),
+            lora_dropout=float(trainer.lora_dropout),
+            lora_target_modules=str(trainer.lora_target_modules),
+            hidden_size=int(trainer.hidden_size),
+            num_layers=int(trainer.num_layers),
+            num_heads=int(trainer.num_heads),
+            dropout=float(trainer.dropout),
+        )
 
     @property
     def compile_config(self):
@@ -684,68 +717,17 @@ class Trainer:
 if __name__ == '__main__':
     setup_logging()
 
-    parser = argparse.ArgumentParser(description='Train a sequential recommender from compiled dataset artifacts.')
-    parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
-    parser.add_argument('--model', required=True, help='Backbone model name, such as llama3 or transformer.')
-    parser.add_argument('--repr.type', dest='repr_type', required=True, help='Representation types, such as uid, text, or uid+text.')
-    parser.add_argument('--repr.model', dest='repr_model', default=None, help='External representation model, such as bertbase.')
-    parser.add_argument('--repr.best', dest='repr_best', default=None, help='Best checkpoint metric for quantized codes, such as coll.')
-    parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
-    parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'embedding'])
-    parser.add_argument('--maxitems', type=int, default=0, help='Maximum history items, 0 means auto by model max length.')
-    parser.add_argument('--model.maxlen', dest='model_max_length', type=int, default=0, help='Optional override for backbone max length, e.g. 2048.')
-    parser.add_argument('--item-text-max-tokens', type=int, default=50, help='Maximum tokenized length per item text.')
-    parser.add_argument('--batch-size', type=int, default=8)
-    parser.add_argument('--epochs', type=int, default=3)
-    parser.add_argument('--learning-rate', type=float, default=1e-4)
-    parser.add_argument('--weight-decay', type=float, default=0.01)
-    parser.add_argument('--valid-ratio', type=float, default=0.1)
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--device', default=None)
-    parser.add_argument('--freeze-backbone', choices=['auto', 'true', 'false'], default='auto')
-    parser.add_argument('--use-lora', choices=['auto', 'true', 'false'], default='auto')
-    parser.add_argument('--lora-rank', type=int, default=16)
-    parser.add_argument('--lora-alpha', type=int, default=32)
-    parser.add_argument('--lora-dropout', type=float, default=0.05)
-    parser.add_argument(
-        '--lora-target-modules',
-        default='all-linear',
-        help='Comma-separated target module names or all-linear.',
-    )
-    parser.add_argument('--hidden-size', type=int, default=256, help='Scratch transformer hidden size.')
-    parser.add_argument('--num-layers', type=int, default=4, help='Scratch transformer layers.')
-    parser.add_argument('--num-heads', type=int, default=8, help='Scratch transformer attention heads.')
-    parser.add_argument('--dropout', type=float, default=0.1, help='Scratch transformer dropout.')
-    args = parser.parse_args()
+    configurations = ConfigInit(
+        required_args=['data', 'model', 'repr_type', 'task_type'],
+        default_args=dict(
+            config='config/trainer.yaml',
+            repr_model=None,
+            repr_best=None,
+            repr_combine='concat',
+        ),
+        makedirs=[],
+    ).parse()
 
-    config = TrainConfig(
-        data=args.data.lower(),
-        model=args.model.lower(),
-        repr_type=args.repr_type.lower(),
-        repr_model=normalize_model_name(args.repr_model),
-        repr_best=args.repr_best.lower() if args.repr_best else None,
-        repr_combine=args.repr_combine.lower(),
-        task_type=args.task_type.lower(),
-        maxitems=int(args.maxitems),
-        model_max_length=int(args.model_max_length) or None,
-        item_text_max_tokens=int(args.item_text_max_tokens),
-        batch_size=int(args.batch_size),
-        epochs=int(args.epochs),
-        learning_rate=float(args.learning_rate),
-        weight_decay=float(args.weight_decay),
-        valid_ratio=float(args.valid_ratio),
-        seed=int(args.seed),
-        device=args.device,
-        freeze_backbone=args.freeze_backbone,
-        use_lora=args.use_lora,
-        lora_rank=int(args.lora_rank),
-        lora_alpha=int(args.lora_alpha),
-        lora_dropout=float(args.lora_dropout),
-        lora_target_modules=args.lora_target_modules,
-        hidden_size=int(args.hidden_size),
-        num_layers=int(args.num_layers),
-        num_heads=int(args.num_heads),
-        dropout=float(args.dropout),
-    )
+    config = TrainConfig.from_refconfig(configurations)
     trainer = Trainer(config)
     trainer.train()
