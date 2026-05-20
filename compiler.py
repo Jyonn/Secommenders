@@ -738,7 +738,7 @@ if __name__ == '__main__':
     parser.add_argument('--repr.type', dest='repr_type', required=True, help='Representation types, such as uid, text, or uid+text.')
     parser.add_argument('--repr.model', dest='repr_model', default=None, help='External representation model, such as bertbase.')
     parser.add_argument('--repr.best', dest='repr_best', default=None, help='Best checkpoint metric for quantized codes, such as coll.')
-    parser.add_argument('--repr.combine', '--repr.conbime', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
+    parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
     parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'embedding'])
     parser.add_argument('--maxitems', type=int, default=0, help='Maximum history items, 0 means auto by model max length.')
     parser.add_argument('--item-text-max-tokens', type=int, default=50, help='Maximum tokenized length per item text.')
