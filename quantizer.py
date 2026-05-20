@@ -86,12 +86,6 @@ class Quantizer:
         self.output_dir = Path(self.config.trainer.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.codes_path = self.output_dir / 'codebook_indices.npy'
-        self.quantized_path = self.output_dir / 'quantized_latents.npy'
-        self.codebooks_path = self.output_dir / 'codebooks.npy'
-        self.item_ids_path = self.output_dir / 'item_ids.parquet'
-        self.meta_path = self.output_dir / 'meta.json'
-
         self.embedding_matrix = None
         self.item_ids = None
         self.dataset = None
@@ -218,24 +212,36 @@ class Quantizer:
         )
         return metrics
 
-    def load_best_model(self):
-        best_dir = self.output_dir / 'best'
-        if not best_dir.exists():
-            raise FileNotFoundError(f'Best checkpoint not found: {best_dir}')
+    @staticmethod
+    def _checkpoint_dir_name(metric_name):
+        return 'best' if metric_name == 'loss' else f'best-{metric_name}'
+
+    def _checkpoint_dir(self, metric_name):
+        return self.output_dir / self._checkpoint_dir_name(metric_name)
+
+    def _export_dir(self, metric_name):
+        if metric_name == 'loss':
+            return self.output_dir
+        return self.output_dir / metric_name
+
+    def load_checkpoint_model(self, metric_name):
+        checkpoint_dir = self._checkpoint_dir(metric_name)
+        if not checkpoint_dir.exists():
+            raise FileNotFoundError(f'Checkpoint not found for {metric_name}: {checkpoint_dir}')
 
         weights_name = getattr(self.model.__class__, 'weights_name', 'pytorch_model.bin')
-        weights_path = best_dir / weights_name
+        weights_path = checkpoint_dir / weights_name
         if not weights_path.exists():
-            raise FileNotFoundError(f'Best checkpoint weights not found: {weights_path}')
+            raise FileNotFoundError(f'Checkpoint weights not found for {metric_name}: {weights_path}')
 
         state_dict = torch.load(weights_path, map_location='cpu')
         self.model.load_state_dict(state_dict)
         device = resolve_device(self.trainer_args.device)
         self.model.to(device)
         self.model.eval()
-        return self.model, device
+        return self.model, device, checkpoint_dir
 
-    def export_codes(self):
+    def export_checkpoint(self, metric_name):
         if self.embedding_matrix is None:
             self.load_embedding_matrix()
         if self.dataset is None:
@@ -243,7 +249,16 @@ class Quantizer:
         if self.model is None or self.trainer_args is None:
             raise RuntimeError('Model and trainer args must be initialized before export.')
 
-        model, device = self.load_best_model()
+        export_dir = self._export_dir(metric_name)
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        codes_path = export_dir / 'codebook_indices.npy'
+        quantized_path = export_dir / 'quantized_latents.npy'
+        codebooks_path = export_dir / 'codebooks.npy'
+        item_ids_path = export_dir / 'item_ids.parquet'
+        meta_path = export_dir / 'meta.json'
+
+        model, device, checkpoint_dir = self.load_checkpoint_model(metric_name)
         export_loader = DataLoader(
             self.dataset,
             batch_size=int(self.trainer_args.batch_size),
@@ -255,7 +270,7 @@ class Quantizer:
         quantized_latents = []
         codebooks = None
 
-        pnt(f'exporting quantized codes to {self.output_dir}')
+        pnt(f'exporting {metric_name} checkpoint codes to {export_dir}')
         for batch in tqdm(export_loader, total=len(export_loader)):
             batch = batch.to(device)
             artifact = model.export(batch, include_reconstruction=False)
@@ -267,12 +282,12 @@ class Quantizer:
         codebook_indices = np.concatenate(codebook_indices, axis=0)
         quantized_latents = np.concatenate(quantized_latents, axis=0).astype(np.float32)
 
-        np.save(self.codes_path, codebook_indices)
-        np.save(self.quantized_path, quantized_latents)
+        np.save(codes_path, codebook_indices)
+        np.save(quantized_path, quantized_latents)
         if codebooks is not None:
-            np.save(self.codebooks_path, codebooks.astype(np.float32))
+            np.save(codebooks_path, codebooks.astype(np.float32))
 
-        pd.DataFrame({self.processor.IID_COL: self.item_ids}).to_parquet(self.item_ids_path, index=False)
+        pd.DataFrame({self.processor.IID_COL: self.item_ids}).to_parquet(item_ids_path, index=False)
 
         meta = {
             'dataset': self.data,
@@ -280,28 +295,36 @@ class Quantizer:
             'embedding_path': str(self.embedding_path),
             'embedding_meta_path': str(self.embedding_meta_path),
             'quantizer_model': self.quantizer_name,
-            'checkpoint': 'best',
+            'checkpoint_metric': metric_name,
+            'checkpoint_dir': str(checkpoint_dir),
             'item_count': int(self.embedding_matrix.num_embeddings),
             'embedding_dim': int(self.embedding_matrix.embedding_dim),
             'trainer_output_dir': str(self.output_dir),
-            'codebook_indices_path': str(self.codes_path),
-            'quantized_latents_path': str(self.quantized_path),
-            'item_ids_path': str(self.item_ids_path),
+            'export_dir': str(export_dir),
+            'codebook_indices_path': str(codes_path),
+            'quantized_latents_path': str(quantized_path),
+            'item_ids_path': str(item_ids_path),
             'trainer_args': self.trainer_args.to_dict(),
             'quantizer_config': self.config.quantizer.config(),
         }
         if codebooks is not None:
-            meta['codebooks_path'] = str(self.codebooks_path)
+            meta['codebooks_path'] = str(codebooks_path)
             meta['codebook_shape'] = list(codebooks.shape)
-        self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+        meta_path.write_text(json.dumps(meta, indent=2) + '\n')
 
-        pnt(f'codebook indices saved to {self.codes_path}')
-        pnt(f'quantized latents saved to {self.quantized_path}')
+        pnt(f'codebook indices saved to {codes_path}')
+        pnt(f'quantized latents saved to {quantized_path}')
         return meta
+
+    def export_all_checkpoints(self):
+        exports = {}
+        for metric_name in self.trainer_args.save_best_by:
+            exports[metric_name] = self.export_checkpoint(metric_name)
+        return exports
 
     def run(self):
         self.train()
-        self.export_codes()
+        self.export_all_checkpoints()
 
 
 if __name__ == '__main__':
