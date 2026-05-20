@@ -20,7 +20,7 @@ class MINDFormatter(BaseFormatter):
     def load_items(self) -> pd.DataFrame:
         path = os.path.join(self.data_dir, 'train', 'news.tsv')
         return pd.read_csv(
-            filepath_or_buffer=cast(str, path),
+            filepath_or_buffer=path,
             sep='\t',
             names=[self.IID_COL, 'cat', 'subcat', 'title', 'abs', 'url', 'tit_ent', 'abs_ent'],
             usecols=[self.IID_COL, 'cat', 'subcat', 'title', 'abs'],
@@ -31,7 +31,7 @@ class MINDFormatter(BaseFormatter):
 
         path = os.path.join(self.data_dir, 'train', 'behaviors.tsv')
         users = pd.read_csv(
-            filepath_or_buffer=cast(str, path),
+            filepath_or_buffer=path,
             sep='\t',
             names=['imp', self.UID_COL, 'time', self.HIS_COL, 'predict'],
             usecols=[self.UID_COL, 'time', self.HIS_COL],
