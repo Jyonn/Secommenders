@@ -340,6 +340,7 @@ class Compiler:
         self.item_texts: list[str] = []
         self.item_views = {}
         self.samples_stats = {}
+        self.sample_visuals = {}
 
         self._init_dirs()
 
@@ -353,7 +354,7 @@ class Compiler:
             path.mkdir(parents=True, exist_ok=True)
 
     def _log(self, message: str):
-        pnt(f'|Compiler| {message}')
+        print(f'|Compiler| {message}')
 
     @staticmethod
     def _preview_list(values, limit=3):
@@ -361,6 +362,56 @@ class Compiler:
         if len(values) <= limit:
             return values
         return values[:limit] + ['...']
+
+    @staticmethod
+    def _pad_cells(cells):
+        widths = [max(len(cell), 8) for cell in cells]
+        return [cell.ljust(width) for cell, width in zip(cells, widths)]
+
+    def _history_repr_label(self):
+        if self.config.repr_combine == 'add':
+            return '<uid+emb>'
+        return '<' + '+'.join(self.config.repr_types) + '>'
+
+    def _task_repr_label(self):
+        return f'<{self.config.task_type}>'
+
+    def _render_sample_visual(self, split_name: str, sequence_length: int, history_start: int, target_pos: int):
+        item_cells = [f'<item{index + 1}>' for index in range(sequence_length)]
+        role_cells = []
+        repr_cells = []
+        history_label = self._history_repr_label()
+        task_label = self._task_repr_label()
+
+        for index in range(sequence_length):
+            if index < history_start:
+                role_cells.append('[skip]')
+                repr_cells.append('...')
+            elif index < target_pos:
+                role_cells.append('[hist]')
+                repr_cells.append(history_label)
+            elif index == target_pos:
+                role_cells.append('[tgt]')
+                repr_cells.append(task_label)
+            else:
+                role_cells.append('[tail]')
+                repr_cells.append('...')
+
+        item_line = ' '.join(self._pad_cells(item_cells))
+        role_line = ' '.join(self._pad_cells(role_cells))
+        repr_line = ' '.join(self._pad_cells(repr_cells))
+
+        lines = [
+            f'  sequence : {item_line}',
+            f'  role     : {role_line}',
+            f'  repr     : {repr_line}',
+            f'  explain  : history items use {history_label}; target item uses {task_label}',
+        ]
+        if split_name == 'finetune':
+            lines.append('  rule     : fix each next-item target, then extend history leftward as much as max length allows')
+        else:
+            lines.append('  rule     : use only the final item as target, then extend history leftward as much as max length allows')
+        return '\n'.join(lines)
 
     @property
     def meta_path(self):
@@ -436,6 +487,7 @@ class Compiler:
         self.build_alignment_meta()
         self.save_meta()
         self.save_stats()
+        self.log_sample_visuals()
         self._log(f'compile finished: outputs written to {self.output_dir}')
 
     def load_processor(self):
@@ -790,6 +842,14 @@ class Compiler:
                     }
                 )
                 resolved_maxitems = max(resolved_maxitems, len(history_uids))
+                if split_name not in self.sample_visuals:
+                    history_start = target_pos - len(history_uids)
+                    self.sample_visuals[split_name] = self._render_sample_visual(
+                        split_name=split_name,
+                        sequence_length=len(sequence),
+                        history_start=history_start,
+                        target_pos=target_pos,
+                    )
             iterator.set_postfix(
                 samples=len(rows),
                 invalid=invalid_target_count,
@@ -868,6 +928,12 @@ class Compiler:
             f"finetune_samples={stats['finetune_sample_count']} test_samples={stats['test_sample_count']} "
             f"resolved_maxitems={stats['resolved_maxitems']}"
         )
+
+    def log_sample_visuals(self):
+        for split_name in ['finetune', 'test']:
+            visual = self.sample_visuals.get(split_name)
+            if visual:
+                self._log(f'{split_name} sample visualization:\n{visual}')
 
 
 if __name__ == '__main__':
