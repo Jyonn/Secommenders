@@ -8,7 +8,6 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from pigmento import pnt
 from tqdm import tqdm
 from transformers import AutoConfig, AutoTokenizer
 
@@ -364,9 +363,19 @@ class Compiler:
         return values[:limit] + ['...']
 
     @staticmethod
-    def _pad_cells(cells):
-        widths = [max(len(cell), 8) for cell in cells]
-        return [cell.ljust(width) for cell, width in zip(cells, widths)]
+    def _ansi(text: str, fg: Optional[int] = None, bg: Optional[int] = None, bold: bool = False, dim: bool = False):
+        codes = []
+        if bold:
+            codes.append('1')
+        if dim:
+            codes.append('2')
+        if fg is not None:
+            codes.append(str(fg))
+        if bg is not None:
+            codes.append(str(bg))
+        if not codes:
+            return text
+        return f"\033[{';'.join(codes)}m{text}\033[0m"
 
     def _history_repr_label(self):
         if self.config.repr_combine == 'add':
@@ -376,41 +385,121 @@ class Compiler:
     def _task_repr_label(self):
         return f'<{self.config.task_type}>'
 
-    def _render_sample_visual(self, split_name: str, sequence_length: int, history_start: int, target_pos: int):
-        item_cells = [f'<item{index + 1}>' for index in range(sequence_length)]
-        role_cells = []
-        repr_cells = []
-        history_label = self._history_repr_label()
-        task_label = self._task_repr_label()
+    @staticmethod
+    def _truncate_text(text: str, max_chars: int = 48):
+        text = (text or '').replace('\n', ' ').strip()
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3] + '...'
 
-        for index in range(sequence_length):
-            if index < history_start:
-                role_cells.append('[skip]')
-                repr_cells.append('...')
-            elif index < target_pos:
-                role_cells.append('[hist]')
-                repr_cells.append(history_label)
-            elif index == target_pos:
-                role_cells.append('[tgt]')
-                repr_cells.append(task_label)
+    @staticmethod
+    def _truncate_repr(text: str, max_chars: int = 72):
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3] + '...'
+
+    def _short_item_id(self, uid: int):
+        raw_id = str(self.uid_raw_items[uid])
+        if len(raw_id) <= 10:
+            return raw_id
+        return raw_id[:4] + '...' + raw_id[-3:]
+
+    def _summarize_view_value(self, view_name: str, uid: int):
+        if view_name == 'uid':
+            return f'uid={uid}'
+        if view_name == 'text':
+            token_ids = self.item_views['text'][uid]
+            preview = self._truncate_text(self.item_texts[uid], max_chars=36)
+            return f'text[{len(token_ids)}]="{preview}"'
+        if view_name == 'sid':
+            codes = self._as_token_list(self.item_views['sid'][uid])
+            preview = ','.join(str(code) for code in codes[:6])
+            if len(codes) > 6:
+                preview += ',...'
+            return f'sid[{len(codes)}]=[{preview}]'
+        if view_name == 'embedding':
+            return f'emb#{self.item_views["embedding"][uid]}'
+        return str(self.item_views[view_name][uid])
+
+    def _history_repr_summary(self, uid: int):
+        if self.config.repr_combine == 'add':
+            uid_part = self._summarize_view_value('uid', uid)
+            emb_part = self._summarize_view_value('embedding', uid)
+            return f'add({uid_part} + linear({emb_part})) -> 1 slot'
+
+        parts = [self._summarize_view_value(repr_type, uid) for repr_type in self.config.repr_types]
+        return ' + '.join(parts)
+
+    def _task_repr_summary(self, uid: int):
+        return self._summarize_view_value(self.config.task_type, uid)
+
+    @staticmethod
+    def _role_name(index: int, history_start: int, target_pos: int):
+        if index < history_start:
+            return 'skip'
+        if index < target_pos:
+            return 'hist'
+        if index == target_pos:
+            return 'tgt'
+        return 'tail'
+
+    def _role_style(self, role: str):
+        if role == 'skip':
+            return 30, 47, False, True
+        if role == 'hist':
+            return 30, 46, True, False
+        if role == 'tgt':
+            return 37, 41, True, False
+        return 37, 100, False, True
+
+    def _render_sequence_strip(self, sequence: list[int], history_start: int, target_pos: int):
+        cells = []
+        for index, uid in enumerate(sequence):
+            role = self._role_name(index, history_start, target_pos)
+            fg, bg, bold, dim = self._role_style(role)
+            label = f'i{index + 1}:{self._short_item_id(uid)}'
+            cells.append(self._ansi(label, fg=fg, bg=bg, bold=bold, dim=dim))
+        return ' '.join(cells)
+
+    def _render_sample_visual(self, split_name: str, user_id, sequence: list[int], history_uids: list[int], target_uid: int,
+                              target_pos: int, total_input_length: int):
+        history_start = target_pos - len(history_uids)
+        target_raw = self.uid_raw_items[target_uid]
+        lines = []
+        title = self._ansi(f' {split_name.upper()} SAMPLE PREVIEW ', fg=37, bg=45, bold=True)
+        lines.append(f'  {title}')
+        lines.append(
+            f'  user_id   : {user_id} | sequence_len={len(sequence)} | target_pos={target_pos + 1} '
+            f'| history_span=[{history_start + 1}, {target_pos}] | target_raw={target_raw} '
+            f'| input_len={total_input_length}/{self.model_adapter.max_length}'
+        )
+        lines.append('  legend    : '
+                     + self._ansi(' skip ', fg=30, bg=47, dim=True)
+                     + ' '
+                     + self._ansi(' history ', fg=30, bg=46, bold=True)
+                     + ' '
+                     + self._ansi(' target ', fg=37, bg=41, bold=True)
+                     + ' '
+                     + self._ansi(' tail ', fg=37, bg=100, dim=True))
+        lines.append(f'  sequence  : {self._render_sequence_strip(sequence, history_start, target_pos)}')
+        lines.append(f'  repr rule : history={self._history_repr_label()} | target={self._task_repr_label()}')
+        lines.append('  details   :')
+        for index, uid in enumerate(sequence):
+            role = self._role_name(index, history_start, target_pos)
+            fg, bg, bold, dim = self._role_style(role)
+            role_tag = self._ansi(role.upper().ljust(4), fg=fg, bg=bg, bold=bold, dim=dim)
+            raw_id = self.uid_raw_items[uid]
+            if role == 'hist':
+                repr_text = self._truncate_repr(self._history_repr_summary(uid))
+            elif role == 'tgt':
+                repr_text = self._truncate_repr(self._task_repr_summary(uid))
             else:
-                role_cells.append('[tail]')
-                repr_cells.append('...')
-
-        item_line = ' '.join(self._pad_cells(item_cells))
-        role_line = ' '.join(self._pad_cells(role_cells))
-        repr_line = ' '.join(self._pad_cells(repr_cells))
-
-        lines = [
-            f'  sequence : {item_line}',
-            f'  role     : {role_line}',
-            f'  repr     : {repr_line}',
-            f'  explain  : history items use {history_label}; target item uses {task_label}',
-        ]
+                repr_text = 'not used in this sample'
+            lines.append(f'    {role_tag} pos={index + 1:>2} uid={uid:<5} raw={raw_id} -> {repr_text}')
         if split_name == 'finetune':
-            lines.append('  rule     : fix each next-item target, then extend history leftward as much as max length allows')
+            lines.append('  policy    : for each target item, keep the longest suffix history that still fits model max length')
         else:
-            lines.append('  rule     : use only the final item as target, then extend history leftward as much as max length allows')
+            lines.append('  policy    : only the final item is evaluated; its history is the longest suffix that still fits model max length')
         return '\n'.join(lines)
 
     @property
@@ -843,12 +932,14 @@ class Compiler:
                 )
                 resolved_maxitems = max(resolved_maxitems, len(history_uids))
                 if split_name not in self.sample_visuals:
-                    history_start = target_pos - len(history_uids)
                     self.sample_visuals[split_name] = self._render_sample_visual(
                         split_name=split_name,
-                        sequence_length=len(sequence),
-                        history_start=history_start,
+                        user_id=row[self.processor.UID_COL],
+                        sequence=sequence,
+                        history_uids=history_uids,
+                        target_uid=target_uid,
                         target_pos=target_pos,
+                        total_input_length=total_input_length,
                     )
             iterator.set_postfix(
                 samples=len(rows),
