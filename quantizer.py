@@ -220,8 +220,6 @@ class Quantizer:
         return self.output_dir / self._checkpoint_dir_name(metric_name)
 
     def _export_dir(self, metric_name):
-        if metric_name == 'loss':
-            return self.output_dir
         return self.output_dir / metric_name
 
     def load_checkpoint_model(self, metric_name):
