@@ -7,6 +7,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from pigmento import pnt
 from tqdm import tqdm
 
 from models import BaseBackbone, build_backbone
@@ -111,20 +112,6 @@ class Compiler:
         self.alignment_dir = self.output_dir / 'alignment'
         for path in [self.vocab_dir, self.prompts_dir, self.item_views_dir, self.samples_dir, self.alignment_dir]:
             path.mkdir(parents=True, exist_ok=True)
-
-    @staticmethod
-    def _log(stage: str, message: str):
-        print(f'|Compiler| [{stage}] {message}')
-
-    @classmethod
-    def _log_block(cls, stage: str, text: str):
-        lines = text.splitlines() or ['']
-        if not lines:
-            cls._log(stage, '')
-            return
-        cls._log(stage, lines[0])
-        for line in lines[1:]:
-            print(f'|Compiler| {" " * (len(stage) + 3)} {line}')
 
     @staticmethod
     def _preview_list(values, limit=3):
@@ -327,8 +314,7 @@ class Compiler:
 
     def run(self):
         self.validate()
-        self._log(
-            'INIT',
+        pnt(
             f'start compile data={self.config.data} model={self.config.model} '
             f'repr={self.config.repr_type} combine={self.config.repr_combine} '
             f'task={self.config.task_type} maxitems={self.config.maxitems} '
@@ -336,10 +322,10 @@ class Compiler:
             f'model.maxlen={self.config.model_max_length or "native"}'
         )
         if self.is_cached():
-            self._log('CACHE', f'compiled dataset cached at {self.output_dir}')
+            pnt(f'compiled dataset cached at {self.output_dir}')
             return
 
-        self._log('CACHE', f'cache miss, compiling into {self.output_dir}')
+        pnt(f'cache miss, compiling into {self.output_dir}')
         self.load_processor()
         self.init_backbone()
         self.build_vocab_and_prompts()
@@ -350,10 +336,10 @@ class Compiler:
         self.save_meta()
         self.save_stats()
         self.log_sample_visuals()
-        self._log('DONE', f'compile finished: outputs written to {self.output_dir}')
+        pnt(f'compile finished: outputs written to {self.output_dir}')
 
     def load_processor(self):
-        self._log('DATA', f'loading processed dataset {self.config.data}')
+        pnt(f'loading processed dataset {self.config.data}')
         self.processor = load_processor(self.config.data)
         self.processor.load()
         self.uid_raw_items = self.processor.items[self.processor.IID_COL].tolist()
@@ -362,8 +348,7 @@ class Compiler:
             self.processor.organize_item(item_id, item_attrs=self.processor.default_attrs) or '[Empty Content]'
             for item_id in self.uid_raw_items
         ]
-        self._log(
-            'DATA',
+        pnt(
             f'loaded processed assets: items={len(self.uid_raw_items)} '
             f'finetune_users={len(self.processor.finetune_set)} test_users={len(self.processor.test_set)}'
         )
@@ -374,15 +359,14 @@ class Compiler:
             self.item_texts,
             max_length_override=self.config.model_max_length,
         )
-        self._log(
-            'MODEL',
+        pnt(
             f'initialized backbone model={self.config.model} kind={self.backbone.kind} '
             f'native_maxlen={self.backbone.native_max_length} effective_maxlen={self.backbone.max_length}'
         )
         if getattr(self.backbone.tokenizer, 'tokens', None) is not None:
-            self._log('MODEL', f'scratch backbone vocab_size={len(self.backbone.tokenizer.tokens)}')
+            pnt(f'scratch backbone vocab_size={len(self.backbone.tokenizer.tokens)}')
         if getattr(self.backbone, 'model_key', None) is not None:
-            self._log('MODEL', f'llm backbone hf_key={self.backbone.model_key}')
+            pnt(f'llm backbone hf_key={self.backbone.model_key}')
 
     def _save_json(self, path: Path, data):
         path.write_text(json.dumps(data, indent=2) + '\n')
@@ -394,7 +378,7 @@ class Compiler:
         return path
 
     def build_vocab_and_prompts(self):
-        self._log('VOCAB', 'building vocab registry and prompt assets')
+        pnt('building vocab registry and prompt assets')
         model_vocab_path = self.vocab_dir / 'model.json'
         model_vocab_artifact = self.backbone.build_vocab_artifact()
         self._save_json(model_vocab_path, model_vocab_artifact)
@@ -439,8 +423,7 @@ class Compiler:
                 num_quantizers=sid_meta['num_quantizers'],
                 codebook_size=sid_meta['codebook_size'],
             )
-            self._log(
-                'VOCAB',
+            pnt(
                 f"registered sid vocab size={len(tokens)} "
                 f"num_quantizers={sid_meta['num_quantizers']} codebook_size={sid_meta['codebook_size']}"
             )
@@ -450,8 +433,7 @@ class Compiler:
         alignment_prompt = self.backbone.build_alignment_spec()
         self._save_json(self.prompts_dir / 'main.json', main_prompt)
         self._save_json(self.prompts_dir / 'alignment.json', alignment_prompt)
-        self._log(
-            'VOCAB',
+        pnt(
             f'vocab ready namespaces={len(self.registry.entries)} '
             f'main_prompt=(history_prefix={len(main_prompt["history_prefix_ids"])}, '
             f'separator={len(main_prompt["item_separator_ids"])}, '
@@ -466,13 +448,12 @@ class Compiler:
 
     def build_item_views(self):
         required_views = [view for view in ['uid', 'text', 'sid', 'embedding'] if self.requires_view(view)]
-        self._log('VIEW', f'building item views {required_views} for {len(self.uid_raw_items)} items')
+        pnt(f'building item views {required_views} for {len(self.uid_raw_items)} items')
         self._write_view('uid', list(range(len(self.uid_raw_items))))
-        self._log('VIEW', 'uid view ready')
+        pnt('uid view ready')
 
         if self.requires_view('text'):
-            self._log(
-                'VIEW',
+            pnt(
                 f'tokenizing text view with model={self.config.model} '
                 f'max_tokens={self.config.item_text_max_tokens}'
             )
@@ -493,33 +474,29 @@ class Compiler:
                 )
             self._write_view('text', text_values)
             text_lengths = [len(value) for value in text_values]
-            self._log(
-                'VIEW',
+            pnt(
                 f'text view ready avg_len={np.mean(text_lengths):.2f} '
                 f'max_len={max(text_lengths) if text_lengths else 0}'
             )
 
         if self.requires_view('sid'):
-            self._log(
-                'VIEW',
+            pnt(
                 f'loading sid view from model={self.config.repr_model} '
                 f'checkpoint={self.config.repr_best}'
             )
             sid_values = self.load_sid_view()
             self._write_view('sid', sid_values)
             sid_lengths = [len(value) for value in sid_values]
-            self._log(
-                'VIEW',
+            pnt(
                 f'sid view ready avg_codes={np.mean(sid_lengths):.2f} '
                 f'max_codes={max(sid_lengths) if sid_lengths else 0}'
             )
 
         if self.requires_view('embedding'):
-            self._log('VIEW', f'loading embedding view from model={self.config.repr_model}')
+            pnt(f'loading embedding view from model={self.config.repr_model}')
             embedding_values = self.load_embedding_view()
             self._write_view('embedding', embedding_values)
-            self._log(
-                'VIEW',
+            pnt(
                 f'embedding view ready indices={len(embedding_values)} '
                 f'preview={self._preview_list(embedding_values)}'
             )
@@ -531,7 +508,7 @@ class Compiler:
                 'views': sorted(self.item_views),
             },
         )
-        self._log('VIEW', f'item view manifest saved: {sorted(self.item_views)}')
+        pnt(f'item view manifest saved: {sorted(self.item_views)}')
 
     def _load_quantized_export(self):
         model_name = _normalize_model_name(self.config.repr_model)
@@ -544,11 +521,11 @@ class Compiler:
                 f'Quantized export not found under {export_dir}. '
                 f'Run quantizer first.'
             )
-        self._log('SID', f'loading quantized export from {export_dir}')
+        pnt(f'loading quantized export from {export_dir}')
         meta = json.loads(meta_path.read_text())
         codes = np.load(codes_path)
         item_ids = pd.read_parquet(item_ids_path)[self.processor.IID_COL].tolist()
-        self._log('SID', f'loaded quantized export rows={len(item_ids)} shape={list(codes.shape)}')
+        pnt(f'loaded quantized export rows={len(item_ids)} shape={list(codes.shape)}')
         return export_dir, meta, item_ids, codes
 
     def load_sid_view(self, build_only_meta=False):
@@ -593,7 +570,7 @@ class Compiler:
                 f'Embedding item ids not found under {embedding_dir}. '
                 f'Run embedder first.'
             )
-        self._log('EMBED', f'loading embedding index mapping from {embedding_dir}')
+        pnt(f'loading embedding index mapping from {embedding_dir}')
         item_ids = pd.read_parquet(item_ids_path)[self.processor.IID_COL].tolist()
         embedding_index_map = {item_id: index for index, item_id in enumerate(item_ids)}
         missing = []
@@ -660,8 +637,7 @@ class Compiler:
         return best_history, best_total_length
 
     def build_samples(self, split_name: str, dataframe: pd.DataFrame):
-        self._log(
-            'SAMPLE',
+        pnt(
             f'building {split_name} samples from {len(dataframe)} user sequences '
             f'(task={self.config.task_type}, repr={self.config.repr_type})'
         )
@@ -740,8 +716,7 @@ class Compiler:
         }
         avg_history_items = float(np.mean([row['history_item_count'] for row in rows])) if rows else 0.0
         avg_input_length = float(np.mean([row['total_input_length'] for row in rows])) if rows else 0.0
-        self._log(
-            'SAMPLE',
+        pnt(
             f'{split_name} samples ready count={len(rows)}/{total_candidate_targets} '
             f'invalid={invalid_target_count} dropped_short_seq={dropped_short_sequence_count} '
             f'avg_history_items={avg_history_items:.2f} avg_input_length={avg_input_length:.2f} '
@@ -760,8 +735,7 @@ class Compiler:
                 'pairs': pairs,
             },
         )
-        self._log(
-            'ALIGN',
+        pnt(
             f'alignment meta saved enabled=True '
             f'views={available_views} pairs={pairs}'
         )
@@ -780,7 +754,7 @@ class Compiler:
                 'processed_dir': str(self.store.processed_dir()),
             },
         )
-        self._log('META', f'meta saved to {self.meta_path}')
+        pnt(f'meta saved to {self.meta_path}')
 
     def save_stats(self):
         stats = {
@@ -796,8 +770,7 @@ class Compiler:
         }
         stats_path = self.output_dir / 'stats.json'
         self._save_json(stats_path, stats)
-        self._log(
-            'META',
+        pnt(
             f"stats saved to {stats_path}: item_count={stats['item_count']} "
             f"finetune_samples={stats['finetune_sample_count']} test_samples={stats['test_sample_count']} "
             f"resolved_maxitems={stats['resolved_maxitems']}"
@@ -807,7 +780,7 @@ class Compiler:
         for split_name in ['finetune', 'test']:
             visual = self.sample_visuals.get(split_name)
             if visual:
-                self._log_block(f'{split_name.upper()} PREVIEW', visual)
+                pnt(f'{split_name} sample visualization:\n{visual}')
 
 
 if __name__ == '__main__':
