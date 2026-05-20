@@ -1,15 +1,15 @@
 data:
-  name: ${data:mind}$
-  repr_type: ${repr_type:sid}$
+  name: ${data}$
+  repr_type: ${repr_type}$
   repr_model: ${repr_model:null}$
-  repr_best: ${repr_best:null}$
+  repr_best: ${repr_best:coll}$
   repr_combine: ${repr_combine:concat}$
-  task_type: ${task_type:sid}$
+  task_type: ${task_type}$
   maxitems: ${maxitems:0}$
   item_text_max_tokens: ${item_text_max_tokens:50}$
 
 model:
-  name: ${model:llama3}$
+  name: ${model}$
   max_length: ${model_max_length:0}$
   lora:
     use: ${use_lora:auto}$
@@ -23,8 +23,8 @@ model:
     dropout: ${dropout:0.1}$
 
 trainer:
-  batch_size: ${batch_size:8}$
-  epochs: ${epochs:3}$
+  batch_size: ${batch_size:64}$
+  epochs: ${epochs:0}$
   learning_rate: ${learning_rate:0.0001}$
   weight_decay: ${weight_decay:0.01}$
   seed: ${seed:42}$

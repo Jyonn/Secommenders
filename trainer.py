@@ -123,13 +123,17 @@ class Trainer:
         best_metric = float('inf')
         best_epoch = 0
         wait = 0
+        unlimited_epochs = self.config.epochs <= 0
 
         pnt(
             f'start training on {self.config.data} with {self.config.model} '
-            f'repr={self.config.repr_type} task={self.config.task_type} device={self.device}'
+            f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
+            f'epochs={"until-early-stop" if unlimited_epochs else self.config.epochs}'
         )
 
-        for epoch in range(1, self.config.epochs + 1):
+        epoch = 0
+        while True:
+            epoch += 1
             train_metrics = self._run_loader(self.train_loader, optimizer=optimizer, desc=f'train@{epoch}')
             pnt(
                 f'epoch {epoch:03d} train_loss={train_metrics["loss"]:.4f} '
@@ -148,6 +152,9 @@ class Trainer:
                 if wait >= self.config.patience:
                     pnt(f'early stop at epoch {epoch:03d} with best_finetune_loss={best_metric:.4f}')
                     break
+
+            if not unlimited_epochs and epoch >= self.config.epochs:
+                break
 
         checkpoint = torch.load(self.run_dir / 'best.pt', map_location=self.device)
         load_info = self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
