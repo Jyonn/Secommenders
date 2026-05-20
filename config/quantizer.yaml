@@ -48,6 +48,3 @@ trainer:
     usage: false
     book: false
   save_best_by: [ loss, coll, codes, recon ]
-  display_backend: textual
-  textual_refresh_hz: 6.0
-  textual_exit_delay: 1.0
