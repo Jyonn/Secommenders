@@ -156,7 +156,11 @@ class Processor:
     def _iterator(self, user_order, users):
         users_by_id = users.set_index(self.UID_COL, drop=False)
         for uid in user_order:
-            yield users_by_id.loc[uid]
+            user = users_by_id.loc[uid]
+            if isinstance(user, pd.DataFrame):
+                yield user.iloc[0]
+                continue
+            yield user
 
     def _split(self, iterator, count):
         users = []
