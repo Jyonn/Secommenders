@@ -24,5 +24,8 @@ class ArtifactStore:
     def quantized_dir(self, model: str) -> Path:
         return self._dir('quantized', self.dataset, model)
 
+    def compiled_dir(self, prepare_id: str) -> Path:
+        return self._dir('compiled', self.dataset, prepare_id)
+
     def prepared_dir(self, prepare_id: str) -> Path:
-        return self._dir('prepared', self.dataset, prepare_id)
+        return self.compiled_dir(prepare_id)
