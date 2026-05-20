@@ -316,7 +316,7 @@ class ScratchAdapter(ModelAdapter):
 
 
 class Compiler:
-    VER = 'v1.0'
+    VER = 'v1.1'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
 
@@ -572,6 +572,32 @@ class Compiler:
             return self.item_views['uid'][target_uid]
         return self.item_views[self.config.task_type][target_uid]
 
+    def _build_usable_history(self, prefix_uids: list[int], target_uid: int):
+        if self.config.maxitems > 0:
+            prefix_uids = prefix_uids[-self.config.maxitems:]
+
+        target_value = self._target_value(target_uid)
+        best_history = []
+        best_total_length = None
+
+        for start_index in range(len(prefix_uids) - 1, -1, -1):
+            candidate_history = prefix_uids[start_index:]
+            candidate_values = self._history_values(candidate_history)
+            total_input_length = self.model_adapter.estimate_main_length(
+                candidate_values,
+                target_value,
+                self.config.task_type,
+            )
+            if total_input_length <= self.model_adapter.max_length:
+                best_history = candidate_history
+                best_total_length = total_input_length
+            else:
+                break
+
+        if best_total_length is None:
+            return None, None
+        return best_history, int(best_total_length)
+
     def build_samples(self, split_name: str, dataframe: pd.DataFrame):
         columns = [
             self.processor.UID_COL,
@@ -583,30 +609,22 @@ class Compiler:
         ]
         rows = []
         resolved_maxitems = 0
-        stop_on_overflow = self.config.maxitems == 0
+        invalid_target_count = 0
+        dropped_short_sequence_count = 0
 
         for _, row in dataframe.iterrows():
             sequence = [self.uid_item_map[item_id] for item_id in row[self.processor.HIS_COL] if item_id in self.uid_item_map]
             if len(sequence) < 2:
+                dropped_short_sequence_count += 1
                 continue
 
-            for target_pos in range(1, len(sequence)):
-                history_uids = sequence[:target_pos]
-                if self.config.maxitems > 0:
-                    history_uids = history_uids[-self.config.maxitems:]
-
+            target_positions = range(1, len(sequence)) if split_name == 'finetune' else [len(sequence) - 1]
+            for target_pos in target_positions:
+                prefix_uids = sequence[:target_pos]
                 target_uid = sequence[target_pos]
-                history_values = self._history_values(history_uids)
-                target_value = self._target_value(target_uid)
-                total_input_length = self.model_adapter.estimate_main_length(
-                    history_values,
-                    target_value,
-                    self.config.task_type,
-                )
-
-                if total_input_length > self.model_adapter.max_length:
-                    if stop_on_overflow:
-                        break
+                history_uids, total_input_length = self._build_usable_history(prefix_uids, target_uid)
+                if not history_uids:
+                    invalid_target_count += 1
                     continue
 
                 rows.append(
@@ -626,6 +644,8 @@ class Compiler:
         self.samples_stats[split_name] = {
             'sample_count': len(rows),
             'resolved_maxitems': int(resolved_maxitems),
+            'invalid_target_count': int(invalid_target_count),
+            'dropped_short_sequence_count': int(dropped_short_sequence_count),
         }
         pnt(f'compiled {len(rows)} {split_name} samples')
 
@@ -666,6 +686,8 @@ class Compiler:
                 'item_count': len(self.uid_raw_items),
                 'finetune_sample_count': self.samples_stats['finetune']['sample_count'],
                 'test_sample_count': self.samples_stats['test']['sample_count'],
+                'finetune_invalid_target_count': self.samples_stats['finetune']['invalid_target_count'],
+                'test_invalid_target_count': self.samples_stats['test']['invalid_target_count'],
                 'resolved_maxitems': max(
                     self.samples_stats['finetune']['resolved_maxitems'],
                     self.samples_stats['test']['resolved_maxitems'],
