@@ -3,7 +3,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pigmento
 import torch
 from pigmento import pnt
 from torch.utils.data import DataLoader
@@ -20,6 +19,7 @@ from utils.artifact import ArtifactStore
 from utils.data import get_data_dir
 from utils.function import load_processor
 from utils.gpu import GPU
+from utils.logging import setup_logging
 
 
 def _format_spec(spec):
@@ -331,11 +331,7 @@ class Quantizer:
 
 
 if __name__ == '__main__':
-    pigmento.add_time_prefix()
-    pnt.set_display_mode(
-        use_instance_class=True,
-        display_method_name=False,
-    )
+    setup_logging()
 
     configurations = ConfigInit(
         required_args=['data', 'model'],

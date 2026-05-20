@@ -1,8 +1,13 @@
+from pigmento import pnt
+
 from utils.function import load_processor
+from utils.logging import setup_logging
 
 
 if __name__ == '__main__':
     import argparse
+
+    setup_logging()
 
     parser = argparse.ArgumentParser(description='Build or load processed dataset artifacts from formatted data.')
     parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
@@ -12,7 +17,7 @@ if __name__ == '__main__':
     processor = load_processor(data)
     processor.load()
 
-    print(f'Dataset: {data}')
-    print(f'Processed items: {len(processor.items)}')
-    print(f'Test users: {0 if processor.test_set is None else len(processor.test_set)}')
-    print(f'Finetune users: {0 if processor.finetune_set is None else len(processor.finetune_set)}')
+    pnt(f'Dataset: {data}')
+    pnt(f'Processed items: {len(processor.items)}')
+    pnt(f'Test users: {0 if processor.test_set is None else len(processor.test_set)}')
+    pnt(f'Finetune users: {0 if processor.finetune_set is None else len(processor.finetune_set)}')

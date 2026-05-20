@@ -14,6 +14,7 @@ from models import BaseBackbone, build_backbone
 from processors.base_processor import Processor
 from utils.artifact import ArtifactStore
 from utils.function import load_processor
+from utils.logging import setup_logging
 
 
 def _normalize_model_name(name: Optional[str]):
@@ -784,6 +785,8 @@ class Compiler:
 
 
 if __name__ == '__main__':
+    setup_logging()
+
     parser = argparse.ArgumentParser(description='Compile processed data into trainer-ready dataset assets.')
     parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
     parser.add_argument('--model', required=True, help='Backbone model name, such as llama3 or transformer.')

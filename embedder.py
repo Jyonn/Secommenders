@@ -3,13 +3,13 @@ import json
 from pathlib import Path
 
 import numpy as np
-import pigmento
 from pigmento import pnt
 from tqdm import tqdm
 
 from utils import get_data_dir, load_embedder, load_processor
 from utils.artifact import ArtifactStore
 from utils.gpu import GPU
+from utils.logging import setup_logging
 
 
 class Embedder:
@@ -83,11 +83,7 @@ class Embedder:
 
 
 if __name__ == '__main__':
-    pigmento.add_time_prefix()
-    pnt.set_display_mode(
-        use_instance_class=True,
-        display_method_name=False,
-    )
+    setup_logging()
 
     parser = argparse.ArgumentParser(description='Extract item embeddings from items.parquet content.')
     parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
