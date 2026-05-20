@@ -1,35 +1,33 @@
-data: ${data:mind}$
-model: ${model:llama3}$
-
-compile:
+data:
+  name: ${data:mind}$
   repr_type: ${repr_type:sid}$
   repr_model: ${repr_model:null}$
   repr_best: ${repr_best:null}$
   repr_combine: ${repr_combine:concat}$
   task_type: ${task_type:sid}$
   maxitems: ${maxitems:0}$
-  model_max_length: ${model_max_length:0}$
   item_text_max_tokens: ${item_text_max_tokens:50}$
+
+model:
+  name: ${model:llama3}$
+  max_length: ${model_max_length:0}$
+  lora:
+    use: ${use_lora:auto}$
+    rank: ${lora_rank:16}$
+    alpha: ${lora_alpha:32}$
+    dropout: ${lora_dropout:0.05}$
+  config:
+    hidden_size: ${hidden_size:256}$
+    num_layers: ${num_layers:4}$
+    num_heads: ${num_heads:8}$
+    dropout: ${dropout:0.1}$
 
 trainer:
   batch_size: ${batch_size:8}$
   epochs: ${epochs:3}$
   learning_rate: ${learning_rate:0.0001}$
   weight_decay: ${weight_decay:0.01}$
-  valid_ratio: ${valid_ratio:0.1}$
   seed: ${seed:42}$
   device: ${device:null}$
   freeze_backbone: ${freeze_backbone:auto}$
-
-lora:
-  use: ${use_lora:auto}$
-  rank: ${lora_rank:16}$
-  alpha: ${lora_alpha:32}$
-  dropout: ${lora_dropout:0.05}$
-  target_modules: ${lora_target_modules:all-linear}$
-
-scratch:
-  hidden_size: ${hidden_size:256}$
-  num_layers: ${num_layers:4}$
-  num_heads: ${num_heads:8}$
-  dropout: ${dropout:0.1}$
+  patience: ${patience:3}$

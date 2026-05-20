@@ -1,0 +1,118 @@
+from peft import LoraConfig, TaskType, get_peft_model
+from pigmento import pnt
+import torch
+from torch import nn
+from transformers import AutoModel
+
+
+def coerce_bool(value: str, default: bool):
+    if value == 'auto':
+        return default
+    return value == 'true'
+
+
+class LLMSequenceEncoder(nn.Module):
+    def __init__(
+            self,
+            model_key: str,
+            freeze_backbone: bool,
+            use_lora: bool,
+            lora_rank: int,
+            lora_alpha: int,
+            lora_dropout: float,
+            lora_target_modules: str,
+    ):
+        super().__init__()
+        base_model = AutoModel.from_pretrained(model_key, trust_remote_code=True)
+        hidden_size = getattr(base_model.config, 'hidden_size', None)
+        if hidden_size is None:
+            hidden_size = getattr(base_model.config, 'd_model', None)
+        if hidden_size is None:
+            raise ValueError(f'Cannot resolve hidden size from model config for {model_key}')
+        self.hidden_size = int(hidden_size)
+        self.freeze_backbone = freeze_backbone
+        self.use_lora = use_lora
+
+        if self.use_lora:
+            target_modules = 'all-linear' if lora_target_modules == 'all-linear' else [
+                value.strip() for value in lora_target_modules.split(',') if value.strip()
+            ]
+            self.model = get_peft_model(
+                base_model,
+                LoraConfig(
+                    task_type=TaskType.FEATURE_EXTRACTION,
+                    inference_mode=False,
+                    r=lora_rank,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
+                    target_modules=target_modules,
+                ),
+            )
+            trainable_params = sum(param.numel() for param in self.model.parameters() if param.requires_grad)
+            total_params = sum(param.numel() for param in self.model.parameters())
+            pnt(
+                f'initialized LoRA for {model_key} '
+                f'trainable={trainable_params:,}/{total_params:,} '
+                f'r={lora_rank} alpha={lora_alpha} dropout={lora_dropout:g} '
+                f'targets={lora_target_modules}'
+            )
+        else:
+            self.model = base_model
+            if self.freeze_backbone:
+                for param in self.model.parameters():
+                    param.requires_grad = False
+                self.model.eval()
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.freeze_backbone and not self.use_lora:
+            self.model.eval()
+        return self
+
+    def embed_model_tokens(self, token_ids: torch.Tensor):
+        return self.model.get_input_embeddings()(token_ids)
+
+    def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor):
+        use_no_grad = self.freeze_backbone and not self.use_lora
+        with torch.set_grad_enabled(not use_no_grad):
+            outputs = self.model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                return_dict=True,
+            )
+        return outputs.last_hidden_state
+
+
+class ScratchSequenceEncoder(nn.Module):
+    def __init__(self, vocab_size: int, hidden_size: int, num_layers: int, num_heads: int, dropout: float, max_length: int):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.token_embedding = nn.Embedding(vocab_size, hidden_size)
+        self.position_embedding = nn.Embedding(max_length, hidden_size)
+        layer = nn.TransformerEncoderLayer(
+            d_model=hidden_size,
+            nhead=num_heads,
+            dim_feedforward=hidden_size * 4,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
+
+    def embed_model_tokens(self, token_ids: torch.Tensor):
+        return self.token_embedding(token_ids)
+
+    def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor):
+        batch_size, seq_len, _ = inputs_embeds.shape
+        positions = torch.arange(seq_len, device=inputs_embeds.device).unsqueeze(0).expand(batch_size, -1)
+        hidden = inputs_embeds + self.position_embedding(positions)
+        causal_mask = torch.triu(
+            torch.ones(seq_len, seq_len, device=inputs_embeds.device, dtype=torch.bool),
+            diagonal=1,
+        )
+        hidden = self.encoder(
+            hidden,
+            mask=causal_mask,
+            src_key_padding_mask=attention_mask == 0,
+        )
+        return hidden
