@@ -70,18 +70,21 @@ class TrainConfig:
 
     @classmethod
     def from_refconfig(cls, configurations):
+        compile_config = configurations.config.compile
         trainer = configurations.config.trainer
+        lora = configurations.config.lora
+        scratch = configurations.config.scratch
         return cls(
-            data=configurations.data.lower(),
-            model=configurations.model.lower(),
-            repr_type=configurations.repr_type.lower(),
-            repr_model=normalize_model_name(getattr(configurations, 'repr_model', None)),
-            repr_best=configurations.repr_best.lower() if getattr(configurations, 'repr_best', None) else None,
-            repr_combine=getattr(configurations, 'repr_combine', 'concat').lower(),
-            task_type=configurations.task_type.lower(),
-            maxitems=int(trainer.maxitems),
-            model_max_length=int(trainer.model_max_length) or None,
-            item_text_max_tokens=int(trainer.item_text_max_tokens),
+            data=configurations.config.data.lower(),
+            model=configurations.config.model.lower(),
+            repr_type=compile_config.repr_type.lower(),
+            repr_model=normalize_model_name(compile_config.repr_model),
+            repr_best=compile_config.repr_best.lower() if compile_config.repr_best else None,
+            repr_combine=compile_config.repr_combine.lower(),
+            task_type=compile_config.task_type.lower(),
+            maxitems=int(compile_config.maxitems),
+            model_max_length=int(compile_config.model_max_length) or None,
+            item_text_max_tokens=int(compile_config.item_text_max_tokens),
             batch_size=int(trainer.batch_size),
             epochs=int(trainer.epochs),
             learning_rate=float(trainer.learning_rate),
@@ -90,15 +93,15 @@ class TrainConfig:
             seed=int(trainer.seed),
             device=trainer.device,
             freeze_backbone=str(trainer.freeze_backbone).lower(),
-            use_lora=str(trainer.use_lora).lower(),
-            lora_rank=int(trainer.lora_rank),
-            lora_alpha=int(trainer.lora_alpha),
-            lora_dropout=float(trainer.lora_dropout),
-            lora_target_modules=str(trainer.lora_target_modules),
-            hidden_size=int(trainer.hidden_size),
-            num_layers=int(trainer.num_layers),
-            num_heads=int(trainer.num_heads),
-            dropout=float(trainer.dropout),
+            use_lora=str(lora.use).lower(),
+            lora_rank=int(lora.rank),
+            lora_alpha=int(lora.alpha),
+            lora_dropout=float(lora.dropout),
+            lora_target_modules=str(lora.target_modules),
+            hidden_size=int(scratch.hidden_size),
+            num_layers=int(scratch.num_layers),
+            num_heads=int(scratch.num_heads),
+            dropout=float(scratch.dropout),
         )
 
     @property
@@ -718,12 +721,9 @@ if __name__ == '__main__':
     setup_logging()
 
     configurations = ConfigInit(
-        required_args=['data', 'model', 'repr_type', 'task_type'],
+        required_args=[],
         default_args=dict(
             config='config/trainer.yaml',
-            repr_model=None,
-            repr_best=None,
-            repr_combine='concat',
         ),
         makedirs=[],
     ).parse()

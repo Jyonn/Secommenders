@@ -1,8 +1,17 @@
-trainer:
+data: ${data:mind}$
+model: ${model:llama3}$
+
+compile:
+  repr_type: ${repr_type:sid}$
+  repr_model: ${repr_model:null}$
+  repr_best: ${repr_best:null}$
+  repr_combine: ${repr_combine:concat}$
+  task_type: ${task_type:sid}$
   maxitems: ${maxitems:0}$
   model_max_length: ${model_max_length:0}$
   item_text_max_tokens: ${item_text_max_tokens:50}$
 
+trainer:
   batch_size: ${batch_size:8}$
   epochs: ${epochs:3}$
   learning_rate: ${learning_rate:0.0001}$
@@ -10,15 +19,16 @@ trainer:
   valid_ratio: ${valid_ratio:0.1}$
   seed: ${seed:42}$
   device: ${device:null}$
-
   freeze_backbone: ${freeze_backbone:auto}$
 
-  use_lora: ${use_lora:auto}$
-  lora_rank: ${lora_rank:16}$
-  lora_alpha: ${lora_alpha:32}$
-  lora_dropout: ${lora_dropout:0.05}$
-  lora_target_modules: ${lora_target_modules:all-linear}$
+lora:
+  use: ${use_lora:auto}$
+  rank: ${lora_rank:16}$
+  alpha: ${lora_alpha:32}$
+  dropout: ${lora_dropout:0.05}$
+  target_modules: ${lora_target_modules:all-linear}$
 
+scratch:
   hidden_size: ${hidden_size:256}$
   num_layers: ${num_layers:4}$
   num_heads: ${num_heads:8}$
