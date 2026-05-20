@@ -198,21 +198,43 @@ class Quantizer:
     def _checkpoint_dir_name(metric_name):
         return 'best' if metric_name == 'loss' else f'best-{metric_name}'
 
-    def _checkpoint_dir(self, metric_name):
-        return self.output_dir / 'checkpoints' / self._checkpoint_dir_name(metric_name)
+    def _checkpoint_dir_names(self, metric_name):
+        names = [self._checkpoint_dir_name(metric_name)]
+        # Upstream trainer names the utilization checkpoint `best-usage`,
+        # while our config still refers to the metric as `codes`.
+        if metric_name == 'codes':
+            names.append('best-usage')
+        elif metric_name == 'usage':
+            names.append('best-codes')
+        return names
+
+    def _checkpoint_candidates(self, metric_name):
+        candidates = []
+        for name in self._checkpoint_dir_names(metric_name):
+            candidates.append(self.output_dir / name)
+            candidates.append(self.output_dir / 'checkpoints' / name)
+        return candidates
 
     def _export_dir(self, metric_name):
         return self.output_dir / 'exports' / metric_name
 
     def load_checkpoint_model(self, metric_name):
-        checkpoint_dir = self._checkpoint_dir(metric_name)
-        if not checkpoint_dir.exists():
-            raise FileNotFoundError(f'Checkpoint not found for {metric_name}: {checkpoint_dir}')
-
         weights_name = getattr(self.model.__class__, 'weights_name', 'pytorch_model.bin')
-        weights_path = checkpoint_dir / weights_name
-        if not weights_path.exists():
-            raise FileNotFoundError(f'Checkpoint weights not found for {metric_name}: {weights_path}')
+        checkpoint_dir = None
+        weights_path = None
+        for candidate in self._checkpoint_candidates(metric_name):
+            candidate_weights = candidate / weights_name
+            if candidate_weights.exists():
+                checkpoint_dir = candidate
+                weights_path = candidate_weights
+                break
+
+        if checkpoint_dir is None or weights_path is None:
+            searched = ', '.join(str(path) for path in self._checkpoint_candidates(metric_name))
+            raise FileNotFoundError(
+                f'Checkpoint not found for {metric_name}. '
+                f'Searched: {searched}'
+            )
 
         state_dict = torch.load(weights_path, map_location='cpu')
         self.model.load_state_dict(state_dict)
