@@ -17,7 +17,7 @@ class AmazonFormatter(UICTFormatter):
     DAT_COL = 'reviewTime'
     RAT_COL = 'overall'
 
-    MAX_LINES = 1e7
+    MAX_LINES = 0
     REQUIRE_STRINGIFY = False
 
     @property
