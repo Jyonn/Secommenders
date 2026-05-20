@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-import sys
 
 import numpy as np
 import pandas as pd
@@ -100,22 +99,6 @@ class Quantizer:
             return device
         return GPU.auto_choose(torch_format=True)
 
-    def _use_textual_display(self):
-        return getattr(self.config.trainer, 'display_backend', 'cli') == 'textual'
-
-    def _resolve_display_backend(self):
-        display_backend = getattr(self.config.trainer, 'display_backend', 'cli')
-        if display_backend != 'textual':
-            return display_backend
-
-        # autoencoders 0.6.0 starts the Textual dashboard in a background
-        # thread, but Textual's POSIX terminal driver installs signal
-        # handlers that must run on the main interpreter thread.
-        if sys.platform != 'win32':
-            pnt('textual display is incompatible with the current POSIX thread model; falling back to cli display')
-            return 'cli'
-        return display_backend
-
     def _load_item_ids(self, expected_size):
         if self.embedding_item_ids_path.exists():
             item_ids = pd.read_parquet(self.embedding_item_ids_path)[self.processor.IID_COL].tolist()
@@ -190,7 +173,6 @@ class Quantizer:
     def build_trainer(self):
         trainer_config = self.config.trainer()
         trainer_config['device'] = self._resolve_device()
-        trainer_config['display_backend'] = self._resolve_display_backend()
         self.trainer_args = TrainingConfig(**trainer_config)
         return VQTrainer(model=self.model, args=self.trainer_args)
 
@@ -199,8 +181,6 @@ class Quantizer:
         self.load_embedding_matrix()
         dataloaders = self.build_dataloaders()
         self.build_model()
-        if not self._use_textual_display():
-            _print_pipeline_trace(self.model)
         trainer = self.build_trainer()
 
         pnt(f'training {self.quantizer_name} on {self.data}/{self.embedding_model}')
