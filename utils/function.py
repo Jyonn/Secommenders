@@ -76,9 +76,6 @@ def coerce_bool(value: str, default: bool):
 
 
 def build_dataloaders(train_dataset, test_dataset, batch_size: int):
-    train_rows = [train_dataset[index] for index in range(len(train_dataset))]
-    test_rows = [test_dataset[index] for index in range(len(test_dataset))]
-
-    train_loader = DataLoader(train_rows, batch_size=batch_size, shuffle=True, collate_fn=lambda batch: batch)
-    test_loader = DataLoader(test_rows, batch_size=batch_size, shuffle=False, collate_fn=lambda batch: batch)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=lambda batch: batch)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=lambda batch: batch)
     return train_loader, test_loader
