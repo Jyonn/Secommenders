@@ -334,7 +334,6 @@ class Compiler:
         self.processor: Optional[Processor] = None
         self.model_adapter: Optional[ModelAdapter] = None
         self.registry = VocabularyRegistry()
-
         self.uid_raw_items: list = []
         self.uid_item_map = {}
         self.item_texts: list[str] = []

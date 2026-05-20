@@ -1,6 +1,5 @@
 import sys
 
-from processors.base_processor import Processor
 from utils.class_hub import ClassHub
 
 
@@ -45,6 +44,7 @@ def load_formatter(dataset, data_dir=None):
 
 
 def load_processor(dataset, data_dir=None):
+    from processors.base_processor import Processor
     return Processor(dataset=dataset)
 
 
