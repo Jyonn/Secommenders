@@ -6,6 +6,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from peft import LoraConfig, TaskType, get_peft_model
 import torch
 import torch.nn.functional as F
 from pigmento import pnt
@@ -57,6 +58,11 @@ class TrainConfig:
     seed: int
     device: Optional[str]
     freeze_backbone: str
+    use_lora: str
+    lora_rank: int
+    lora_alpha: int
+    lora_dropout: float
+    lora_target_modules: str
     hidden_size: int
     num_layers: int
     num_heads: int
@@ -79,16 +85,25 @@ class TrainConfig:
 
     @property
     def run_id(self):
-        return '__'.join(
-            [
-                self.compile_config.prepare_id,
-                f'bs-{self.batch_size}',
-                f'lr-{self.learning_rate:g}',
-                f'wd-{self.weight_decay:g}',
-                f'seed-{self.seed}',
-                f'freeze-{self.freeze_backbone}',
-            ]
-        )
+        parts = [
+            self.compile_config.prepare_id,
+            f'bs-{self.batch_size}',
+            f'lr-{self.learning_rate:g}',
+            f'wd-{self.weight_decay:g}',
+            f'seed-{self.seed}',
+            f'freeze-{self.freeze_backbone}',
+            f'lora-{self.use_lora}',
+        ]
+        if self.model != 'transformer':
+            parts.extend(
+                [
+                    f'r-{self.lora_rank}',
+                    f'a-{self.lora_alpha}',
+                    f'drop-{self.lora_dropout:g}',
+                    f'target-{self.lora_target_modules.replace(",", "+")}',
+                ]
+            )
+        return '__'.join(parts)
 
 
 class CompiledSampleDataset(Dataset):
@@ -213,24 +228,60 @@ class CompiledArtifacts:
 
 
 class LLMSequenceEncoder(nn.Module):
-    def __init__(self, model_key: str, freeze_backbone: bool):
+    def __init__(
+            self,
+            model_key: str,
+            freeze_backbone: bool,
+            use_lora: bool,
+            lora_rank: int,
+            lora_alpha: int,
+            lora_dropout: float,
+            lora_target_modules: str,
+    ):
         super().__init__()
-        self.model = AutoModel.from_pretrained(model_key, trust_remote_code=True)
-        hidden_size = getattr(self.model.config, 'hidden_size', None)
+        base_model = AutoModel.from_pretrained(model_key, trust_remote_code=True)
+        hidden_size = getattr(base_model.config, 'hidden_size', None)
         if hidden_size is None:
-            hidden_size = getattr(self.model.config, 'd_model', None)
+            hidden_size = getattr(base_model.config, 'd_model', None)
         if hidden_size is None:
             raise ValueError(f'Cannot resolve hidden size from model config for {model_key}')
         self.hidden_size = int(hidden_size)
         self.freeze_backbone = freeze_backbone
-        if self.freeze_backbone:
-            for param in self.model.parameters():
-                param.requires_grad = False
-            self.model.eval()
+        self.use_lora = use_lora
+
+        if self.use_lora:
+            target_modules = 'all-linear' if lora_target_modules == 'all-linear' else [
+                value.strip() for value in lora_target_modules.split(',') if value.strip()
+            ]
+            self.model = get_peft_model(
+                base_model,
+                LoraConfig(
+                    task_type=TaskType.FEATURE_EXTRACTION,
+                    inference_mode=False,
+                    r=lora_rank,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
+                    target_modules=target_modules,
+                ),
+            )
+            trainable_params = sum(param.numel() for param in self.model.parameters() if param.requires_grad)
+            total_params = sum(param.numel() for param in self.model.parameters())
+            pnt(
+                f'initialized LoRA for {model_key} '
+                f'trainable={trainable_params:,}/{total_params:,} '
+                f'r={lora_rank} alpha={lora_alpha} dropout={lora_dropout:g} '
+                f'targets={lora_target_modules}'
+            )
+        else:
+            self.model = base_model
+            if self.freeze_backbone:
+                for param in self.model.parameters():
+                    param.requires_grad = False
+                self.model.eval()
 
     def train(self, mode: bool = True):
         super().train(mode)
-        if self.freeze_backbone:
+        if self.freeze_backbone and not self.use_lora:
             self.model.eval()
         return self
 
@@ -238,7 +289,8 @@ class LLMSequenceEncoder(nn.Module):
         return self.model.get_input_embeddings()(token_ids)
 
     def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor):
-        with torch.set_grad_enabled(not self.freeze_backbone):
+        use_no_grad = self.freeze_backbone and not self.use_lora
+        with torch.set_grad_enabled(not use_no_grad):
             outputs = self.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
@@ -294,9 +346,18 @@ class SequentialRecModel(nn.Module):
         )
         freeze_default = compiled.model_kind == 'llm'
         self.freeze_backbone = _coerce_bool(config.freeze_backbone, default=freeze_default)
+        self.use_lora = _coerce_bool(config.use_lora, default=compiled.model_kind == 'llm')
 
         if compiled.model_kind == 'llm':
-            self.encoder = LLMSequenceEncoder(compiled.model_key, freeze_backbone=self.freeze_backbone)
+            self.encoder = LLMSequenceEncoder(
+                compiled.model_key,
+                freeze_backbone=self.freeze_backbone,
+                use_lora=self.use_lora,
+                lora_rank=config.lora_rank,
+                lora_alpha=config.lora_alpha,
+                lora_dropout=config.lora_dropout,
+                lora_target_modules=config.lora_target_modules,
+            )
         else:
             self.encoder = ScratchSequenceEncoder(
                 vocab_size=compiled.model_vocab_size,
@@ -336,6 +397,11 @@ class SequentialRecModel(nn.Module):
     @property
     def device(self):
         return next(self.parameters()).device
+
+    def trainable_state_dict(self):
+        state = self.state_dict()
+        trainable_names = {name for name, param in self.named_parameters() if param.requires_grad}
+        return {name: tensor.detach().cpu() for name, tensor in state.items() if name in trainable_names}
 
     def _render_history_item(self, uid: int):
         if self.config.repr_combine == 'add':
@@ -506,6 +572,9 @@ class Trainer:
 
     def build_optimizer(self):
         params = [param for param in self.model.parameters() if param.requires_grad]
+        total = sum(param.numel() for param in self.model.parameters())
+        trainable = sum(param.numel() for param in params)
+        pnt(f'build optimizer with trainable params {trainable:,}/{total:,}')
         return torch.optim.AdamW(
             params,
             lr=self.config.learning_rate,
@@ -546,14 +615,15 @@ class Trainer:
     def _save_checkpoint(self, epoch: int, best_metric: float, valid_metrics: dict):
         checkpoint = {
             'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
+            'model_state_dict': self.model.trainable_state_dict(),
+            'checkpoint_kind': 'trainable_only',
             'config': asdict(self.config),
             'valid_metrics': valid_metrics,
             'best_metric': best_metric,
         }
         path = self.run_dir / 'best.pt'
         torch.save(checkpoint, path)
-        pnt(f'saved best checkpoint to {path}')
+        pnt(f'saved best checkpoint to {path} with trainable-only state')
 
     def _save_meta(self, best_epoch: int, best_metric: float, test_metrics: dict):
         meta = {
@@ -597,7 +667,12 @@ class Trainer:
                 self._save_checkpoint(epoch, best_metric, valid_metrics)
 
         checkpoint = torch.load(self.run_dir / 'best.pt', map_location=self.device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        load_info = self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        missing = getattr(load_info, 'missing_keys', [])
+        unexpected = getattr(load_info, 'unexpected_keys', [])
+        if unexpected:
+            raise RuntimeError(f'unexpected checkpoint keys: {unexpected}')
+        pnt(f'loaded best checkpoint with {len(missing)} missing frozen/base keys')
         test_metrics = self._run_loader(self.test_loader, optimizer=None, desc='test')
         pnt(
             f'best_epoch={best_epoch} test_loss={test_metrics["loss"]:.4f} '
@@ -628,6 +703,15 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--device', default=None)
     parser.add_argument('--freeze-backbone', choices=['auto', 'true', 'false'], default='auto')
+    parser.add_argument('--use-lora', choices=['auto', 'true', 'false'], default='auto')
+    parser.add_argument('--lora-rank', type=int, default=16)
+    parser.add_argument('--lora-alpha', type=int, default=32)
+    parser.add_argument('--lora-dropout', type=float, default=0.05)
+    parser.add_argument(
+        '--lora-target-modules',
+        default='all-linear',
+        help='Comma-separated target module names or all-linear.',
+    )
     parser.add_argument('--hidden-size', type=int, default=256, help='Scratch transformer hidden size.')
     parser.add_argument('--num-layers', type=int, default=4, help='Scratch transformer layers.')
     parser.add_argument('--num-heads', type=int, default=8, help='Scratch transformer attention heads.')
@@ -653,6 +737,11 @@ if __name__ == '__main__':
         seed=int(args.seed),
         device=args.device,
         freeze_backbone=args.freeze_backbone,
+        use_lora=args.use_lora,
+        lora_rank=int(args.lora_rank),
+        lora_alpha=int(args.lora_alpha),
+        lora_dropout=float(args.lora_dropout),
+        lora_target_modules=args.lora_target_modules,
         hidden_size=int(args.hidden_size),
         num_layers=int(args.num_layers),
         num_heads=int(args.num_heads),
