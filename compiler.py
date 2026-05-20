@@ -32,7 +32,6 @@ class CompileConfig:
     task_type: str
     maxitems: int
     item_text_max_tokens: int = 50
-    alignment: bool = True
     repr_combine: str = 'concat'
 
     @property
@@ -81,7 +80,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v1.2'
+    VER = 'v1.3'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -316,7 +315,7 @@ class Compiler:
             f'start compile data={self.config.data} model={self.config.model} '
             f'repr={self.config.repr_type} combine={self.config.repr_combine} '
             f'task={self.config.task_type} maxitems={self.config.maxitems} '
-            f'textlen={self.config.item_text_max_tokens} alignment={self.config.alignment}'
+            f'textlen={self.config.item_text_max_tokens} alignment=always'
         )
         if self.is_cached():
             pnt(f'compiled dataset cached at {self.output_dir}')
@@ -435,7 +434,7 @@ class Compiler:
 
     def requires_view(self, view_name: str):
         views = {'uid', *self.config.repr_types, self.config.task_type}
-        if self.config.alignment and ('text' not in views or len(views) > 1):
+        if 'text' not in views or len(views) > 1:
             views.add('text')
         return view_name in views
 
@@ -717,21 +716,19 @@ class Compiler:
         )
 
     def build_alignment_meta(self):
-        views = set()
-        if self.config.alignment:
-            views.update({self.config.repr_type, self.config.task_type, 'text'})
+        views = {self.config.repr_type, self.config.task_type, 'text'}
         available_views = sorted(view for view in views if view in self.item_views)
         pairs = [list(pair) for pair in combinations(available_views, 2)]
         self._save_json(
             self.alignment_dir / 'meta.json',
             {
-                'enabled': bool(self.config.alignment),
+                'enabled': True,
                 'views': available_views,
                 'pairs': pairs,
             },
         )
         pnt(
-            f'alignment meta saved enabled={self.config.alignment} '
+            f'alignment meta saved enabled=True '
             f'views={available_views} pairs={pairs}'
         )
 
@@ -789,7 +786,6 @@ if __name__ == '__main__':
     parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'embedding'])
     parser.add_argument('--maxitems', type=int, default=0, help='Maximum history items, 0 means auto by model max length.')
     parser.add_argument('--item-text-max-tokens', type=int, default=50, help='Maximum tokenized length per item text.')
-    parser.add_argument('--task.alignment', dest='alignment', default='true', help='Whether to compile alignment assets.')
     args = parser.parse_args()
 
     config = CompileConfig(
@@ -802,7 +798,6 @@ if __name__ == '__main__':
         task_type=args.task_type.lower(),
         maxitems=int(args.maxitems),
         item_text_max_tokens=int(args.item_text_max_tokens),
-        alignment=str(args.alignment).lower() != 'false',
     )
     compiler = Compiler(config)
     compiler.run()
