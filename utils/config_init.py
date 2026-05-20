@@ -13,9 +13,7 @@ class ConfigInit:
         self.default_args = default_args
         self.makedirs = makedirs
 
-    def parse(self):
-        kwargs = argparse()
-
+    def parse_kwargs(self, kwargs):
         for arg in self.required_args:
             if arg not in kwargs:
                 raise ValueError(f'miss argument {arg}')
@@ -34,3 +32,7 @@ class ConfigInit:
             os.makedirs(dir_name, exist_ok=True)
 
         return config
+
+    def parse(self):
+        kwargs = argparse()
+        return self.parse_kwargs(kwargs)

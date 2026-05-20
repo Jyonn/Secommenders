@@ -15,6 +15,7 @@ from utils.artifact import ArtifactStore
 from utils.compile import CompileConfig, normalize_model_name
 from utils.function import load_processor
 from utils.logging import setup_logging
+from utils.pipeline import ensure_embedded, ensure_quantized
 
 class VocabularyRegistry:
     def __init__(self):
@@ -465,16 +466,15 @@ class Compiler:
         pnt(f'item view manifest saved: {sorted(self.item_views)}')
 
     def _load_quantized_export(self):
-        model_name = _normalize_model_name(self.config.repr_model)
+        model_name = normalize_model_name(self.config.repr_model)
         export_dir = self.store.quantized_dir(model_name) / 'exports' / self.config.repr_best
         meta_path = export_dir / 'meta.json'
         codes_path = export_dir / 'codebook_indices.npy'
         item_ids_path = export_dir / 'item_ids.parquet'
         if not meta_path.exists() or not codes_path.exists() or not item_ids_path.exists():
-            raise FileNotFoundError(
-                f'Quantized export not found under {export_dir}. '
-                f'Run quantizer first.'
-            )
+            ensure_quantized(self.config.data, model_name)
+        if not meta_path.exists() or not codes_path.exists() or not item_ids_path.exists():
+            raise FileNotFoundError(f'Quantized export not found after auto preparation: {export_dir}')
         pnt(f'loading quantized export from {export_dir}')
         meta = json.loads(meta_path.read_text())
         codes = np.load(codes_path)
@@ -516,14 +516,13 @@ class Compiler:
         return ordered_values
 
     def load_embedding_view(self):
-        model_name = _normalize_model_name(self.config.repr_model)
+        model_name = normalize_model_name(self.config.repr_model)
         embedding_dir = self.store.embedded_dir(model_name)
         item_ids_path = embedding_dir / 'item_ids.parquet'
         if not item_ids_path.exists():
-            raise FileNotFoundError(
-                f'Embedding item ids not found under {embedding_dir}. '
-                f'Run embedder first.'
-            )
+            ensure_embedded(self.config.data, model_name)
+        if not item_ids_path.exists():
+            raise FileNotFoundError(f'Embedding item ids not found after auto preparation under {embedding_dir}.')
         pnt(f'loading embedding index mapping from {embedding_dir}')
         item_ids = pd.read_parquet(item_ids_path)[self.processor.IID_COL].tolist()
         embedding_index_map = {item_id: index for index, item_id in enumerate(item_ids)}

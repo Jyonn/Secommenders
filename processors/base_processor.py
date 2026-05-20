@@ -8,6 +8,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from utils.artifact import ArtifactStore
+from utils.pipeline import ensure_formatted
 
 
 class Processor:
@@ -89,10 +90,7 @@ class Processor:
     def _load_formatted_meta(self):
         path = self._formatted_paths()['meta']
         if not path.exists():
-            raise FileNotFoundError(
-                f'Formatted metadata not found: {path}. '
-                f'Run `python formatter.py --data {self.dataset}` first.'
-            )
+            ensure_formatted(self.dataset)
         meta = self._load_meta(path)
         self._apply_meta(meta)
         return meta
@@ -215,10 +213,7 @@ class Processor:
         meta = self._load_formatted_meta()
         paths = self._formatted_paths()
         if not paths['items'].exists() or not paths['users'].exists():
-            raise FileNotFoundError(
-                f'Formatted data not found under {self.formatted_dir}. '
-                f'Run `python formatter.py --data {self.dataset}` first.'
-            )
+            ensure_formatted(self.dataset)
 
         self.items = self._stringify(pd.read_parquet(paths['items']))
         self.users = self._stringify(pd.read_parquet(paths['users']))

@@ -20,6 +20,7 @@ from utils.data import get_data_dir
 from utils.function import load_processor
 from utils.gpu import GPU
 from utils.logging import setup_logging
+from utils.pipeline import ensure_embedded
 
 
 def _format_spec(spec):
@@ -79,10 +80,9 @@ class Quantizer:
         self.embedding_item_ids_path = self.embedding_dir / 'item_ids.parquet'
         self.embedding_meta_path = self.embedding_dir / 'meta.json'
         if not self.embedding_path.exists():
-            raise FileNotFoundError(
-                f'Embedding file not found: {self.embedding_path}. '
-                f'Run `python embedder.py --data {self.data} --model {self.embedding_model}` first.'
-            )
+            ensure_embedded(self.data, self.embedding_model)
+        if not self.embedding_path.exists():
+            raise FileNotFoundError(f'Embedding file not found after auto preparation: {self.embedding_path}')
 
         self.output_dir = Path(getattr(self.config.trainer, 'output_dir', artifacts.quantized_dir(self.embedding_model)))
         self.output_dir.mkdir(parents=True, exist_ok=True)

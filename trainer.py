@@ -20,6 +20,7 @@ from utils.artifact import ArtifactStore
 from utils.compile import CompileConfig, normalize_model_name
 from utils.gpu import GPU
 from utils.logging import setup_logging
+from utils.pipeline import ensure_compiled
 
 
 def _to_list(value):
@@ -152,11 +153,18 @@ class CompiledArtifacts:
         return torch.tensor(matrix, dtype=torch.float32)
 
     def load(self):
-        if not self.compile_dir.exists():
-            raise FileNotFoundError(
-                f'Compiled dataset not found: {self.compile_dir}. '
-                f'Run compiler.py with the same signature first.'
-            )
+        required_paths = [
+            self.compile_dir / 'meta.json',
+            self.compile_dir / 'samples' / 'finetune.parquet',
+            self.compile_dir / 'samples' / 'test.parquet',
+            self.compile_dir / 'vocab' / 'uid.json',
+            self.compile_dir / 'vocab' / 'meta.json',
+            self.compile_dir / 'prompts' / 'main.json',
+            self.compile_dir / 'prompts' / 'alignment.json',
+            self.compile_dir / 'item_views' / 'uid.parquet',
+        ]
+        if not all(path.exists() for path in required_paths):
+            ensure_compiled(self.config.compile_config)
 
         self.meta = self._read_json(self.compile_dir / 'meta.json')
         self.vocab_meta = self._read_json(self.compile_dir / 'vocab' / 'meta.json')

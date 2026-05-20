@@ -1,0 +1,76 @@
+from types import SimpleNamespace
+
+from pigmento import pnt
+
+from utils.compile import CompileConfig
+from utils.config_init import ConfigInit
+from utils.data import get_data_dir
+from utils.function import load_formatter, load_processor
+from utils.logging import setup_logging
+
+
+def ensure_formatted(data: str):
+    setup_logging()
+    pnt(f'auto preparing formatted artifacts for {data}')
+    formatter = load_formatter(data, data_dir=get_data_dir(data))
+    formatter.load()
+    return formatter
+
+
+def ensure_processed(data: str):
+    setup_logging()
+    pnt(f'auto preparing processed artifacts for {data}')
+    processor = load_processor(data)
+    processor.load()
+    return processor
+
+
+def ensure_embedded(data: str, model: str, device=None, batch_size=32, normalize=False, overwrite=False):
+    setup_logging()
+    pnt(f'auto preparing embedded artifacts for {data}/{model}')
+    from embedder import Embedder
+
+    conf = SimpleNamespace(
+        data=data,
+        model=model,
+        device=device,
+        batch_size=batch_size,
+        normalize=normalize,
+        overwrite=overwrite,
+    )
+    embedder = Embedder(conf)
+    embedder.embed()
+    return embedder
+
+
+def ensure_quantized(data: str, model: str):
+    setup_logging()
+    pnt(f'auto preparing quantized artifacts for {data}/{model}')
+    from quantizer import Quantizer
+
+    configurations = ConfigInit(
+        required_args=['data', 'model'],
+        default_args=dict(
+            config='config/quantizer.yaml',
+        ),
+        makedirs=[],
+    ).parse_kwargs(
+        {
+            'data': data,
+            'model': model,
+            'config': 'config/quantizer.yaml',
+        }
+    )
+    quantizer = Quantizer(configurations.data, configurations.model, configurations.config)
+    quantizer.run()
+    return quantizer
+
+
+def ensure_compiled(config: CompileConfig):
+    setup_logging()
+    pnt(f'auto preparing compiled artifacts for {config.data}/{config.prepare_id}')
+    from compiler import Compiler
+
+    compiler = Compiler(config)
+    compiler.run()
+    return compiler
