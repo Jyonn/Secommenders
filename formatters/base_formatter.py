@@ -11,7 +11,6 @@ from utils.artifact import ArtifactStore
 
 class BaseFormatter(abc.ABC):
     VER = 'v2.1'
-    REGISTER = True
 
     IID_COL: str
     UID_COL: str

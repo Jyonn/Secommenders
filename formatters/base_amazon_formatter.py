@@ -8,8 +8,6 @@ from formatters.base_uict_formatter import UICTFormatter
 
 
 class AmazonFormatter(UICTFormatter):
-    REGISTER = False
-
     UID_COL = 'reviewerID'
     IID_COL = 'asin'
     HIS_COL = 'history'
