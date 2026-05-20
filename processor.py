@@ -5,7 +5,7 @@ from utils.function import load_processor
 if __name__ == '__main__':
     import argparse
 
-    parser = argparse.ArgumentParser(description='Preview a sequential dataset processor.')
+    parser = argparse.ArgumentParser(description='Preview a processed sequential dataset.')
     parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
     parser.add_argument('--source', default='original', choices=['original', 'test', 'finetune'])
     parser.add_argument('--slicer', type=int, default=-20)

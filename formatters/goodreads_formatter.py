@@ -5,18 +5,16 @@ from datetime import datetime, timezone
 import pandas as pd
 from tqdm import tqdm
 
-from processors.base_uict_processor import UICTProcessor
+from formatters.base_uict_formatter import UICTFormatter
 
 
-class GoodreadsProcessor(UICTProcessor):
+class GoodreadsFormatter(UICTFormatter):
     IID_COL = 'bid'
     UID_COL = 'uid'
     HIS_COL = 'history'
     DAT_COL = 'date'
     LBL_COL = 'click'
 
-    NUM_TEST = 5_000
-    NUM_FINETUNE = 40_000
     REQUIRE_STRINGIFY = True
 
     @property

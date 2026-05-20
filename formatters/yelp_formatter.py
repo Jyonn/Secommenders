@@ -2,10 +2,10 @@ import os
 
 import pandas as pd
 
-from processors.base_uict_processor import UICTProcessor
+from formatters.base_uict_formatter import UICTFormatter
 
 
-class YelpProcessor(UICTProcessor):
+class YelpFormatter(UICTFormatter):
     UID_COL = 'user_id'
     IID_COL = 'business_id'
     HIS_COL = 'history'
@@ -13,8 +13,6 @@ class YelpProcessor(UICTProcessor):
     LBL_COL = 'click'
     RAT_COL = 'stars'
 
-    NUM_TEST = 5_000
-    NUM_FINETUNE = 40_000
     REQUIRE_STRINGIFY = False
 
     @property

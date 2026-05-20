@@ -3,16 +3,14 @@ from typing import cast
 
 import pandas as pd
 
-from processors.base_processor import BaseProcessor
+from formatters.base_formatter import BaseFormatter
 
 
-class MINDProcessor(BaseProcessor):
+class MINDFormatter(BaseFormatter):
     IID_COL = 'nid'
     UID_COL = 'uid'
     HIS_COL = 'history'
 
-    NUM_TEST = 5_000
-    NUM_FINETUNE = 40_000
     REQUIRE_STRINGIFY = False
 
     @property

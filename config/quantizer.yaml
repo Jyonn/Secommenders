@@ -26,7 +26,7 @@ encoder:
     use_bias: true
 
 trainer:
-  output_dir: data/${data}/embeddings/${model}
+  output_dir: artifacts/quantized/${data}/${model}
   validation_ratio: ${validation_ratio:0.1}$
   test_ratio: ${test_ratio:0.1}$
   full_dataset_as_splits: true

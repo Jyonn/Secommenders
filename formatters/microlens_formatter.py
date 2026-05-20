@@ -2,17 +2,15 @@ import os
 
 import pandas as pd
 
-from processors.base_processor import BaseProcessor
+from formatters.base_formatter import BaseFormatter
 
 
-class MicroLensProcessor(BaseProcessor):
+class MicroLensFormatter(BaseFormatter):
     IID_COL = 'item'
     UID_COL = 'user'
     HIS_COL = 'history'
     DAT_COL = 'timestamp'
 
-    NUM_TEST = 5_000
-    NUM_FINETUNE = 40_000
     REQUIRE_STRINGIFY = True
 
     @property

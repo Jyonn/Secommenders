@@ -2,10 +2,10 @@ import os
 
 import pandas as pd
 
-from processors.base_uict_processor import UICTProcessor
+from formatters.base_uict_formatter import UICTFormatter
 
 
-class MovieLensProcessor(UICTProcessor):
+class MovieLensFormatter(UICTFormatter):
     IID_COL = 'movieId'
     UID_COL = 'userId'
     HIS_COL = 'history'
@@ -13,8 +13,6 @@ class MovieLensProcessor(UICTProcessor):
     LBL_COL = 'click'
     RAT_COL = 'rating'
 
-    NUM_TEST = 5_000
-    NUM_FINETUNE = 40_000
     REQUIRE_STRINGIFY = False
 
     @property

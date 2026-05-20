@@ -17,6 +17,7 @@ from autoencoders.models.loading import load_model
 from autoencoders.training.display import style
 from autoencoders.training.trainer import TrainingConfig, VQTrainer
 from utils.config_init import ConfigInit
+from utils.artifact import ArtifactStore
 from utils.data import get_data_dir
 from utils.function import load_processor
 from utils.gpu import GPU
@@ -73,17 +74,18 @@ class Quantizer:
         self.processor = load_processor(self.data, data_dir=get_data_dir(self.data))
         self.processor.load()
 
-        self.embedding_dir = Path(self.processor.store_dir) / 'embeddings'
-        self.embedding_path = self.embedding_dir / f'{self.embedding_model}.npy'
-        self.embedding_item_ids_path = self.embedding_dir / f'{self.embedding_model}.item_ids.parquet'
-        self.embedding_meta_path = self.embedding_dir / f'{self.embedding_model}.meta.json'
+        artifacts = ArtifactStore(self.data)
+        self.embedding_dir = artifacts.embedded_dir(self.embedding_model)
+        self.embedding_path = self.embedding_dir / 'embeddings.npy'
+        self.embedding_item_ids_path = self.embedding_dir / 'item_ids.parquet'
+        self.embedding_meta_path = self.embedding_dir / 'meta.json'
         if not self.embedding_path.exists():
             raise FileNotFoundError(
                 f'Embedding file not found: {self.embedding_path}. '
                 f'Run `python embedder.py --data {self.data} --model {self.embedding_model}` first.'
             )
 
-        self.output_dir = Path(self.config.trainer.output_dir)
+        self.output_dir = Path(getattr(self.config.trainer, 'output_dir', artifacts.quantized_dir(self.embedding_model)))
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.embedding_matrix = None
@@ -217,10 +219,10 @@ class Quantizer:
         return 'best' if metric_name == 'loss' else f'best-{metric_name}'
 
     def _checkpoint_dir(self, metric_name):
-        return self.output_dir / self._checkpoint_dir_name(metric_name)
+        return self.output_dir / 'checkpoints' / self._checkpoint_dir_name(metric_name)
 
     def _export_dir(self, metric_name):
-        return self.output_dir / metric_name
+        return self.output_dir / 'exports' / metric_name
 
     def load_checkpoint_model(self, metric_name):
         checkpoint_dir = self._checkpoint_dir(metric_name)
@@ -293,6 +295,7 @@ class Quantizer:
             'embedding_path': str(self.embedding_path),
             'embedding_meta_path': str(self.embedding_meta_path),
             'quantizer_model': self.quantizer_name,
+            'processed_items_path': str(Path(self.processor.store_dir) / 'items.parquet'),
             'checkpoint_metric': metric_name,
             'checkpoint_dir': str(checkpoint_dir),
             'item_count': int(self.embedding_matrix.num_embeddings),

@@ -8,6 +8,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from utils import get_data_dir, load_embedder, load_processor
+from utils.artifact import ArtifactStore
 from utils.gpu import GPU
 
 
@@ -30,12 +31,11 @@ class Embedder:
             batch_size=self.conf.batch_size,
         ).post_init()
 
-        self.embedding_dir = Path(self.processor.store_dir) / 'embeddings'
-        self.embedding_dir.mkdir(parents=True, exist_ok=True)
+        self.embedding_dir = ArtifactStore(self.data).embedded_dir(self.model_name)
 
-        self.embedding_path = self.embedding_dir / f'{self.model_name}.npy'
-        self.item_ids_path = self.embedding_dir / f'{self.model_name}.item_ids.parquet'
-        self.meta_path = self.embedding_dir / f'{self.model_name}.meta.json'
+        self.embedding_path = self.embedding_dir / 'embeddings.npy'
+        self.item_ids_path = self.embedding_dir / 'item_ids.parquet'
+        self.meta_path = self.embedding_dir / 'meta.json'
 
     def get_contents(self):
         contents = []
@@ -52,6 +52,7 @@ class Embedder:
             'item_count': int(len(self.processor.items)),
             'embedding_dim': int(embeddings.shape[1]),
             'content_attrs': list(self.processor.default_attrs),
+            'processed_items_path': str(self.items_path),
         }
         self.meta_path.write_text(json.dumps(meta, indent=2))
 

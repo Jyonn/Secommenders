@@ -1,13 +1,14 @@
 import importlib
+import inspect
 from pathlib import Path
 
-from processors.base_processor import BaseProcessor
+from formatters.base_formatter import BaseFormatter
 
 
 class ClassHub:
     @staticmethod
-    def processors():
-        return ClassHub(BaseProcessor, 'processors', 'Processor')
+    def formatters():
+        return ClassHub(BaseFormatter, 'formatters', 'Formatter')
 
     @staticmethod
     def embedders():
@@ -34,7 +35,13 @@ class ClassHub:
         for file_path in file_paths:
             module = importlib.import_module(f'{self.module_dir}.{file_path.stem}')
             for _, obj in module.__dict__.items():
-                if isinstance(obj, type) and issubclass(obj, self.base_class) and obj is not self.base_class:
+                if (
+                    isinstance(obj, type)
+                    and issubclass(obj, self.base_class)
+                    and obj is not self.base_class
+                    and not inspect.isabstract(obj)
+                    and getattr(obj, 'REGISTER', True)
+                ):
                     class_list.append(obj)
         return class_list
 

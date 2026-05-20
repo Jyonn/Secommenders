@@ -3,17 +3,15 @@ import os
 import pandas as pd
 from tqdm import tqdm
 
-from processors.base_processor import BaseProcessor
+from formatters.base_formatter import BaseFormatter
 
 
-class HMProcessor(BaseProcessor):
+class HMFormatter(BaseFormatter):
     IID_COL = 'article_id'
     UID_COL = 'customer_id'
     HIS_COL = 'history'
     DAT_COL = 't_dat'
 
-    NUM_TEST = 5_000
-    NUM_FINETUNE = 40_000
     REQUIRE_STRINGIFY = True
 
     @property

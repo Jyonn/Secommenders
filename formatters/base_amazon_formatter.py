@@ -4,10 +4,12 @@ import os
 
 import pandas as pd
 
-from processors.base_uict_processor import UICTProcessor
+from formatters.base_uict_formatter import UICTFormatter
 
 
-class AmazonProcessor(UICTProcessor):
+class AmazonFormatter(UICTFormatter):
+    REGISTER = False
+
     UID_COL = 'reviewerID'
     IID_COL = 'asin'
     HIS_COL = 'history'
@@ -17,8 +19,6 @@ class AmazonProcessor(UICTProcessor):
 
     MAX_LINES = 1e7
     REQUIRE_STRINGIFY = False
-    NUM_TEST = 5_000
-    NUM_FINETUNE = 40_000
 
     @property
     def default_attrs(self):

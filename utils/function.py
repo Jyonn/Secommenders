@@ -1,5 +1,6 @@
 import sys
 
+from processors.base_processor import Processor
 from utils.class_hub import ClassHub
 
 
@@ -33,14 +34,19 @@ def argparse():
     return kwargs
 
 
-def load_processor(dataset, data_dir=None):
-    processors = ClassHub.processors()
+def load_formatter(dataset, data_dir=None):
+    formatters = ClassHub.formatters()
     key = dataset.lower()
-    if key not in processors:
-        available = ', '.join(sorted(processors.class_dict))
-        raise ValueError(f'Unknown processor: {dataset}. Available: {available}')
-    processor = processors[key]
-    return processor(data_dir=data_dir)
+    if key not in formatters:
+        available = ', '.join(sorted(formatters.class_dict))
+        raise ValueError(f'Unknown formatter: {dataset}. Available: {available}')
+    formatter = formatters[key]
+    return formatter(data_dir=data_dir)
+
+
+def load_processor(dataset, data_dir=None):
+    formatter = load_formatter(dataset, data_dir=data_dir)
+    return Processor(formatter=formatter)
 
 
 def load_embedder(model, **kwargs):

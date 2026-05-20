@@ -1,10 +1,9 @@
 import abc
 
+from formatters.base_formatter import BaseFormatter
 
-from processors.base_processor import BaseProcessor
 
-
-class UICTProcessor(BaseProcessor, abc.ABC):
+class UICTFormatter(BaseFormatter, abc.ABC):
     DAT_COL: str
     LBL_COL: str
 

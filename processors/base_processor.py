@@ -1,56 +1,35 @@
-import abc
 import json
-import os.path
 import random
+from pathlib import Path
 from typing import Callable, Optional, Union
 
 import pandas as pd
-from oba import Obj
 from pigmento import pnt
 from tqdm import tqdm
 
-
-class Meta:
-    VER = 'v1.0'
-
-    def __init__(self, path):
-        self.path = path
-
-        if not os.path.exists(path):
-            self.compressed = False
-            self.version = self.VER
-        else:
-            data = json.load(open(path, 'r'))
-            data = Obj(data)
-            self.compressed = data.fully_compressed
-            self.version = data.version
-
-    def save(self):
-        data = {
-            'fully_compressed': self.compressed,
-            'version': self.version,
-        }
-        json.dump(data, open(self.path, 'w'))
+from formatters.base_formatter import BaseFormatter
+from utils.artifact import ArtifactStore
 
 
-class BaseProcessor(abc.ABC):
-    IID_COL: str
-    UID_COL: str
-    HIS_COL: str
+class Processor:
+    VER = 'v2.0'
 
-    NUM_TEST: int
-    NUM_FINETUNE: int
+    NUM_TEST = 5_000
+    NUM_FINETUNE = 40_000
 
-    MAX_HISTORY_PER_USER: int = 100
-    REQUIRE_STRINGIFY: bool
-    BASE_STORE_DIR = 'data'
+    def __init__(self, formatter: BaseFormatter, num_test=None, num_finetune=None):
+        self.formatter = formatter
 
-    def __init__(self, data_dir=None):
-        self.data_dir = data_dir
-        self.store_dir = os.path.join(self.BASE_STORE_DIR, self.get_name())
-        os.makedirs(self.store_dir, exist_ok=True)
+        self.IID_COL = formatter.IID_COL
+        self.UID_COL = formatter.UID_COL
+        self.HIS_COL = formatter.HIS_COL
+        self.REQUIRE_STRINGIFY = formatter.REQUIRE_STRINGIFY
 
-        self.meta = Meta(os.path.join(self.store_dir, 'meta.json'))
+        self.num_test = self.NUM_TEST if num_test is None else num_test
+        self.num_finetune = self.NUM_FINETUNE if num_finetune is None else num_finetune
+
+        self.store = ArtifactStore(self.get_name())
+        self.store_dir = str(self.store.processed_dir())
         self._loaded = False
 
         self.items: Optional[pd.DataFrame] = None
@@ -61,86 +40,26 @@ class BaseProcessor(abc.ABC):
         self.test_set: Optional[pd.DataFrame] = None
         self.finetune_set: Optional[pd.DataFrame] = None
 
+    def get_name(self):
+        return self.formatter.get_name()
+
     @property
-    @abc.abstractmethod
     def default_attrs(self):
-        raise NotImplementedError
+        return self.formatter.default_attrs
 
-    @classmethod
-    def get_name(cls):
-        return cls.__name__.replace('Processor', '').lower()
-
-    @abc.abstractmethod
-    def load_items(self) -> pd.DataFrame:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def load_users(self) -> pd.DataFrame:
-        raise NotImplementedError
+    def _paths(self):
+        base_dir = Path(self.store_dir)
+        return {
+            'items': base_dir / 'items.parquet',
+            'test': base_dir / 'test.parquet',
+            'finetune': base_dir / 'finetune.parquet',
+            'user_order': base_dir / 'user_order.txt',
+            'meta': base_dir / 'meta.json',
+            'stats': base_dir / 'stats.json',
+        }
 
     def _stringify(self, df: pd.DataFrame):
-        if not self.REQUIRE_STRINGIFY:
-            return df
-        if self.IID_COL in df.columns:
-            df[self.IID_COL] = df[self.IID_COL].astype(str)
-        if self.UID_COL in df.columns:
-            df[self.UID_COL] = df[self.UID_COL].astype(str)
-        return df
-
-    def compress(self):
-        if self.meta.compressed:
-            return False
-
-        item_set = set()
-        old_item_size = len(self.items)
-        self.users[self.HIS_COL].apply(lambda x: [item_set.add(i) for i in x])
-        self.items = self.items[self.items[self.IID_COL].isin(item_set)].reset_index(drop=True)
-        pnt(f'compressed items from {old_item_size} to {len(self.items)}')
-
-        self.items.to_parquet(os.path.join(self.store_dir, 'items.parquet'))
-
-        self.meta.compressed = True
-        self.meta.save()
-        return True
-
-    def load(self):
-        items_path = os.path.join(self.store_dir, 'items.parquet')
-        users_path = os.path.join(self.store_dir, 'users.parquet')
-
-        if os.path.exists(items_path) and os.path.exists(users_path):
-            pnt(f'loading {self.get_name()} from cache')
-            self.items = pd.read_parquet(items_path)
-            pnt(f'loaded {len(self.items)} items')
-            self.users = pd.read_parquet(users_path)
-            pnt(f'loaded {len(self.users)} users')
-
-            self.items = self._stringify(self.items)
-            self.users = self._stringify(self.users)
-        else:
-            pnt(f'loading {self.get_name()} from raw data')
-            self.items = self.load_items()
-            self.items = self._stringify(self.items)
-            pnt(f'loaded {len(self.items)} items')
-
-            self.users = self.load_users()
-            self.users = self._stringify(self.users)
-            pnt(f'loaded {len(self.users)} users')
-
-            self.items.to_parquet(items_path)
-            self.users.to_parquet(users_path)
-
-        if self.REQUIRE_STRINGIFY:
-            self.users[self.HIS_COL] = self.users[self.HIS_COL].apply(lambda x: [str(item) for item in x])
-
-        self.item_vocab = dict(zip(self.items[self.IID_COL], range(len(self.items))))
-        self.user_vocab = dict(zip(self.users[self.UID_COL], range(len(self.users))))
-
-        if self.compress():
-            pnt(f'compressed {self.get_name()} data, re-run to load compressed data')
-            return self.load()
-
-        self.load_public_sets()
-        return self
+        return self.formatter._stringify(df)
 
     def organize_item(self, iid, item_attrs: list, as_dict=False, item_self=False):
         item = iid if item_self else self.items.iloc[self.item_vocab[iid]]
@@ -188,9 +107,9 @@ class BaseProcessor(abc.ABC):
         return self.generate(slicer, source='finetune')
 
     def _iterator(self, user_order, users):
+        users_by_id = users.set_index(self.UID_COL, drop=False)
         for uid in user_order:
-            user = users[users[self.UID_COL] == uid]
-            yield user.iloc[0]
+            yield users_by_id.loc[uid]
 
     def _split(self, iterator, count):
         users = []
@@ -201,66 +120,127 @@ class BaseProcessor(abc.ABC):
         return pd.DataFrame(users)
 
     def _load_user_order(self):
-        path = os.path.join(self.store_dir, 'user_order.txt')
-        if os.path.exists(path):
-            with open(path, 'r') as file:
-                return [line.strip() for line in file]
+        path = self._paths()['user_order']
+        if path.exists():
+            return [line.strip() for line in path.read_text().splitlines() if line.strip()]
 
         users = self.users[self.UID_COL].unique().tolist()
         random.shuffle(users)
-        with open(path, 'w') as file:
-            for user in users:
-                file.write(f'{user}\n')
-
+        path.write_text(''.join(f'{user}\n' for user in users))
         return users
 
     @property
     def test_set_required(self):
-        return self.NUM_TEST > 0
+        return self.num_test > 0
 
     @property
     def finetune_set_required(self):
-        return self.NUM_FINETUNE > 0
+        return self.num_finetune > 0
 
     @property
-    def test_set_valid(self):
-        return os.path.exists(os.path.join(self.store_dir, 'test.parquet')) or not self.test_set_required
+    def processed_valid(self):
+        paths = self._paths()
+        required = [paths['items']]
+        if self.test_set_required:
+            required.append(paths['test'])
+        if self.finetune_set_required:
+            required.append(paths['finetune'])
+        return all(path.exists() for path in required)
 
-    @property
-    def finetune_set_valid(self):
-        return os.path.exists(os.path.join(self.store_dir, 'finetune.parquet')) or not self.finetune_set_required
+    def _collect_public_item_set(self):
+        if not self.test_set_required and not self.finetune_set_required:
+            return set(self.formatter.items[self.IID_COL].unique())
+
+        item_set = set()
+        for dataframe in [self.test_set, self.finetune_set]:
+            if dataframe is None:
+                continue
+            dataframe[self.HIS_COL].apply(lambda x: [item_set.add(i) for i in x])
+        return item_set
+
+    def _build_processed_items(self):
+        item_set = self._collect_public_item_set()
+        items = self.formatter.items[self.formatter.items[self.IID_COL].isin(item_set)].reset_index(drop=True)
+        pnt(f'processed items down to {len(items)} public-split items')
+        return items
+
+    def _save_meta(self):
+        paths = self._paths()
+        meta = {
+            'version': self.VER,
+            'stage': 'processed',
+            'dataset': self.get_name(),
+            'formatter_dir': self.formatter.store_dir,
+            'num_test': int(self.num_test),
+            'num_finetune': int(self.num_finetune),
+            'item_col': self.IID_COL,
+            'user_col': self.UID_COL,
+            'history_col': self.HIS_COL,
+        }
+        paths['meta'].write_text(json.dumps(meta, indent=2) + '\n')
+
+    def _save_stats(self):
+        paths = self._paths()
+        stats = {
+            'processed_item_count': int(len(self.items)),
+            'formatted_user_count': int(len(self.users)),
+            'test_user_count': int(len(self.test_set)) if self.test_set is not None else 0,
+            'finetune_user_count': int(len(self.finetune_set)) if self.finetune_set is not None else 0,
+        }
+        paths['stats'].write_text(json.dumps(stats, indent=2) + '\n')
 
     def load_public_sets(self):
-        if self.test_set_valid and self.finetune_set_valid:
-            pnt(f'loading {self.get_name()} public splits from cache')
-
-            if self.NUM_TEST:
-                self.test_set = pd.read_parquet(os.path.join(self.store_dir, 'test.parquet'))
-                self.test_set = self._stringify(self.test_set)
-                pnt('loaded test set')
-
-            if self.NUM_FINETUNE:
-                self.finetune_set = pd.read_parquet(os.path.join(self.store_dir, 'finetune.parquet'))
-                self.finetune_set = self._stringify(self.finetune_set)
-                pnt('loaded finetune set')
-
-            self._loaded = True
+        paths = self._paths()
+        if self.processed_valid:
+            pnt(f'loading processed {self.get_name()} splits from cache')
+            self.items = pd.read_parquet(paths['items'])
+            if self.test_set_required:
+                self.test_set = pd.read_parquet(paths['test'])
+            if self.finetune_set_required:
+                self.finetune_set = pd.read_parquet(paths['finetune'])
             return
 
-        pnt(f'processing {self.get_name()} public splits from users')
+        pnt(f'processing {self.get_name()} public splits from formatted users')
         users_order = self._load_user_order()
         iterator = self._iterator(users_order, self.users)
 
-        if self.NUM_TEST:
-            self.test_set = self._split(iterator, self.NUM_TEST)
+        if self.test_set_required:
+            self.test_set = self._split(iterator, self.num_test)
             self.test_set.reset_index(drop=True, inplace=True)
-            self.test_set.to_parquet(os.path.join(self.store_dir, 'test.parquet'))
-            pnt(f'generated test set with {len(self.test_set)}/{self.NUM_TEST} samples')
+            self.test_set.to_parquet(paths['test'], index=False)
+            pnt(f'generated test set with {len(self.test_set)}/{self.num_test} samples')
 
-        if self.NUM_FINETUNE:
-            self.finetune_set = self._split(iterator, self.NUM_FINETUNE)
+        if self.finetune_set_required:
+            self.finetune_set = self._split(iterator, self.num_finetune)
             self.finetune_set.reset_index(drop=True, inplace=True)
-            self.finetune_set.to_parquet(os.path.join(self.store_dir, 'finetune.parquet'))
-            pnt(f'generated finetune set with {len(self.finetune_set)}/{self.NUM_FINETUNE} samples')
+            self.finetune_set.to_parquet(paths['finetune'], index=False)
+            pnt(f'generated finetune set with {len(self.finetune_set)}/{self.num_finetune} samples')
 
+        self.items = self._build_processed_items()
+        self.items.to_parquet(paths['items'], index=False)
+        self._save_meta()
+        self._save_stats()
+
+    def load(self):
+        self.formatter.load()
+        self.users = self.formatter.users
+
+        self.load_public_sets()
+
+        self.items = self._stringify(self.items)
+        if self.test_set is not None:
+            self.test_set = self._stringify(self.test_set)
+        if self.finetune_set is not None:
+            self.finetune_set = self._stringify(self.finetune_set)
+
+        if self.REQUIRE_STRINGIFY:
+            self.users[self.HIS_COL] = self.users[self.HIS_COL].apply(lambda x: [str(item) for item in x])
+            if self.test_set is not None:
+                self.test_set[self.HIS_COL] = self.test_set[self.HIS_COL].apply(lambda x: [str(item) for item in x])
+            if self.finetune_set is not None:
+                self.finetune_set[self.HIS_COL] = self.finetune_set[self.HIS_COL].apply(lambda x: [str(item) for item in x])
+
+        self.item_vocab = dict(zip(self.items[self.IID_COL], range(len(self.items))))
+        self.user_vocab = dict(zip(self.users[self.UID_COL], range(len(self.users))))
         self._loaded = True
+        return self
