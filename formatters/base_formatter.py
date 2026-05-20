@@ -10,7 +10,7 @@ from utils.artifact import ArtifactStore
 
 
 class BaseFormatter(abc.ABC):
-    VER = 'v2.0'
+    VER = 'v2.1'
     REGISTER = True
 
     IID_COL: str
@@ -90,26 +90,76 @@ class BaseFormatter(abc.ABC):
         }
         stats_path.write_text(json.dumps(stats, indent=2) + '\n')
 
+    @staticmethod
+    def _has_non_empty_history(history):
+        return hasattr(history, '__len__') and not isinstance(history, str) and len(history) > 0
+
+    def _finalize_items(self, items: pd.DataFrame):
+        items = items.dropna(subset=[self.IID_COL]).reset_index(drop=True)
+
+        duplicate_count = int(items.duplicated(subset=[self.IID_COL]).sum())
+        if duplicate_count:
+            pnt(f'dropping {duplicate_count} duplicate items for {self.IID_COL}')
+            items = items.drop_duplicates(subset=[self.IID_COL], keep='first').reset_index(drop=True)
+
+        return items
+
+    def deduplicate_users(self, users: pd.DataFrame):
+        duplicate_count = int(users.duplicated(subset=[self.UID_COL]).sum())
+        raise ValueError(
+            f'formatter {self.get_name()} produced {duplicate_count} duplicate users for {self.UID_COL}; '
+            f'override deduplicate_users() to define merge policy'
+        )
+
+    def _finalize_users(self, users: pd.DataFrame):
+        users = users.dropna(subset=[self.UID_COL, self.HIS_COL]).reset_index(drop=True)
+        users = users[users[self.HIS_COL].map(self._has_non_empty_history)].reset_index(drop=True)
+
+        duplicate_count = int(users.duplicated(subset=[self.UID_COL]).sum())
+        if duplicate_count:
+            pnt(f'merging {duplicate_count} duplicate users for {self.UID_COL}')
+            users = self.deduplicate_users(users)
+
+        users = users.dropna(subset=[self.UID_COL, self.HIS_COL]).reset_index(drop=True)
+        users = users[users[self.HIS_COL].map(self._has_non_empty_history)].reset_index(drop=True)
+
+        remaining_duplicates = int(users.duplicated(subset=[self.UID_COL]).sum())
+        if remaining_duplicates:
+            raise ValueError(
+                f'formatter {self.get_name()} still has {remaining_duplicates} duplicate users '
+                f'after deduplication'
+            )
+        return users[[self.UID_COL, self.HIS_COL]].reset_index(drop=True)
+
     def load(self):
         items_path, users_path, _, _ = self._paths()
+        cache_updated = False
 
         if items_path.exists() and users_path.exists():
             pnt(f'loading formatted {self.get_name()} from cache')
-            self.items = pd.read_parquet(items_path)
-            self.users = pd.read_parquet(users_path)
+            raw_items = pd.read_parquet(items_path)
+            raw_users = pd.read_parquet(users_path)
+
+            self.items = self._finalize_items(self._stringify(raw_items))
+            self.users = self._finalize_users(self._stringify(raw_users))
+            cache_updated = not self.items.equals(raw_items) or not self.users.equals(raw_users)
         else:
             pnt(f'loading {self.get_name()} from raw data')
-            self.items = self._stringify(self.load_items())
-            self.users = self._stringify(self.load_users())
-            self.items.to_parquet(items_path, index=False)
-            self.users.to_parquet(users_path, index=False)
-            self._save_meta()
-            self._save_stats()
+            self.items = self._finalize_items(self._stringify(self.load_items()))
+            self.users = self._finalize_users(self._stringify(self.load_users()))
+            cache_updated = True
 
         self.items = self._stringify(self.items)
         self.users = self._stringify(self.users)
         if self.REQUIRE_STRINGIFY:
             self.users[self.HIS_COL] = self.users[self.HIS_COL].apply(lambda x: [str(item) for item in x])
+
+        if cache_updated:
+            pnt(f'writing normalized formatted cache for {self.get_name()}')
+            self.items.to_parquet(items_path, index=False)
+            self.users.to_parquet(users_path, index=False)
+            self._save_meta()
+            self._save_stats()
 
         self.item_vocab = dict(zip(self.items[self.IID_COL], range(len(self.items))))
         self.user_vocab = dict(zip(self.users[self.UID_COL], range(len(self.users))))

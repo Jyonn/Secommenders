@@ -196,7 +196,20 @@ class Processor:
             required.append(paths['test'])
         if self.finetune_set_required:
             required.append(paths['finetune'])
-        return all(path.exists() for path in required)
+        if not all(path.exists() for path in required):
+            return False
+
+        processed_meta = self._load_meta(paths['meta'])
+        formatted_meta_path = self._formatted_paths()['meta']
+        if not formatted_meta_path.exists():
+            return False
+        formatted_meta = self._load_meta(formatted_meta_path)
+
+        return (
+            processed_meta.get('formatted_version') == formatted_meta.get('version')
+            and int(processed_meta.get('num_test', -1)) == int(self.num_test)
+            and int(processed_meta.get('num_finetune', -1)) == int(self.num_finetune)
+        )
 
     def load_formatted(self):
         meta = self._load_formatted_meta()

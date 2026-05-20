@@ -34,11 +34,21 @@ class MINDFormatter(BaseFormatter):
             filepath_or_buffer=cast(str, path),
             sep='\t',
             names=['imp', self.UID_COL, 'time', self.HIS_COL, 'predict'],
-            usecols=[self.UID_COL, self.HIS_COL],
+            usecols=[self.UID_COL, 'time', self.HIS_COL],
         )
 
+        users['time'] = pd.to_datetime(users['time'], errors='coerce')
         users[self.HIS_COL] = users[self.HIS_COL].str.split()
         users = users.dropna(subset=[self.HIS_COL])
         users[self.HIS_COL] = users[self.HIS_COL].apply(lambda x: [item for item in x if item in item_set])
         users = users[users[self.HIS_COL].map(lambda x: len(x) > 0)]
         return users
+
+    def deduplicate_users(self, users: pd.DataFrame):
+        users = users.copy()
+        users['history_len'] = users[self.HIS_COL].map(len)
+        users = users.sort_values(
+            [self.UID_COL, 'time', 'history_len'],
+            kind='stable',
+        ).groupby(self.UID_COL, sort=False).tail(1)
+        return users[[self.UID_COL, self.HIS_COL]].reset_index(drop=True)
