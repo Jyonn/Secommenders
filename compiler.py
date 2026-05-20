@@ -34,12 +34,18 @@ class CompileConfig:
     maxitems: int
     item_text_max_tokens: int = 50
     alignment: bool = True
+    repr_combine: str = 'concat'
+
+    @property
+    def repr_types(self):
+        return [part.strip().lower() for part in self.repr_type.split('+') if part.strip()]
 
     @property
     def prepare_id(self):
         parts = [
             f'model-{self.model}',
             f'repr-{self.repr_type}',
+            f'combine-{self.repr_combine}',
             f'task-{self.task_type}',
             f'maxitems-{"auto" if self.maxitems == 0 else self.maxitems}',
             f'textlen-{self.item_text_max_tokens}',
@@ -316,9 +322,10 @@ class ScratchAdapter(ModelAdapter):
 
 
 class Compiler:
-    VER = 'v1.1'
+    VER = 'v1.2'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
+    SUPPORTED_REPR_COMBINES = {'concat', 'add'}
 
     def __init__(self, config: CompileConfig):
         self.config = config
@@ -375,14 +382,26 @@ class Compiler:
         return all(path.exists() for path in required_paths)
 
     def validate(self):
-        if self.config.repr_type not in self.SUPPORTED_REPR_TYPES:
-            raise ValueError(f'Unsupported repr.type: {self.config.repr_type}')
+        repr_types = self.config.repr_types
+        if not repr_types:
+            raise ValueError('repr.type must contain at least one representation')
+        if len(set(repr_types)) != len(repr_types):
+            raise ValueError(f'repr.type contains duplicates: {self.config.repr_type}')
+        unsupported_repr_types = [repr_type for repr_type in repr_types if repr_type not in self.SUPPORTED_REPR_TYPES]
+        if unsupported_repr_types:
+            raise ValueError(f'Unsupported repr.type entries: {unsupported_repr_types}')
         if self.config.task_type not in self.SUPPORTED_TASK_TYPES:
             raise ValueError(f'Unsupported task.type: {self.config.task_type}')
-        external_view_required = any(view in {'sid', 'embedding'} for view in [self.config.repr_type, self.config.task_type])
+        if self.config.repr_combine not in self.SUPPORTED_REPR_COMBINES:
+            raise ValueError(f'Unsupported repr.combine: {self.config.repr_combine}')
+        if self.config.repr_combine == 'add':
+            if set(repr_types) != {'uid', 'embedding'} or len(repr_types) != 2:
+                raise ValueError('repr.combine=add is only supported for repr.type=uid+embedding')
+
+        external_view_required = any(view in {'sid', 'embedding'} for view in repr_types + [self.config.task_type])
         if external_view_required and not self.config.repr_model:
             raise ValueError('repr.model is required when repr.type or task.type uses sid/embedding')
-        if 'sid' in {self.config.repr_type, self.config.task_type} and not self.config.repr_best:
+        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.repr_best:
             raise ValueError('repr.best is required when repr.type or task.type uses sid')
 
     def run(self):
@@ -477,7 +496,7 @@ class Compiler:
         self._save_json(self.prompts_dir / 'alignment.json', self.model_adapter.build_alignment_spec())
 
     def requires_view(self, view_name: str):
-        views = {'uid', self.config.repr_type, self.config.task_type}
+        views = {'uid', *self.config.repr_types, self.config.task_type}
         if self.config.alignment and ('text' not in views or len(views) > 1):
             views.add('text')
         return view_name in views
@@ -562,10 +581,26 @@ class Compiler:
             raise ValueError(f'{len(missing)} items missing embeddings, first missing item: {missing[0]}')
         return [int(embedding_index_map[item_id]) for item_id in self.uid_raw_items]
 
+    @staticmethod
+    def _as_token_list(value):
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    def _get_repr_view_value(self, repr_type: str, uid: int):
+        return self.item_views[repr_type][uid]
+
+    def _compose_history_item(self, uid: int):
+        if self.config.repr_combine == 'add':
+            return self.item_views['uid'][uid]
+
+        tokens = []
+        for repr_type in self.config.repr_types:
+            tokens.extend(self._as_token_list(self._get_repr_view_value(repr_type, uid)))
+        return tokens
+
     def _history_values(self, history_uids: list[int]):
-        if self.config.repr_type == 'uid':
-            return [self.item_views['uid'][uid] for uid in history_uids]
-        return [self.item_views[self.config.repr_type][uid] for uid in history_uids]
+        return [self._compose_history_item(uid) for uid in history_uids]
 
     def _target_value(self, target_uid: int):
         if self.config.task_type == 'uid':
@@ -700,9 +735,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Compile processed data into trainer-ready dataset assets.')
     parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
     parser.add_argument('--model', required=True, help='Backbone model name, such as llama3 or transformer.')
-    parser.add_argument('--repr.type', dest='repr_type', required=True, choices=['uid', 'sid', 'text', 'embedding'])
+    parser.add_argument('--repr.type', dest='repr_type', required=True, help='Representation types, such as uid, text, or uid+text.')
     parser.add_argument('--repr.model', dest='repr_model', default=None, help='External representation model, such as bertbase.')
     parser.add_argument('--repr.best', dest='repr_best', default=None, help='Best checkpoint metric for quantized codes, such as coll.')
+    parser.add_argument('--repr.combine', '--repr.conbime', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
     parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'embedding'])
     parser.add_argument('--maxitems', type=int, default=0, help='Maximum history items, 0 means auto by model max length.')
     parser.add_argument('--item-text-max-tokens', type=int, default=50, help='Maximum tokenized length per item text.')
@@ -715,6 +751,7 @@ if __name__ == '__main__':
         repr_type=args.repr_type.lower(),
         repr_model=_normalize_model_name(args.repr_model),
         repr_best=args.repr_best.lower() if args.repr_best else None,
+        repr_combine=args.repr_combine.lower(),
         task_type=args.task_type.lower(),
         maxitems=int(args.maxitems),
         item_text_max_tokens=int(args.item_text_max_tokens),
