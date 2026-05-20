@@ -7,7 +7,6 @@ import pandas as pd
 from pigmento import pnt
 from tqdm import tqdm
 
-from formatters.base_formatter import BaseFormatter
 from utils.artifact import ArtifactStore
 
 
@@ -17,20 +16,22 @@ class Processor:
     NUM_TEST = 5_000
     NUM_FINETUNE = 40_000
 
-    def __init__(self, formatter: BaseFormatter, num_test=None, num_finetune=None):
-        self.formatter = formatter
-
-        self.IID_COL = formatter.IID_COL
-        self.UID_COL = formatter.UID_COL
-        self.HIS_COL = formatter.HIS_COL
-        self.REQUIRE_STRINGIFY = formatter.REQUIRE_STRINGIFY
+    def __init__(self, dataset: str, num_test=None, num_finetune=None):
+        self.dataset = dataset.lower()
 
         self.num_test = self.NUM_TEST if num_test is None else num_test
         self.num_finetune = self.NUM_FINETUNE if num_finetune is None else num_finetune
 
         self.store = ArtifactStore(self.get_name())
+        self.formatted_dir = self.store.formatted_dir()
         self.store_dir = str(self.store.processed_dir())
         self._loaded = False
+
+        self.IID_COL: Optional[str] = None
+        self.UID_COL: Optional[str] = None
+        self.HIS_COL: Optional[str] = None
+        self.REQUIRE_STRINGIFY: Optional[bool] = None
+        self._default_attrs = []
 
         self.items: Optional[pd.DataFrame] = None
         self.users: Optional[pd.DataFrame] = None
@@ -41,11 +42,11 @@ class Processor:
         self.finetune_set: Optional[pd.DataFrame] = None
 
     def get_name(self):
-        return self.formatter.get_name()
+        return self.dataset
 
     @property
     def default_attrs(self):
-        return self.formatter.default_attrs
+        return self._default_attrs
 
     def _paths(self):
         base_dir = Path(self.store_dir)
@@ -58,8 +59,51 @@ class Processor:
             'stats': base_dir / 'stats.json',
         }
 
+    def _formatted_paths(self):
+        return {
+            'items': self.formatted_dir / 'items.parquet',
+            'users': self.formatted_dir / 'users.parquet',
+            'meta': self.formatted_dir / 'meta.json',
+            'stats': self.formatted_dir / 'stats.json',
+        }
+
     def _stringify(self, df: pd.DataFrame):
-        return self.formatter._stringify(df)
+        if not self.REQUIRE_STRINGIFY:
+            return df
+        if self.IID_COL in df.columns:
+            df[self.IID_COL] = df[self.IID_COL].astype(str)
+        if self.UID_COL in df.columns:
+            df[self.UID_COL] = df[self.UID_COL].astype(str)
+        return df
+
+    def _load_meta(self, path: Path):
+        return json.loads(path.read_text())
+
+    def _apply_meta(self, meta):
+        self.IID_COL = meta['item_col']
+        self.UID_COL = meta['user_col']
+        self.HIS_COL = meta['history_col']
+        self.REQUIRE_STRINGIFY = bool(meta.get('require_stringify', False))
+        self._default_attrs = list(meta.get('default_attrs', []))
+
+    def _load_formatted_meta(self):
+        path = self._formatted_paths()['meta']
+        if not path.exists():
+            raise FileNotFoundError(
+                f'Formatted metadata not found: {path}. '
+                f'Run `python formatter.py --data {self.dataset}` first.'
+            )
+        meta = self._load_meta(path)
+        self._apply_meta(meta)
+        return meta
+
+    def _load_processed_meta(self):
+        path = self._paths()['meta']
+        if not path.exists():
+            return None
+        meta = self._load_meta(path)
+        self._apply_meta(meta)
+        return meta
 
     def organize_item(self, iid, item_attrs: list, as_dict=False, item_self=False):
         item = iid if item_self else self.items.iloc[self.item_vocab[iid]]
@@ -88,7 +132,10 @@ class Processor:
 
     def get_source_set(self, source):
         assert source in ['test', 'finetune', 'original'], 'source must be test, finetune, or original'
-        return self.users if source == 'original' else getattr(self, f'{source}_set')
+        if source == 'original':
+            self._ensure_original_users_loaded()
+            return self.users
+        return getattr(self, f'{source}_set')
 
     def generate(self, slicer: Union[int, Callable], source='test', **kwargs):
         if not self._loaded:
@@ -140,16 +187,36 @@ class Processor:
     @property
     def processed_valid(self):
         paths = self._paths()
-        required = [paths['items']]
+        required = [paths['items'], paths['meta']]
         if self.test_set_required:
             required.append(paths['test'])
         if self.finetune_set_required:
             required.append(paths['finetune'])
         return all(path.exists() for path in required)
 
+    def load_formatted(self):
+        meta = self._load_formatted_meta()
+        paths = self._formatted_paths()
+        if not paths['items'].exists() or not paths['users'].exists():
+            raise FileNotFoundError(
+                f'Formatted data not found under {self.formatted_dir}. '
+                f'Run `python formatter.py --data {self.dataset}` first.'
+            )
+
+        self.items = self._stringify(pd.read_parquet(paths['items']))
+        self.users = self._stringify(pd.read_parquet(paths['users']))
+        if self.REQUIRE_STRINGIFY:
+            self.users[self.HIS_COL] = self.users[self.HIS_COL].apply(lambda x: [str(item) for item in x])
+        return meta
+
+    def _ensure_original_users_loaded(self):
+        if self.users is not None:
+            return
+        self.load_formatted()
+
     def _collect_public_item_set(self):
         if not self.test_set_required and not self.finetune_set_required:
-            return set(self.formatter.items[self.IID_COL].unique())
+            return set(self.items[self.IID_COL].unique())
 
         item_set = set()
         for dataframe in [self.test_set, self.finetune_set]:
@@ -160,22 +227,26 @@ class Processor:
 
     def _build_processed_items(self):
         item_set = self._collect_public_item_set()
-        items = self.formatter.items[self.formatter.items[self.IID_COL].isin(item_set)].reset_index(drop=True)
+        items = self.items[self.items[self.IID_COL].isin(item_set)].reset_index(drop=True)
         pnt(f'processed items down to {len(items)} public-split items')
         return items
 
-    def _save_meta(self):
+    def _save_meta(self, formatted_meta):
         paths = self._paths()
         meta = {
             'version': self.VER,
             'stage': 'processed',
             'dataset': self.get_name(),
-            'formatter_dir': self.formatter.store_dir,
+            'formatted_dir': str(self.formatted_dir),
             'num_test': int(self.num_test),
             'num_finetune': int(self.num_finetune),
             'item_col': self.IID_COL,
             'user_col': self.UID_COL,
             'history_col': self.HIS_COL,
+            'default_attrs': list(self.default_attrs),
+            'require_stringify': bool(self.REQUIRE_STRINGIFY),
+            'formatted_meta_path': str(self._formatted_paths()['meta']),
+            'formatted_version': formatted_meta.get('version'),
         }
         paths['meta'].write_text(json.dumps(meta, indent=2) + '\n')
 
@@ -193,6 +264,7 @@ class Processor:
         paths = self._paths()
         if self.processed_valid:
             pnt(f'loading processed {self.get_name()} splits from cache')
+            self._load_processed_meta()
             self.items = pd.read_parquet(paths['items'])
             if self.test_set_required:
                 self.test_set = pd.read_parquet(paths['test'])
@@ -200,6 +272,7 @@ class Processor:
                 self.finetune_set = pd.read_parquet(paths['finetune'])
             return
 
+        formatted_meta = self.load_formatted()
         pnt(f'processing {self.get_name()} public splits from formatted users')
         users_order = self._load_user_order()
         iterator = self._iterator(users_order, self.users)
@@ -218,14 +291,14 @@ class Processor:
 
         self.items = self._build_processed_items()
         self.items.to_parquet(paths['items'], index=False)
-        self._save_meta()
+        self._save_meta(formatted_meta)
         self._save_stats()
 
     def load(self):
-        self.formatter.load()
-        self.users = self.formatter.users
-
         self.load_public_sets()
+
+        if self.IID_COL is None:
+            self._load_processed_meta()
 
         self.items = self._stringify(self.items)
         if self.test_set is not None:
@@ -234,13 +307,12 @@ class Processor:
             self.finetune_set = self._stringify(self.finetune_set)
 
         if self.REQUIRE_STRINGIFY:
-            self.users[self.HIS_COL] = self.users[self.HIS_COL].apply(lambda x: [str(item) for item in x])
             if self.test_set is not None:
                 self.test_set[self.HIS_COL] = self.test_set[self.HIS_COL].apply(lambda x: [str(item) for item in x])
             if self.finetune_set is not None:
                 self.finetune_set[self.HIS_COL] = self.finetune_set[self.HIS_COL].apply(lambda x: [str(item) for item in x])
 
         self.item_vocab = dict(zip(self.items[self.IID_COL], range(len(self.items))))
-        self.user_vocab = dict(zip(self.users[self.UID_COL], range(len(self.users))))
+        self.user_vocab = None if self.users is None else dict(zip(self.users[self.UID_COL], range(len(self.users))))
         self._loaded = True
         return self

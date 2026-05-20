@@ -45,8 +45,7 @@ def load_formatter(dataset, data_dir=None):
 
 
 def load_processor(dataset, data_dir=None):
-    formatter = load_formatter(dataset, data_dir=data_dir)
-    return Processor(formatter=formatter)
+    return Processor(dataset=dataset)
 
 
 def load_embedder(model, **kwargs):
