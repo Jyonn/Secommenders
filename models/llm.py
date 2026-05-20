@@ -11,22 +11,22 @@ class LLMBackbone(BaseBackbone):
     ALIGN_PREFIX = 'An item featured'
     ALIGN_BRIDGE = 'can be mapped to'
 
-    def __init__(self, model_name: str, model_key: str):
-        super().__init__(model_name)
+    def __init__(self, model_name: str, model_key: str, max_length_override: int | None = None):
+        super().__init__(model_name, max_length_override=max_length_override)
         self.model_key = model_key
         self.tokenizer = AutoTokenizer.from_pretrained(model_key, trust_remote_code=True)
         if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.config = AutoConfig.from_pretrained(model_key, trust_remote_code=True)
-        self._max_length = self._resolve_max_length()
+        self._native_max_length = self._resolve_max_length()
 
     @property
     def kind(self):
         return 'llm'
 
     @property
-    def max_length(self):
-        return self._max_length
+    def native_max_length(self):
+        return self._native_max_length
 
     def _resolve_max_length(self):
         tokenizer_max = getattr(self.tokenizer, 'model_max_length', None)

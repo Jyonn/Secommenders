@@ -5,8 +5,9 @@ class BaseBackbone(ABC):
     DEFAULT_MAX_LENGTH = 512
     tokenizer = None
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, max_length_override: int | None = None):
         self.model_name = model_name
+        self.max_length_override = max_length_override if max_length_override and max_length_override > 0 else None
         self.prompt_spec = None
 
     @property
@@ -14,8 +15,12 @@ class BaseBackbone(ABC):
         return self.model_name
 
     @property
-    @abstractmethod
     def max_length(self):
+        return self.max_length_override or self.native_max_length
+
+    @property
+    @abstractmethod
+    def native_max_length(self):
         raise NotImplementedError
 
     @property
