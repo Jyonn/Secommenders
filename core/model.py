@@ -4,9 +4,9 @@ from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 
 from models import build_backbone
+from utils import function
 
-from .dataset import to_list
-from .encoders import LLMSequenceEncoder, ScratchSequenceEncoder, coerce_bool
+from .encoders import LLMSequenceEncoder, ScratchSequenceEncoder
 
 
 class SequentialRecModel(nn.Module):
@@ -20,8 +20,8 @@ class SequentialRecModel(nn.Module):
             max_length_override=config.model_max_length,
         )
         freeze_default = compiled.model_kind == 'llm'
-        self.freeze_backbone = coerce_bool(config.freeze_backbone, default=freeze_default)
-        self.use_lora = coerce_bool(config.use_lora, default=compiled.model_kind == 'llm')
+        self.freeze_backbone = function.coerce_bool(config.freeze_backbone, default=freeze_default)
+        self.use_lora = function.coerce_bool(config.use_lora, default=compiled.model_kind == 'llm')
 
         if compiled.model_kind == 'llm':
             self.encoder = LLMSequenceEncoder(
@@ -90,10 +90,10 @@ class SequentialRecModel(nn.Module):
             if repr_type == 'uid':
                 specs.append(('uid', uid))
             elif repr_type == 'text':
-                token_ids = [int(token_id) for token_id in to_list(self.compiled.item_views['text'][uid])]
+                token_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['text'][uid])]
                 specs.append(('model_tokens', token_ids))
             elif repr_type == 'sid':
-                sid_ids = [int(token_id) for token_id in to_list(self.compiled.item_views['sid'][uid])]
+                sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
                 specs.append(('sid', sid_ids))
             elif repr_type == 'embedding':
                 emb_index = int(self.compiled.item_views['embedding'][uid])
@@ -158,7 +158,7 @@ class SequentialRecModel(nn.Module):
 
     def _compute_sid_loss(self, pooled: torch.Tensor, batch):
         sid_targets = [
-            [int(token_id) for token_id in to_list(self.compiled.item_views['sid'][sample['target_uid']])]
+            [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][sample['target_uid']])]
             for sample in batch
         ]
         labels = torch.tensor(sid_targets, dtype=torch.long, device=self.device)

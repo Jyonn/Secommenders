@@ -1,5 +1,8 @@
 import sys
 
+import numpy as np
+from torch.utils.data import DataLoader
+
 from utils.class_hub import ClassHub
 
 
@@ -56,3 +59,26 @@ def load_embedder(model, **kwargs):
         raise ValueError(f'Unknown embedder: {model}. Available: {available}')
     embedder = embedders[key]
     return embedder(**kwargs)
+
+
+def to_list(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def coerce_bool(value: str, default: bool):
+    if value == 'auto':
+        return default
+    return value == 'true'
+
+
+def build_dataloaders(train_dataset, test_dataset, batch_size: int):
+    train_rows = [train_dataset[index] for index in range(len(train_dataset))]
+    test_rows = [test_dataset[index] for index in range(len(test_dataset))]
+
+    train_loader = DataLoader(train_rows, batch_size=batch_size, shuffle=True, collate_fn=lambda batch: batch)
+    test_loader = DataLoader(test_rows, batch_size=batch_size, shuffle=False, collate_fn=lambda batch: batch)
+    return train_loader, test_loader

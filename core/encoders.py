@@ -5,12 +5,6 @@ from torch import nn
 from transformers import AutoModel
 
 
-def coerce_bool(value: str, default: bool):
-    if value == 'auto':
-        return default
-    return value == 'true'
-
-
 class LLMSequenceEncoder(nn.Module):
     def __init__(
             self,

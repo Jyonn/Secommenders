@@ -5,10 +5,9 @@ import numpy as np
 import pandas as pd
 import torch
 
+from utils import function
 from utils.artifact import ArtifactStore
 from utils.pipeline import ensure_compiled
-
-from .dataset import to_list
 
 
 class CompiledArtifacts:
@@ -36,7 +35,7 @@ class CompiledArtifacts:
         if not path.exists():
             return None
         values = pd.read_parquet(path)['value'].tolist()
-        return [to_list(value) for value in values]
+        return [function.to_list(value) for value in values]
 
     def _load_embedding_matrix(self):
         if 'embedding' not in self.item_views:

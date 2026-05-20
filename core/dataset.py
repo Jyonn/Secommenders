@@ -1,14 +1,7 @@
-import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 
-
-def to_list(value):
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, tuple):
-        return list(value)
-    return value
+from utils import function
 
 
 class CompiledSampleDataset(Dataset):
@@ -18,7 +11,7 @@ class CompiledSampleDataset(Dataset):
             self.rows.append(
                 {
                     'uid': row['uid'],
-                    'history_uids': [int(value) for value in to_list(row['history_uids'])],
+                    'history_uids': [int(value) for value in function.to_list(row['history_uids'])],
                     'target_uid': int(row['target_uid']),
                     'history_item_count': int(row['history_item_count']),
                     'total_input_length': int(row['total_input_length']),

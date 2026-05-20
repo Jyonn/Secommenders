@@ -5,7 +5,9 @@ import torch
 from pigmento import pnt
 from tqdm import tqdm
 
-from core import CompiledArtifacts, SequentialRecModel, TrainConfig, build_dataloaders
+from core import CompiledArtifacts, SequentialRecModel, TrainConfig
+from core.dataset import CompiledSampleDataset
+from utils import function
 from utils.artifact import ArtifactStore
 from utils.config_init import ConfigInit
 from utils.gpu import GPU
@@ -28,8 +30,9 @@ class Trainer:
         return torch.device(GPU.auto_choose(torch_format=True))
 
     def build_dataloaders(self):
-        self.train_loader, self.test_loader = build_dataloaders(
-            self.compiled,
+        self.train_loader, self.test_loader = function.build_dataloaders(
+            CompiledSampleDataset(self.compiled.finetune),
+            CompiledSampleDataset(self.compiled.test),
             batch_size=self.config.batch_size,
         )
         pnt(
