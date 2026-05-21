@@ -1,6 +1,8 @@
 import sys
+import re
 
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 
 from utils.class_hub import ClassHub
@@ -79,3 +81,62 @@ def build_dataloaders(train_dataset, test_dataset, batch_size: int):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=lambda batch: batch)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=lambda batch: batch)
     return train_loader, test_loader
+
+
+def resolve_torch_dtype(dtype_name: str | None):
+    if dtype_name is None:
+        return None
+    key = str(dtype_name).lower()
+    if key == 'auto':
+        return None
+    mapping = {
+        'float32': torch.float32,
+        'fp32': torch.float32,
+        'float16': torch.float16,
+        'fp16': torch.float16,
+        'half': torch.float16,
+        'bfloat16': torch.bfloat16,
+        'bf16': torch.bfloat16,
+    }
+    if key not in mapping:
+        raise ValueError(f'Unsupported torch dtype: {dtype_name}')
+    return mapping[key]
+
+
+def format_torch_dtype(dtype):
+    if dtype is None:
+        return 'auto'
+    if hasattr(dtype, 'name'):
+        return dtype.name
+    return str(dtype).replace('torch.', '')
+
+
+def summarize_trainable_parameters(named_parameters):
+    entries = []
+    pattern = re.compile(r'\.(\d+)(?=\.|$)')
+    for name, param in named_parameters:
+        if not param.requires_grad:
+            continue
+        template = pattern.sub('.{i}', name)
+        entries.append((name, template, tuple(param.shape)))
+
+    groups = {}
+    order = []
+    for name, template, shape in entries:
+        key = (template, shape)
+        if key not in groups:
+            groups[key] = {
+                'count': 0,
+                'example': name,
+            }
+            order.append(key)
+        groups[key]['count'] += 1
+
+    lines = []
+    for template, shape in order:
+        info = groups[(template, shape)]
+        label = template
+        if info['count'] > 1:
+            label = f'{template} [x{info["count"]}]'
+        lines.append((label, shape, info['count'], info['example']))
+    return lines

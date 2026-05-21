@@ -4,6 +4,8 @@ import torch
 from torch import nn
 from transformers import AutoModel
 
+from utils import function
+
 
 class LLMSequenceEncoder(nn.Module):
     def __init__(
@@ -15,9 +17,15 @@ class LLMSequenceEncoder(nn.Module):
             lora_alpha: int,
             lora_dropout: float,
             lora_target_modules: str,
+            model_dtype: str,
     ):
         super().__init__()
-        base_model = AutoModel.from_pretrained(model_key, trust_remote_code=True)
+        torch_dtype = function.resolve_torch_dtype(model_dtype)
+        base_model = AutoModel.from_pretrained(
+            model_key,
+            trust_remote_code=True,
+            torch_dtype=torch_dtype,
+        )
         hidden_size = getattr(base_model.config, 'hidden_size', None)
         if hidden_size is None:
             hidden_size = getattr(base_model.config, 'd_model', None)
@@ -26,6 +34,7 @@ class LLMSequenceEncoder(nn.Module):
         self.hidden_size = int(hidden_size)
         self.freeze_backbone = freeze_backbone
         self.use_lora = use_lora
+        self.model_dtype = torch_dtype or next(base_model.parameters()).dtype
 
         if self.use_lora:
             target_modules = 'all-linear' if lora_target_modules == 'all-linear' else [
@@ -48,7 +57,7 @@ class LLMSequenceEncoder(nn.Module):
                 f'initialized LoRA for {model_key} '
                 f'trainable={trainable_params:,}/{total_params:,} '
                 f'r={lora_rank} alpha={lora_alpha} dropout={lora_dropout:g} '
-                f'targets={lora_target_modules}'
+                f'targets={lora_target_modules} dtype={function.format_torch_dtype(self.model_dtype)}'
             )
         else:
             self.model = base_model
@@ -56,6 +65,7 @@ class LLMSequenceEncoder(nn.Module):
                 for param in self.model.parameters():
                     param.requires_grad = False
                 self.model.eval()
+            pnt(f'loaded backbone {model_key} with dtype={function.format_torch_dtype(self.model_dtype)}')
 
     def train(self, mode: bool = True):
         super().train(mode)

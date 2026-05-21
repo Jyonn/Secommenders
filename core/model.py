@@ -32,6 +32,7 @@ class SequentialRecModel(nn.Module):
                 lora_alpha=config.lora_alpha,
                 lora_dropout=config.lora_dropout,
                 lora_target_modules=config.lora_target_modules,
+                model_dtype=config.model_dtype,
             )
         else:
             self.encoder = ScratchSequenceEncoder(

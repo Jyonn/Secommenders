@@ -52,10 +52,16 @@ class Trainer:
         total = sum(param.numel() for param in self.model.parameters())
         trainable = sum(param.numel() for param in params)
         pnt('trainable parameters:')
-        for name, param in self.model.named_parameters():
-            if not param.requires_grad:
-                continue
-            pnt(f'  {name}: {tuple(param.shape)}')
+        for label, shape, _, example in function.summarize_trainable_parameters(self.model.named_parameters()):
+            pnt(f'  {label}: {shape}')
+            if label != example:
+                pnt(f'    example: {example}')
+        if self.compiled.model_kind == 'llm':
+            pnt('text/model token embeddings come from the LLM backbone input embedding table')
+            if self.model.freeze_backbone:
+                pnt('that embedding table is frozen with the backbone; current trainable text-path params are LoRA adapters only')
+            else:
+                pnt('that embedding table is trainable because the backbone is not frozen')
         pnt(f'build optimizer with trainable params {trainable:,}/{total:,}')
         return torch.optim.AdamW(
             params,

@@ -24,6 +24,7 @@ class TrainConfig:
     device: Optional[str]
     freeze_backbone: str
     patience: int
+    model_dtype: str
     use_lora: str
     lora_rank: int
     lora_alpha: int
@@ -60,6 +61,7 @@ class TrainConfig:
             device=trainer.device,
             freeze_backbone=str(trainer.freeze_backbone).lower(),
             patience=int(trainer.patience),
+            model_dtype=str(model.dtype).lower(),
             use_lora=str(lora.use).lower(),
             lora_rank=int(lora.rank),
             lora_alpha=int(lora.alpha),
