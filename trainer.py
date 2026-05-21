@@ -132,6 +132,11 @@ class Trainer:
             f'test={len(test_dataset)} batch_size={self.config.batch_size} '
             f'world_size={self.world_size}'
         )
+        if self.config.task_type == 'sid':
+            self._pnt(
+                f'sid test uses constrained beam search beam_width={self.config.sid_beam_width} '
+                f'ks={self.model_core.sid_ranking_ks()}'
+            )
         if self.config.alignment_enable:
             self._pnt(
                 f'alignment enabled weight={self.config.alignment_weight:g} '
@@ -142,8 +147,13 @@ class Trainer:
         if self.config.task_type == 'uid':
             return 'uid_acc'
         if self.config.task_type == 'sid':
-            return 'sid_seq_acc'
+            return 'sid_token_acc'
         return 'embedding_cosine'
+
+    def _test_metric_name(self):
+        if self.config.task_type != 'sid':
+            return self._metric_name()
+        return f'ndcg@{max(self.model_core.sid_ranking_ks())}'
 
     def build_optimizer(self):
         params = [param for param in self.model_core.parameters() if param.requires_grad]
@@ -193,7 +203,8 @@ class Trainer:
                         for key, value in align_metrics.items():
                             metrics[f'align_{key}'] = value
             else:
-                loss, metrics = model_runner(batch, mode='test')
+                with torch.no_grad():
+                    loss, metrics = model_runner(batch, mode='test')
             if is_train:
                 loss.backward()
                 optimizer.step()
@@ -254,7 +265,8 @@ class Trainer:
             'run_dir': str(self.run_dir),
             'best_epoch': best_epoch,
             'best_finetune_loss': best_finetune_loss,
-            'metric_name': self._metric_name(),
+            'train_metric_name': self._metric_name(),
+            'test_metric_name': self._test_metric_name(),
             'test_metrics': test_metrics,
             'world_size': self.world_size,
         }
@@ -266,6 +278,7 @@ class Trainer:
         self.build_dataloaders()
         optimizer = self.build_optimizer()
         metric_name = self._metric_name()
+        test_metric_name = self._test_metric_name()
         best_metric = float('inf')
         best_epoch = 0
         wait = 0
@@ -322,7 +335,7 @@ class Trainer:
             test_metrics = self._run_loader(self.test_loader, optimizer=None, desc='test')
             self._pnt(
                 f'best_epoch={best_epoch} test_loss={test_metrics["loss"]:.4f} '
-                f'{metric_name}={test_metrics.get(metric_name, 0.0):.4f}'
+                f'{test_metric_name}={test_metrics.get(test_metric_name, 0.0):.4f}'
             )
             self._save_meta(best_epoch, best_metric, test_metrics)
 

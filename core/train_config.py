@@ -26,6 +26,7 @@ class TrainConfig:
     patience: int
     alignment_enable: bool
     alignment_weight: float
+    sid_beam_width: int
     model_dtype: str
     use_lora: str
     lora_rank: int
@@ -67,6 +68,7 @@ class TrainConfig:
             patience=int(trainer.patience),
             alignment_enable=alignment_enable,
             alignment_weight=float(alignment.weight),
+            sid_beam_width=int(getattr(trainer, 'sid_beam_width', 20)),
             model_dtype=str(model.dtype).lower(),
             use_lora=str(lora.use).lower(),
             lora_rank=int(lora.rank),
@@ -108,6 +110,8 @@ class TrainConfig:
         ]
         if self.alignment_enable:
             parts.append(f'alignw-{self.alignment_weight:g}')
+        if self.task_type == 'sid':
+            parts.append(f'beam-{self.sid_beam_width}')
         if self.model != 'transformer':
             parts.extend(
                 [

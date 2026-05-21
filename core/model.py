@@ -1,3 +1,6 @@
+import hashlib
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -188,6 +191,107 @@ class SequentialRecModel(nn.Module):
         lengths = torch.tensor([emb.shape[0] for emb in sample_embeddings], dtype=torch.long, device=self.device)
         attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
         return padded, attention_mask.long(), lengths
+
+    def sid_ranking_ks(self):
+        max_k = max(1, int(self.config.sid_beam_width))
+        ks = [k for k in (5, 10, 20) if k <= max_k]
+        if max_k not in ks:
+            ks.append(max_k)
+        return sorted(set(ks))
+
+    def _build_sid_generation_batch_inputs(self, sample, sid_prefixes: list[list[int]]):
+        sample_embeddings = []
+        for sid_prefix in sid_prefixes:
+            specs = self._build_sample_specs(sample)
+            if sid_prefix:
+                specs.append(('sid', [int(code) for code in sid_prefix]))
+            pieces = [self._embed_spec(kind, value) for kind, value in specs]
+            sample_embeddings.append(torch.cat(pieces, dim=0))
+
+        padded = pad_sequence(sample_embeddings, batch_first=True)
+        padded = padded.to(dtype=self.compute_dtype)
+        lengths = torch.tensor([emb.shape[0] for emb in sample_embeddings], dtype=torch.long, device=self.device)
+        attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
+        return padded, attention_mask.long(), lengths
+
+    def _predict_sid_step_logits(self, sample, sid_prefixes: list[list[int]], slot_index: int):
+        inputs_embeds, attention_mask, lengths = self._build_sid_generation_batch_inputs(sample, sid_prefixes)
+        hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
+        pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
+        logits = self.target_head(pooled).view(len(sid_prefixes), self.compiled.sid_num_quantizers, self.compiled.sid_vocab_size)
+        return logits[:, slot_index, :]
+
+    def _pick_sid_item(self, sid_sequence: tuple[int, ...]):
+        candidates = self.compiled.sid_sequence_to_items.get(sid_sequence, [])
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return int(candidates[0])
+        digest = hashlib.sha256(
+            f'{self.config.seed}:{"-".join(str(code) for code in sid_sequence)}'.encode('utf-8')
+        ).hexdigest()
+        return int(candidates[int(digest[:8], 16) % len(candidates)])
+
+    def _beam_search_sid_items(self, sample):
+        beam_width = max(1, int(self.config.sid_beam_width))
+        beams: list[tuple[tuple[int, ...], float]] = [(tuple(), 0.0)]
+
+        for slot_index in range(int(self.compiled.sid_num_quantizers)):
+            sid_prefixes = [list(prefix) for prefix, _ in beams]
+            step_logits = self._predict_sid_step_logits(sample, sid_prefixes, slot_index)
+            step_log_probs = F.log_softmax(step_logits.float(), dim=-1)
+            candidates = []
+
+            for beam_index, (prefix, score) in enumerate(beams):
+                allowed_codes = self.compiled.sid_prefix_to_next.get(prefix, [])
+                if not allowed_codes:
+                    continue
+                allowed_indices = torch.tensor(allowed_codes, dtype=torch.long, device=self.device)
+                allowed_scores = step_log_probs[beam_index, allowed_indices]
+                top_k = min(beam_width, allowed_scores.shape[0])
+                top_scores, top_positions = torch.topk(allowed_scores, k=top_k)
+                for top_position, top_score in zip(top_positions.tolist(), top_scores.tolist()):
+                    next_code = int(allowed_codes[top_position])
+                    candidates.append((prefix + (next_code,), score + float(top_score)))
+
+            if not candidates:
+                break
+            candidates.sort(key=lambda item: item[1], reverse=True)
+            beams = candidates[:beam_width]
+
+        ranked_items = []
+        seen_items = set()
+        for sid_sequence, score in beams:
+            item_uid = self._pick_sid_item(sid_sequence)
+            if item_uid is None or item_uid in seen_items:
+                continue
+            seen_items.add(item_uid)
+            ranked_items.append((item_uid, float(score), sid_sequence))
+        return ranked_items
+
+    def _compute_sid_ranking_metrics(self, batch):
+        ks = self.sid_ranking_ks()
+        totals = {f'hr@{k}': 0.0 for k in ks}
+        totals.update({f'ndcg@{k}': 0.0 for k in ks})
+        totals['mrr'] = 0.0
+        totals['beam_unique_items'] = 0.0
+
+        with torch.no_grad():
+            for sample in batch:
+                ranked_items = self._beam_search_sid_items(sample)
+                ranked_uids = [uid for uid, _, _ in ranked_items]
+                totals['beam_unique_items'] += float(len(ranked_uids))
+                target_uid = int(sample['target_uid'])
+                rank = ranked_uids.index(target_uid) + 1 if target_uid in ranked_uids else None
+                if rank is not None:
+                    totals['mrr'] += 1.0 / rank
+                for k in ks:
+                    if rank is not None and rank <= k:
+                        totals[f'hr@{k}'] += 1.0
+                        totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+
+        batch_size = max(len(batch), 1)
+        return {key: value / batch_size for key, value in totals.items()}
 
     def _target_token_values(self, target_uid: int):
         if self.config.task_type == 'embedding':
@@ -515,7 +619,9 @@ class SequentialRecModel(nn.Module):
         if self.config.task_type == 'uid':
             return self._compute_uid_loss(pooled, batch)
         if self.config.task_type == 'sid':
-            return self._compute_sid_loss(pooled, batch)
+            loss, metrics = self._compute_sid_loss(pooled, batch)
+            metrics.update(self._compute_sid_ranking_metrics(batch))
+            return loss, metrics
         return self._compute_embedding_loss(pooled, batch)
 
     def forward_finetune_batch(self, batch):

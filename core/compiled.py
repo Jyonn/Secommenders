@@ -29,6 +29,8 @@ class CompiledArtifacts:
         self.embedding_matrix = None
         self.sid_num_quantizers = None
         self.sid_codebook_size = None
+        self.sid_prefix_to_next = {}
+        self.sid_sequence_to_items = {}
 
     def _read_json(self, path: Path):
         return json.loads(path.read_text())
@@ -103,9 +105,34 @@ class CompiledArtifacts:
             sid_vocab = self._read_json(sid_vocab_path)
             self.sid_num_quantizers = int(sid_vocab['num_quantizers'])
             self.sid_codebook_size = int(sid_vocab['codebook_size'])
+            self._build_sid_indices()
 
         self.embedding_matrix = self._load_embedding_matrix()
         return self
+
+    def _build_sid_indices(self):
+        sid_view = self.item_views.get('sid')
+        if sid_view is None:
+            self.sid_prefix_to_next = {}
+            self.sid_sequence_to_items = {}
+            return
+
+        prefix_to_next = {}
+        sequence_to_items = {}
+        for uid, codes in enumerate(sid_view):
+            sequence = tuple(int(code) for code in function.to_list(codes))
+            if not sequence:
+                continue
+            sequence_to_items.setdefault(sequence, []).append(uid)
+            for prefix_len in range(len(sequence)):
+                prefix = sequence[:prefix_len]
+                prefix_to_next.setdefault(prefix, set()).add(sequence[prefix_len])
+
+        self.sid_prefix_to_next = {
+            prefix: sorted(next_codes)
+            for prefix, next_codes in prefix_to_next.items()
+        }
+        self.sid_sequence_to_items = sequence_to_items
 
     @property
     def num_items(self):

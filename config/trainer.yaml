@@ -32,6 +32,7 @@ trainer:
   device: ${device:null}$
   freeze_backbone: ${freeze_backbone:auto}$
   patience: ${patience:3}$
+  sid_beam_width: ${sid_beam_width:20}$
   alignment:
     enable: ${alignment_enable:false}$
     weight: ${alignment_weight:0.1}$
