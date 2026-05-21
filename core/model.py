@@ -65,7 +65,7 @@ class SequentialRecModel(nn.Module):
         elif config.task_type == 'sid':
             if not compiled.sid_vocab_size or not compiled.sid_num_quantizers:
                 raise ValueError('sid task requires sid vocab metadata in compiled artifacts')
-            self.target_head = nn.Linear(hidden_size, compiled.sid_vocab_size * compiled.sid_num_quantizers)
+            self.target_head = nn.Linear(hidden_size, compiled.sid_vocab_size)
         elif config.task_type == 'embedding':
             if compiled.embedding_matrix is None:
                 raise ValueError('embedding task requires compiled embedding view and source matrix')
@@ -221,8 +221,7 @@ class SequentialRecModel(nn.Module):
         inputs_embeds, attention_mask, lengths = self._build_sid_generation_batch_inputs(sample, sid_prefixes)
         hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
         pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
-        logits = self.target_head(pooled).view(len(sid_prefixes), self.compiled.sid_num_quantizers, self.compiled.sid_vocab_size)
-        return logits[:, slot_index, :]
+        return self.target_head(pooled)
 
     def _pick_sid_item(self, sid_sequence: tuple[int, ...]):
         candidates = self.compiled.sid_sequence_to_items.get(sid_sequence, [])
@@ -262,6 +261,9 @@ class SequentialRecModel(nn.Module):
             candidates.sort(key=lambda item: item[1], reverse=True)
             beams = candidates[:beam_width]
 
+        return beams
+
+    def _decode_sid_beams_to_items(self, beams):
         ranked_items = []
         seen_items = set()
         for sid_sequence, score in beams:
@@ -281,7 +283,7 @@ class SequentialRecModel(nn.Module):
 
         with torch.no_grad():
             for sample in batch:
-                ranked_items = self._beam_search_sid_items(sample)
+                ranked_items = self._decode_sid_beams_to_items(self._beam_search_sid_items(sample))
                 ranked_uids = [uid for uid, _, _ in ranked_items]
                 totals['beam_unique_items'] += float(len(ranked_uids))
                 target_uid = int(sample['target_uid'])
@@ -295,6 +297,37 @@ class SequentialRecModel(nn.Module):
 
         batch_size = max(len(batch), 1)
         return {key: value / batch_size for key, value in totals.items()}
+
+    def _compute_sid_loss(self, batch):
+        total_loss = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+        token_correct = 0.0
+        seq_correct = 0.0
+        token_total = 0
+
+        for sample in batch:
+            target_codes = [
+                int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][sample['target_uid']])
+            ]
+            sample_preds = []
+            sample_loss = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+            for slot_index, label in enumerate(target_codes):
+                prefix = target_codes[:slot_index]
+                logits = self._predict_sid_step_logits(sample, [prefix], slot_index)
+                label_tensor = torch.tensor([label], dtype=torch.long, device=self.device)
+                sample_loss = sample_loss + F.cross_entropy(logits.float(), label_tensor)
+                pred = int(logits.argmax(dim=-1).item())
+                sample_preds.append(pred)
+                token_correct += float(pred == label)
+                token_total += 1
+
+            total_loss = total_loss + sample_loss / max(len(target_codes), 1)
+            seq_correct += float(sample_preds == target_codes)
+
+        batch_size = max(len(batch), 1)
+        return total_loss / batch_size, {
+            'sid_token_acc': token_correct / max(token_total, 1),
+            'sid_seq_acc': seq_correct / batch_size,
+        }
 
     def _compute_ranking_metrics_from_logits(self, logits: torch.Tensor, target_indices: torch.Tensor):
         ks = self.ranking_ks()
@@ -601,21 +634,6 @@ class SequentialRecModel(nn.Module):
             'uid_acc': accuracy.item(),
         }
 
-    def _compute_sid_loss(self, pooled: torch.Tensor, batch):
-        sid_targets = [
-            [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][sample['target_uid']])]
-            for sample in batch
-        ]
-        labels = torch.tensor(sid_targets, dtype=torch.long, device=self.device)
-        logits = self.target_head(pooled).view(len(batch), self.compiled.sid_num_quantizers, self.compiled.sid_vocab_size)
-        loss = F.cross_entropy(logits.float().reshape(-1, self.compiled.sid_vocab_size), labels.reshape(-1))
-        token_acc = (logits.argmax(dim=-1) == labels).float().mean()
-        seq_acc = (logits.argmax(dim=-1) == labels).all(dim=-1).float().mean()
-        return loss, {
-            'sid_token_acc': token_acc.item(),
-            'sid_seq_acc': seq_acc.item(),
-        }
-
     def _compute_embedding_loss(self, pooled: torch.Tensor, batch):
         target_indices = torch.tensor(
             [int(self.compiled.item_views['embedding'][sample['target_uid']]) for sample in batch],
@@ -647,7 +665,7 @@ class SequentialRecModel(nn.Module):
             metrics.update(self._compute_ranking_metrics_from_logits(logits, labels))
             return loss, metrics
         if self.config.task_type == 'sid':
-            loss, metrics = self._compute_sid_loss(pooled, batch)
+            loss, metrics = self._compute_sid_loss(batch)
             metrics.update(self._compute_sid_ranking_metrics(batch))
             return loss, metrics
         loss, metrics = self._compute_embedding_loss(pooled, batch)
@@ -702,10 +720,9 @@ class SequentialRecModel(nn.Module):
                 'embedding_acc': accuracy.item(),
             }
 
-        logits = self.target_head(selected_hidden).view(-1, self.compiled.sid_num_quantizers, self.compiled.sid_vocab_size)
-        selected_logits = logits[torch.arange(logits.shape[0], device=self.device), target_slots]
-        loss = F.cross_entropy(selected_logits.float(), target_labels)
-        token_acc = (selected_logits.argmax(dim=-1) == target_labels).float().mean()
+        logits = self.target_head(selected_hidden)
+        loss = F.cross_entropy(logits.float(), target_labels)
+        token_acc = (logits.argmax(dim=-1) == target_labels).float().mean()
         return loss, {
             'sid_token_acc': token_acc.item(),
         }
@@ -749,10 +766,9 @@ class SequentialRecModel(nn.Module):
                 'embedding_acc': accuracy.item(),
             }
 
-        logits = self.target_head(selected_hidden).view(-1, self.compiled.sid_num_quantizers, self.compiled.sid_vocab_size)
-        selected_logits = logits[torch.arange(logits.shape[0], device=self.device), target_slots]
-        loss = F.cross_entropy(selected_logits.float(), target_labels)
-        token_acc = (selected_logits.argmax(dim=-1) == target_labels).float().mean()
+        logits = self.target_head(selected_hidden)
+        loss = F.cross_entropy(logits.float(), target_labels)
+        token_acc = (logits.argmax(dim=-1) == target_labels).float().mean()
         return loss, {
             'sid_token_acc': token_acc.item(),
         }
