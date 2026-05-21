@@ -51,6 +51,11 @@ class Trainer:
         params = [param for param in self.model.parameters() if param.requires_grad]
         total = sum(param.numel() for param in self.model.parameters())
         trainable = sum(param.numel() for param in params)
+        pnt('trainable parameters:')
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+            pnt(f'  {name}: {tuple(param.shape)}')
         pnt(f'build optimizer with trainable params {trainable:,}/{total:,}')
         return torch.optim.AdamW(
             params,
