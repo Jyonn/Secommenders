@@ -25,7 +25,6 @@ class TrainConfig:
     num_gpus: int
     freeze_backbone: str
     patience: int
-    eval_test_every_epoch: bool
     alignment_enable: bool
     alignment_weight: float
     sid_beam_width: int
@@ -49,11 +48,6 @@ class TrainConfig:
         lora = model.lora
         scratch = model.config
         alignment_enable = alignment.enable if isinstance(alignment.enable, bool) else str(alignment.enable).lower() == 'true'
-        eval_test_every_epoch = (
-            trainer.eval_test_every_epoch
-            if isinstance(trainer.eval_test_every_epoch, bool)
-            else str(trainer.eval_test_every_epoch).lower() == 'true'
-        )
         return cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
@@ -74,7 +68,6 @@ class TrainConfig:
             num_gpus=int(getattr(trainer, 'num_gpus', 1)),
             freeze_backbone=str(trainer.freeze_backbone).lower(),
             patience=int(trainer.patience),
-            eval_test_every_epoch=eval_test_every_epoch,
             alignment_enable=alignment_enable,
             alignment_weight=float(alignment.weight),
             sid_beam_width=int(getattr(trainer, 'sid_beam_width', 20)),

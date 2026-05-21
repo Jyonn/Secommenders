@@ -301,7 +301,7 @@ class Trainer:
             f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
             f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
             f'epochs={"until-early-stop" if unlimited_epochs else self.config.epochs} '
-            f'eval_test_every_epoch={self.config.eval_test_every_epoch}'
+            f'test_eval=every-epoch'
         )
 
         epoch = 0
@@ -317,13 +317,12 @@ class Trainer:
                 f'epoch {epoch:03d} train_loss={train_metrics["loss"]:.4f} '
                 f'{train_metric_name}={train_metrics.get(train_metric_name, 0.0):.4f}'
             )
-            if self.config.eval_test_every_epoch:
-                epoch_test_metrics = self._evaluate_test_set(desc=f'test@{epoch}')
-                if self.is_main_process:
-                    self._pnt(
-                        f'epoch {epoch:03d} test_loss={epoch_test_metrics["loss"]:.4f} '
-                        f'{test_metric_name}={epoch_test_metrics.get(test_metric_name, 0.0):.4f}'
-                    )
+            epoch_test_metrics = self._evaluate_test_set(desc=f'test@{epoch}')
+            if self.is_main_process:
+                self._pnt(
+                    f'epoch {epoch:03d} test_loss={epoch_test_metrics["loss"]:.4f} '
+                    f'{test_metric_name}={epoch_test_metrics.get(test_metric_name, 0.0):.4f}'
+                )
 
             current_loss = train_metrics['loss']
             if current_loss < best_metric:
