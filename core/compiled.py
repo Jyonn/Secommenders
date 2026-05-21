@@ -4,6 +4,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import torch.distributed as dist
+from pigmento import pnt
 
 from utils import function
 from utils.artifact import ArtifactStore
@@ -50,6 +52,24 @@ class CompiledArtifacts:
         matrix = np.load(embedding_path).astype(np.float32)
         return torch.tensor(matrix, dtype=torch.float32)
 
+    def _ensure_required_paths(self, required_paths: list[Path]):
+        if all(path.exists() for path in required_paths):
+            return
+
+        distributed = dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
+        if distributed:
+            rank = dist.get_rank()
+            if rank == 0:
+                pnt(f'compiled artifacts missing, rank0 is preparing {self.compile_dir}')
+                ensure_compiled(self.config.compile_config)
+            dist.barrier()
+        else:
+            ensure_compiled(self.config.compile_config)
+
+        if not all(path.exists() for path in required_paths):
+            missing = [str(path) for path in required_paths if not path.exists()]
+            raise FileNotFoundError(f'Compiled artifacts still missing after auto preparation: {missing[:3]}')
+
     def load(self):
         required_paths = [
             self.compile_dir / 'meta.json',
@@ -62,8 +82,7 @@ class CompiledArtifacts:
             self.compile_dir / 'prompts' / 'alignment.json',
             self.compile_dir / 'item_views' / 'uid.parquet',
         ]
-        if not all(path.exists() for path in required_paths):
-            ensure_compiled(self.config.compile_config)
+        self._ensure_required_paths(required_paths)
 
         self.meta = self._read_json(self.compile_dir / 'meta.json')
         self.vocab_meta = self._read_json(self.compile_dir / 'vocab' / 'meta.json')
