@@ -38,7 +38,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v1.8'
+    VER = 'v1.9'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -548,6 +548,26 @@ class Compiler:
     def _get_repr_view_value(self, repr_type: str, uid: int):
         return self.item_views[repr_type][uid]
 
+    def _type_marker_key(self, repr_type: str | None = None):
+        if repr_type is not None:
+            return repr_type
+        if self.config.repr_combine == 'add':
+            return 'uid+embedding'
+        return None
+
+    def _history_item_length(self, uid: int):
+        prompt = self.backbone.build_prompt_spec()
+        marker_ids = prompt['type_marker_ids']
+        if self.config.repr_combine == 'add':
+            return len(marker_ids['uid+embedding']) + 1
+
+        total = 0
+        for repr_type in self.config.repr_types:
+            total += len(marker_ids[repr_type])
+            value = self._get_repr_view_value(repr_type, uid)
+            total += len(value) if isinstance(value, list) else 1
+        return total
+
     def _compose_history_item(self, uid: int):
         if self.config.repr_combine == 'add':
             return self.item_views['uid'][uid]
@@ -571,10 +591,9 @@ class Compiler:
         prompt = self.backbone.build_prompt_spec()
         history_uids = sequence_uids[:-1]
         target_uids = sequence_uids[1:]
-        history_values = self._history_values(history_uids)
-        history_len = sum(len(value) if isinstance(value, list) else 1 for value in history_values)
-        separator_len = len(prompt['item_separator_ids']) * max(0, len(history_values) - 1)
-        query_len = len(prompt['query_prefix_ids']) * len(target_uids)
+        history_len = sum(self._history_item_length(uid) for uid in history_uids)
+        separator_len = len(prompt['item_separator_ids']) * max(0, len(history_uids) - 1)
+        query_len = (len(prompt['query_prefix_ids']) + len(prompt['type_marker_ids'][self.config.task_type])) * len(target_uids)
         target_len = 0
         for target_uid in target_uids:
             target_value = self._target_value(target_uid)
@@ -611,17 +630,28 @@ class Compiler:
         if self.config.maxitems > 0:
             prefix_uids = prefix_uids[-self.config.maxitems:]
 
-        target_value = self._target_value(target_uid)
+        prompt = self.backbone.build_prompt_spec()
         best_history = []
         best_total_length: int = None
 
         for start_index in range(len(prefix_uids) - 1, -1, -1):
             candidate_history = prefix_uids[start_index:]
-            candidate_values = self._history_values(candidate_history)
-            total_input_length = self.backbone.estimate_main_length(
-                candidate_values,
-                target_value,
-                self.config.task_type,
+            history_len = sum(self._history_item_length(uid) for uid in candidate_history)
+            separator_len = len(prompt['item_separator_ids']) * max(0, len(candidate_history) - 1)
+            target_value = self._target_value(target_uid)
+            if self.config.task_type == 'embedding':
+                target_len = 0
+            elif isinstance(target_value, list):
+                target_len = len(target_value)
+            else:
+                target_len = 1
+            total_input_length = (
+                len(prompt['history_prefix_ids'])
+                + history_len
+                + separator_len
+                + len(prompt['query_prefix_ids'])
+                + len(prompt['type_marker_ids'][self.config.task_type])
+                + target_len
             )
             if total_input_length <= self.backbone.max_length:
                 best_history = candidate_history

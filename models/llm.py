@@ -7,6 +7,13 @@ class LLMBackbone(BaseBackbone):
     HISTORY_PREFIX = 'History sequence:'
     ITEM_SEPARATOR = ','
     QUERY_PREFIX = 'Next item:'
+    TYPE_MARKERS = {
+        'uid': '<uid>',
+        'sid': '<sid>',
+        'text': '<text>',
+        'embedding': '<embedding>',
+        'uid+embedding': '<uid+embedding>',
+    }
 
     ALIGN_PREFIX = 'An item featured'
     ALIGN_BRIDGE = 'can be mapped to'
@@ -75,6 +82,7 @@ class LLMBackbone(BaseBackbone):
             'history_prefix_ids': self._encode(self.HISTORY_PREFIX),
             'item_separator_ids': self._encode(self.ITEM_SEPARATOR),
             'query_prefix_ids': self._encode(self.QUERY_PREFIX),
+            'type_marker_ids': {name: self._encode(marker) for name, marker in self.TYPE_MARKERS.items()},
             'max_length': self.max_length,
             'kind': self.kind,
         }
@@ -84,6 +92,7 @@ class LLMBackbone(BaseBackbone):
         return {
             'align_prefix_ids': self._encode(self.ALIGN_PREFIX),
             'align_bridge_ids': self._encode(self.ALIGN_BRIDGE),
+            'type_marker_ids': {name: self._encode(marker) for name, marker in self.TYPE_MARKERS.items()},
             'kind': self.kind,
         }
 

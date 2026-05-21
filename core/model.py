@@ -90,23 +90,31 @@ class SequentialRecModel(nn.Module):
         return {name: tensor.detach().cpu() for name, tensor in state.items() if name in trainable_names}
 
     def _render_history_item(self, uid: int):
+        marker_ids = self.compiled.prompt_main['type_marker_ids']
         if self.config.repr_combine == 'add':
             if 'embedding' not in self.compiled.item_views:
                 raise ValueError('repr.combine=add requires compiled embedding view')
             emb_index = int(self.compiled.item_views['embedding'][uid])
-            return [('uid_embedding_add', (uid, emb_index))]
+            return [
+                ('model_tokens', [int(token_id) for token_id in marker_ids['uid+embedding']]),
+                ('uid_embedding_add', (uid, emb_index)),
+            ]
 
         specs = []
         for repr_type in self.config.compile_config.repr_types:
             if repr_type == 'uid':
+                specs.append(('model_tokens', [int(token_id) for token_id in marker_ids['uid']]))
                 specs.append(('uid', uid))
             elif repr_type == 'text':
+                specs.append(('model_tokens', [int(token_id) for token_id in marker_ids['text']]))
                 token_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['text'][uid])]
                 specs.append(('model_tokens', token_ids))
             elif repr_type == 'sid':
+                specs.append(('model_tokens', [int(token_id) for token_id in marker_ids['sid']]))
                 sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
                 specs.append(('sid', sid_ids))
             elif repr_type == 'embedding':
+                specs.append(('model_tokens', [int(token_id) for token_id in marker_ids['embedding']]))
                 emb_index = int(self.compiled.item_views['embedding'][uid])
                 specs.append(('embedding', emb_index))
             else:
@@ -121,6 +129,7 @@ class SequentialRecModel(nn.Module):
             if index != len(history_uids) - 1:
                 specs.append(('model_tokens', [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]))
         specs.append(('model_tokens', [int(token_id) for token_id in self.compiled.prompt_main['query_prefix_ids']]))
+        specs.append(('model_tokens', [int(token_id) for token_id in self.compiled.prompt_main['type_marker_ids'][self.config.task_type]]))
         return specs
 
     def _embed_spec(self, kind: str, value):
@@ -180,6 +189,7 @@ class SequentialRecModel(nn.Module):
         prefix_ids = [int(token_id) for token_id in self.compiled.prompt_main['history_prefix_ids']]
         separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
         query_ids = [int(token_id) for token_id in self.compiled.prompt_main['query_prefix_ids']]
+        query_ids += [int(token_id) for token_id in self.compiled.prompt_main['type_marker_ids'][self.config.task_type]]
         sequence_uids = sample['sequence_uids']
         history_uids = sequence_uids[:-1]
         target_uids = sequence_uids[1:]
