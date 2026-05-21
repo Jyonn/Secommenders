@@ -4,9 +4,9 @@ from models.base import BaseBackbone
 
 
 class LLMBackbone(BaseBackbone):
-    HISTORY_PREFIX = 'A user has browsed the following items:'
+    HISTORY_PREFIX = 'History sequence:'
     ITEM_SEPARATOR = ','
-    QUERY_PREFIX = 'Which item would the user probably interact with:'
+    QUERY_PREFIX = 'Next item:'
 
     ALIGN_PREFIX = 'An item featured'
     ALIGN_BRIDGE = 'can be mapped to'

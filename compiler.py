@@ -38,7 +38,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v1.6'
+    VER = 'v1.7'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
