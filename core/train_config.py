@@ -17,6 +17,7 @@ class TrainConfig:
     model_max_length: Optional[int]
     item_text_max_tokens: int
     batch_size: int
+    metrics: list[str]
     epochs: int
     learning_rate: float
     weight_decay: float
@@ -48,6 +49,11 @@ class TrainConfig:
         lora = model.lora
         scratch = model.config
         alignment_enable = alignment.enable if isinstance(alignment.enable, bool) else str(alignment.enable).lower() == 'true'
+        raw_metrics = getattr(trainer, 'metrics', '')
+        if isinstance(raw_metrics, str):
+            metrics = [metric.strip().lower() for metric in raw_metrics.split(',') if metric.strip()]
+        else:
+            metrics = [str(metric).strip().lower() for metric in raw_metrics if str(metric).strip()]
         return cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
@@ -60,6 +66,7 @@ class TrainConfig:
             model_max_length=int(model.max_length) or None,
             item_text_max_tokens=int(data_config.item_text_max_tokens),
             batch_size=int(trainer.batch_size),
+            metrics=metrics,
             epochs=int(trainer.epochs),
             learning_rate=float(trainer.learning_rate),
             weight_decay=float(trainer.weight_decay),

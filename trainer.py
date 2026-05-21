@@ -153,7 +153,16 @@ class Trainer:
         return 'embedding_cosine'
 
     def _test_metric_name(self):
+        if self.config.metrics:
+            return self.config.metrics[0]
         return f'ndcg@{max(self.model_core.ranking_ks())}'
+
+    def _format_test_metrics(self, metrics: dict):
+        selected_keys = [metric for metric in self.config.metrics if metric in metrics]
+        if not selected_keys:
+            selected_keys = [self._test_metric_name()]
+        parts = [f'{key}={metrics.get(key, 0.0):.4f}' for key in selected_keys]
+        return ' '.join(parts)
 
     def build_optimizer(self):
         params = [param for param in self.model_core.parameters() if param.requires_grad]
@@ -267,6 +276,7 @@ class Trainer:
             'best_finetune_loss': best_finetune_loss,
             'train_metric_name': self._metric_name(),
             'test_metric_name': self._test_metric_name(),
+            'declared_test_metrics': self.config.metrics,
             'test_metrics': test_metrics,
             'world_size': self.world_size,
         }
@@ -288,7 +298,6 @@ class Trainer:
         self.build_dataloaders()
         optimizer = self.build_optimizer()
         metric_name = self._metric_name()
-        test_metric_name = self._test_metric_name()
         best_metric = float('inf')
         best_epoch = 0
         wait = 0
@@ -319,7 +328,7 @@ class Trainer:
             if self.is_main_process:
                 self._pnt(
                     f'epoch {epoch:03d} test_loss={epoch_test_metrics["loss"]:.4f} '
-                    f'{test_metric_name}={epoch_test_metrics.get(test_metric_name, 0.0):.4f}'
+                    f'{self._format_test_metrics(epoch_test_metrics)}'
                 )
 
             current_loss = train_metrics['loss']
@@ -350,7 +359,7 @@ class Trainer:
         if self.is_main_process:
             self._pnt(
                 f'best_epoch={best_epoch} test_loss={test_metrics["loss"]:.4f} '
-                f'{test_metric_name}={test_metrics.get(test_metric_name, 0.0):.4f}'
+                f'{self._format_test_metrics(test_metrics)}'
             )
             self._save_meta(best_epoch, best_metric, test_metrics)
 
