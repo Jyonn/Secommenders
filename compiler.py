@@ -38,7 +38,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v1.4'
+    VER = 'v1.5'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -210,7 +210,7 @@ class Compiler:
                 repr_text = 'not used in this sample'
             lines.append(f'    {role_tag} pos={index + 1:>2} uid={uid:<5} raw={raw_id} -> {repr_text}')
         if split_name == 'finetune':
-            lines.append('  policy    : for each target item, keep the longest suffix history that still fits model max length')
+            lines.append('  policy    : only the final item is used for finetune; its history is the longest suffix that still fits model max length')
         else:
             lines.append('  policy    : only the final item is evaluated; its history is the longest suffix that still fits model max length')
         return '\n'.join(lines)
@@ -621,7 +621,7 @@ class Compiler:
                 iterator.set_postfix(samples=len(rows), invalid=invalid_target_count, dropped=dropped_short_sequence_count)
                 continue
 
-            target_positions = range(1, len(sequence)) if split_name == 'finetune' else [len(sequence) - 1]
+            target_positions = [len(sequence) - 1]
             total_candidate_targets += len(target_positions)
             for target_pos in target_positions:
                 prefix_uids = sequence[:target_pos]
