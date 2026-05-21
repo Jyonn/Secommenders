@@ -17,6 +17,7 @@ from utils.compile import CompileConfig, normalize_model_name
 from utils.function import load_processor
 from utils.logging import setup_logging
 from utils.pipeline import ensure_embedded, ensure_quantized
+from utils import model as model_utils
 
 class VocabularyRegistry:
     def __init__(self):
@@ -39,7 +40,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v2.0'
+    VER = 'v2.1'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -250,6 +251,7 @@ class Compiler:
 
     def validate(self):
         repr_types = self.config.repr_types
+        is_scratch_model = model_utils.match(self.config.model) is None
         if not repr_types:
             raise ValueError('repr.type must contain at least one representation')
         if len(set(repr_types)) != len(repr_types):
@@ -264,6 +266,8 @@ class Compiler:
         if self.config.repr_combine == 'add':
             if set(repr_types) != {'uid', 'embedding'} or len(repr_types) != 2:
                 raise ValueError('repr.combine=add is only supported for repr.type=uid+embedding')
+        if is_scratch_model and 'text' in repr_types:
+            raise ValueError('scratch backbone currently does not support repr.type containing text')
 
         external_view_required = any(view in {'sid', 'embedding'} for view in repr_types + [self.config.task_type])
         if external_view_required and not self.config.repr_model:
@@ -416,7 +420,7 @@ class Compiler:
 
     def requires_view(self, view_name: str):
         views = {'uid', *self.config.repr_types, self.config.task_type}
-        if 'text' not in views or len(views) > 1:
+        if model_utils.match(self.config.model) is not None and ('text' not in views or len(views) > 1):
             views.add('text')
         return view_name in views
 

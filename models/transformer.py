@@ -30,12 +30,6 @@ class ScratchTokenizer:
             vocab[token] = len(tokens)
             tokens.append(token)
 
-        for text in texts:
-            for token in self.tokenize(text):
-                if token not in vocab:
-                    vocab[token] = len(tokens)
-                    tokens.append(token)
-
         self.vocab = vocab
         self.tokens = tokens
 
@@ -67,7 +61,7 @@ class ScratchTransformerBackbone(BaseBackbone):
         return self.DEFAULT_MAX_LENGTH
 
     def tokenize_texts(self, texts: list[str], max_tokens: int):
-        return [self.tokenizer.encode(text or '[Empty Content]', max_tokens=max_tokens) for text in texts]
+        raise RuntimeError('scratch backbone does not support text tokenization; use an LLM backbone for text representations')
 
     def build_vocab_artifact(self):
         return {
