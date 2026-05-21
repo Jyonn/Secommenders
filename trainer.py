@@ -153,9 +153,7 @@ class Trainer:
         return 'embedding_cosine'
 
     def _test_metric_name(self):
-        if self.config.task_type != 'sid':
-            return self._metric_name()
-        return f'ndcg@{max(self.model_core.sid_ranking_ks())}'
+        return f'ndcg@{max(self.model_core.ranking_ks())}'
 
     def build_optimizer(self):
         params = [param for param in self.model_core.parameters() if param.requires_grad]

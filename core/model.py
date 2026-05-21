@@ -192,12 +192,15 @@ class SequentialRecModel(nn.Module):
         attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
         return padded, attention_mask.long(), lengths
 
-    def sid_ranking_ks(self):
+    def ranking_ks(self):
         max_k = max(1, int(self.config.sid_beam_width))
         ks = [k for k in (5, 10, 20) if k <= max_k]
         if max_k not in ks:
             ks.append(max_k)
         return sorted(set(ks))
+
+    def sid_ranking_ks(self):
+        return self.ranking_ks()
 
     def _build_sid_generation_batch_inputs(self, sample, sid_prefixes: list[list[int]]):
         sample_embeddings = []
@@ -270,7 +273,7 @@ class SequentialRecModel(nn.Module):
         return ranked_items
 
     def _compute_sid_ranking_metrics(self, batch):
-        ks = self.sid_ranking_ks()
+        ks = self.ranking_ks()
         totals = {f'hr@{k}': 0.0 for k in ks}
         totals.update({f'ndcg@{k}': 0.0 for k in ks})
         totals['mrr'] = 0.0
@@ -292,6 +295,27 @@ class SequentialRecModel(nn.Module):
 
         batch_size = max(len(batch), 1)
         return {key: value / batch_size for key, value in totals.items()}
+
+    def _compute_ranking_metrics_from_logits(self, logits: torch.Tensor, target_indices: torch.Tensor):
+        ks = self.ranking_ks()
+        totals = {f'hr@{k}': 0.0 for k in ks}
+        totals.update({f'ndcg@{k}': 0.0 for k in ks})
+        totals['mrr'] = 0.0
+
+        ranking = torch.argsort(logits.float(), dim=-1, descending=True)
+        targets = target_indices.view(-1, 1)
+        match_positions = (ranking == targets).nonzero(as_tuple=False)
+        if match_positions.shape[0] != logits.shape[0]:
+            raise RuntimeError('failed to recover target rank from logits')
+        ranks = match_positions[:, 1] + 1
+
+        for k in ks:
+            hits = (ranks <= k).float()
+            totals[f'hr@{k}'] = float(hits.mean().item())
+            ndcg = hits / torch.log2(ranks.float() + 1)
+            totals[f'ndcg@{k}'] = float(ndcg.mean().item())
+        totals['mrr'] = float((1.0 / ranks.float()).mean().item())
+        return totals
 
     def _target_token_values(self, target_uid: int):
         if self.config.task_type == 'embedding':
@@ -617,12 +641,27 @@ class SequentialRecModel(nn.Module):
         pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
 
         if self.config.task_type == 'uid':
-            return self._compute_uid_loss(pooled, batch)
+            loss, metrics = self._compute_uid_loss(pooled, batch)
+            labels = torch.tensor([sample['target_uid'] for sample in batch], dtype=torch.long, device=self.device)
+            logits = self.target_head(pooled)
+            metrics.update(self._compute_ranking_metrics_from_logits(logits, labels))
+            return loss, metrics
         if self.config.task_type == 'sid':
             loss, metrics = self._compute_sid_loss(pooled, batch)
             metrics.update(self._compute_sid_ranking_metrics(batch))
             return loss, metrics
-        return self._compute_embedding_loss(pooled, batch)
+        loss, metrics = self._compute_embedding_loss(pooled, batch)
+        target_indices = torch.tensor(
+            [int(self.compiled.item_views['embedding'][sample['target_uid']]) for sample in batch],
+            dtype=torch.long,
+            device=self.device,
+        )
+        predictions = self.embedding_head(pooled)
+        norm_predictions = F.normalize(predictions.float(), dim=-1)
+        norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
+        logits = norm_predictions @ norm_table.T
+        metrics.update(self._compute_ranking_metrics_from_logits(logits, target_indices))
+        return loss, metrics
 
     def forward_finetune_batch(self, batch):
         (
