@@ -38,7 +38,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v1.7'
+    VER = 'v1.8'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -577,7 +577,7 @@ class Compiler:
         for target_uid in target_uids:
             target_value = self._target_value(target_uid)
             if self.config.task_type == 'embedding':
-                raise ValueError('packed finetune trajectory does not support task.type=embedding yet')
+                continue
             if isinstance(target_value, list):
                 target_len += len(target_value)
             else:

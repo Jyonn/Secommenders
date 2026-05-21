@@ -161,7 +161,7 @@ class SequentialRecModel(nn.Module):
 
     def _target_token_values(self, target_uid: int):
         if self.config.task_type == 'embedding':
-            raise ValueError('packed finetune trajectory does not support task.type=embedding')
+            raise ValueError('embedding task uses query-anchor supervision instead of target tokens')
         if self.config.task_type == 'uid':
             return [int(self.compiled.item_views['uid'][target_uid])]
         sid_values = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][target_uid])]
@@ -172,6 +172,9 @@ class SequentialRecModel(nn.Module):
                 f'expected {expected} tokens, got {len(sid_values)}'
             )
         return sid_values
+
+    def _target_embedding_index(self, target_uid: int):
+        return int(self.compiled.item_views['embedding'][target_uid])
 
     def _build_finetune_sample_inputs(self, sample):
         prefix_ids = [int(token_id) for token_id in self.compiled.prompt_main['history_prefix_ids']]
@@ -222,21 +225,26 @@ class SequentialRecModel(nn.Module):
             query_base = history_block_ends[target_index] + 1
             block_start = sum(piece.shape[0] for piece in embeddings)
             query_piece = self._embed_spec('model_tokens', query_ids)
-            append_embedded(query_piece, list(range(query_base, query_base + len(query_ids))))
+            query_start, query_end = append_embedded(query_piece, list(range(query_base, query_base + len(query_ids))))
 
-            token_values = self._target_token_values(target_uid)
-            target_kind = 'uid' if self.config.task_type == 'uid' else 'sid'
-            target_value = token_values[0] if target_kind == 'uid' else token_values
-            target_piece = self._embed_spec(target_kind, target_value)
-            target_start, target_end = append_embedded(
-                target_piece,
-                list(range(query_base + len(query_ids), query_base + len(query_ids) + len(token_values))),
-            )
+            if self.config.task_type == 'embedding':
+                target_start, target_end = query_start, query_end
+                target_positions.append(query_end)
+                target_labels.append(self._target_embedding_index(target_uid))
+            else:
+                token_values = self._target_token_values(target_uid)
+                target_kind = 'uid' if self.config.task_type == 'uid' else 'sid'
+                target_value = token_values[0] if target_kind == 'uid' else token_values
+                target_start, target_end = append_embedded(
+                    self._embed_spec(target_kind, target_value),
+                    list(range(query_base + len(query_ids), query_base + len(query_ids) + len(token_values))),
+                )
+                for slot_index, label in enumerate(token_values):
+                    target_positions.append(target_start + slot_index)
+                    target_labels.append(int(label))
+                    target_slots.append(slot_index)
+
             prediction_blocks.append((block_start, target_end, history_block_ends[target_index]))
-            for slot_index, label in enumerate(token_values):
-                target_positions.append(target_start + slot_index)
-                target_labels.append(int(label))
-                target_slots.append(slot_index)
 
         sample_embeddings = torch.cat(embeddings, dim=0)
         position_ids = torch.tensor(position_ids, dtype=torch.long, device=self.device)
@@ -345,10 +353,15 @@ class SequentialRecModel(nn.Module):
         )
         targets = self.embedding_matrix[target_indices].to(dtype=self.compute_dtype)
         predictions = self.embedding_head(pooled)
-        loss = F.mse_loss(predictions.float(), targets.float())
+        norm_predictions = F.normalize(predictions.float(), dim=-1)
+        norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
+        logits = norm_predictions @ norm_table.T
+        loss = F.cross_entropy(logits, target_indices)
         cosine = F.cosine_similarity(predictions.float(), targets.float(), dim=-1).mean()
+        accuracy = (logits.argmax(dim=-1) == target_indices).float().mean()
         return loss, {
             'embedding_cosine': cosine.item(),
+            'embedding_acc': accuracy.item(),
         }
 
     def forward_next_item_batch(self, batch):
@@ -363,9 +376,6 @@ class SequentialRecModel(nn.Module):
         return self._compute_embedding_loss(pooled, batch)
 
     def forward_finetune_batch(self, batch):
-        if self.config.task_type == 'embedding':
-            raise ValueError('packed finetune trajectory does not support task.type=embedding')
-
         (
             inputs_embeds,
             attention_mask,
@@ -381,16 +391,30 @@ class SequentialRecModel(nn.Module):
             position_ids=position_ids,
         )
         selected_hidden = hidden[loss_mask]
-        logits = self.target_head(selected_hidden)
 
         if self.config.task_type == 'uid':
+            logits = self.target_head(selected_hidden)
             loss = F.cross_entropy(logits.float(), target_labels)
             accuracy = (logits.argmax(dim=-1) == target_labels).float().mean()
             return loss, {
                 'uid_acc': accuracy.item(),
             }
 
-        logits = logits.view(-1, self.compiled.sid_num_quantizers, self.compiled.sid_vocab_size)
+        if self.config.task_type == 'embedding':
+            predictions = self.embedding_head(selected_hidden)
+            targets = self.embedding_matrix[target_labels].to(dtype=self.compute_dtype)
+            norm_predictions = F.normalize(predictions.float(), dim=-1)
+            norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
+            logits = norm_predictions @ norm_table.T
+            loss = F.cross_entropy(logits, target_labels)
+            cosine = F.cosine_similarity(predictions.float(), targets.float(), dim=-1).mean()
+            accuracy = (logits.argmax(dim=-1) == target_labels).float().mean()
+            return loss, {
+                'embedding_cosine': cosine.item(),
+                'embedding_acc': accuracy.item(),
+            }
+
+        logits = self.target_head(selected_hidden).view(-1, self.compiled.sid_num_quantizers, self.compiled.sid_vocab_size)
         selected_logits = logits[torch.arange(logits.shape[0], device=self.device), target_slots]
         loss = F.cross_entropy(selected_logits.float(), target_labels)
         token_acc = (selected_logits.argmax(dim=-1) == target_labels).float().mean()
