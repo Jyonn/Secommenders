@@ -77,12 +77,13 @@ class LLMSequenceEncoder(nn.Module):
     def embed_model_tokens(self, token_ids: torch.Tensor):
         return self.model.get_input_embeddings()(token_ids)
 
-    def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor):
+    def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor | None = None):
         use_no_grad = self.freeze_backbone and not self.use_lora
         with torch.set_grad_enabled(not use_no_grad):
             outputs = self.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
+                position_ids=position_ids,
                 return_dict=True,
             )
         return outputs.last_hidden_state
@@ -93,6 +94,7 @@ class ScratchSequenceEncoder(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
         self.compute_dtype = torch.float32
+        self.num_heads = num_heads
         self.token_embedding = nn.Embedding(vocab_size, hidden_size)
         self.position_embedding = nn.Embedding(max_length, hidden_size)
         layer = nn.TransformerEncoderLayer(
@@ -108,17 +110,21 @@ class ScratchSequenceEncoder(nn.Module):
     def embed_model_tokens(self, token_ids: torch.Tensor):
         return self.token_embedding(token_ids)
 
-    def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor):
+    def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor | None = None):
         batch_size, seq_len, _ = inputs_embeds.shape
-        positions = torch.arange(seq_len, device=inputs_embeds.device).unsqueeze(0).expand(batch_size, -1)
+        if position_ids is None:
+            positions = torch.arange(seq_len, device=inputs_embeds.device).unsqueeze(0).expand(batch_size, -1)
+        else:
+            positions = position_ids
         hidden = inputs_embeds + self.position_embedding(positions)
-        causal_mask = torch.triu(
-            torch.ones(seq_len, seq_len, device=inputs_embeds.device, dtype=torch.bool),
-            diagonal=1,
-        )
-        hidden = self.encoder(
-            hidden,
-            mask=causal_mask,
-            src_key_padding_mask=attention_mask == 0,
-        )
+        src_key_padding_mask = None
+        if attention_mask.dim() == 4:
+            causal_mask = attention_mask.squeeze(1).repeat_interleave(self.num_heads, dim=0)
+        else:
+            causal_mask = torch.triu(
+                torch.ones(seq_len, seq_len, device=inputs_embeds.device, dtype=torch.bool),
+                diagonal=1,
+            )
+            src_key_padding_mask = attention_mask == 0
+        hidden = self.encoder(hidden, mask=causal_mask, src_key_padding_mask=src_key_padding_mask)
         return hidden

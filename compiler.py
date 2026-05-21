@@ -38,7 +38,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v1.5'
+    VER = 'v1.6'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -210,7 +210,7 @@ class Compiler:
                 repr_text = 'not used in this sample'
             lines.append(f'    {role_tag} pos={index + 1:>2} uid={uid:<5} raw={raw_id} -> {repr_text}')
         if split_name == 'finetune':
-            lines.append('  policy    : only the final item is used for finetune; its history is the longest suffix that still fits model max length')
+            lines.append('  policy    : finetune uses one packed suffix per user; the model predicts every next item in that suffix with custom mask/positions')
         else:
             lines.append('  policy    : only the final item is evaluated; its history is the longest suffix that still fits model max length')
         return '\n'.join(lines)
@@ -563,6 +563,48 @@ class Compiler:
             return self.item_views['uid'][target_uid]
         return self.item_views[self.config.task_type][target_uid]
 
+    def _estimate_packed_length(self, sequence_uids: list[int]):
+        if len(sequence_uids) < 2:
+            return None
+        prompt = self.backbone.build_prompt_spec()
+        history_uids = sequence_uids[:-1]
+        target_uids = sequence_uids[1:]
+        history_values = self._history_values(history_uids)
+        history_len = sum(len(value) if isinstance(value, list) else 1 for value in history_values)
+        separator_len = len(prompt['item_separator_ids']) * max(0, len(history_values) - 1)
+        query_len = len(prompt['query_prefix_ids']) * len(target_uids)
+        target_len = 0
+        for target_uid in target_uids:
+            target_value = self._target_value(target_uid)
+            if self.config.task_type == 'embedding':
+                raise ValueError('packed finetune trajectory does not support task.type=embedding yet')
+            if isinstance(target_value, list):
+                target_len += len(target_value)
+            else:
+                target_len += 1
+        return len(prompt['history_prefix_ids']) + history_len + separator_len + query_len + target_len
+
+    def _build_usable_sequence(self, sequence_uids: list[int]):
+        if self.config.maxitems > 0:
+            sequence_uids = sequence_uids[-self.config.maxitems:]
+        if len(sequence_uids) < 2:
+            return None, None
+
+        best_sequence = None
+        best_total_length = None
+        for start_index in range(len(sequence_uids) - 2, -1, -1):
+            candidate_sequence = sequence_uids[start_index:]
+            total_input_length = self._estimate_packed_length(candidate_sequence)
+            if total_input_length is None:
+                continue
+            if total_input_length <= self.backbone.max_length:
+                best_sequence = candidate_sequence
+                best_total_length = total_input_length
+            else:
+                break
+
+        return best_sequence, best_total_length
+
     def _build_usable_history(self, prefix_uids: list[int], target_uid: int):
         if self.config.maxitems > 0:
             prefix_uids = prefix_uids[-self.config.maxitems:]
@@ -594,14 +636,23 @@ class Compiler:
             f'building {split_name} samples from {len(dataframe)} user sequences '
             f'(task={self.config.task_type}, repr={self.config.repr_type})'
         )
-        columns = [
-            self.processor.UID_COL,
-            'history_uids',
-            'target_uid',
-            'history_item_count',
-            'total_input_length',
-            'target_pos',
-        ]
+        if split_name == 'finetune':
+            columns = [
+                self.processor.UID_COL,
+                'sequence_uids',
+                'sequence_item_count',
+                'prediction_count',
+                'total_input_length',
+            ]
+        else:
+            columns = [
+                self.processor.UID_COL,
+                'history_uids',
+                'target_uid',
+                'history_item_count',
+                'total_input_length',
+                'target_pos',
+            ]
         rows = []
         resolved_maxitems = 0
         invalid_target_count = 0
@@ -621,14 +672,43 @@ class Compiler:
                 iterator.set_postfix(samples=len(rows), invalid=invalid_target_count, dropped=dropped_short_sequence_count)
                 continue
 
-            target_positions = [len(sequence) - 1]
-            total_candidate_targets += len(target_positions)
-            for target_pos in target_positions:
+            total_candidate_targets += 1
+            if split_name == 'finetune':
+                usable_sequence, total_input_length = self._build_usable_sequence(sequence)
+                if not usable_sequence:
+                    invalid_target_count += 1
+                    iterator.set_postfix(samples=len(rows), invalid=invalid_target_count, maxhist=resolved_maxitems)
+                    continue
+
+                rows.append(
+                    {
+                        self.processor.UID_COL: row[self.processor.UID_COL],
+                        'sequence_uids': usable_sequence,
+                        'sequence_item_count': int(len(usable_sequence)),
+                        'prediction_count': int(len(usable_sequence) - 1),
+                        'total_input_length': int(total_input_length),
+                    }
+                )
+                resolved_maxitems = max(resolved_maxitems, len(usable_sequence))
+                if split_name not in self.sample_visuals:
+                    target_pos = len(usable_sequence) - 1
+                    self.sample_visuals[split_name] = self._render_sample_visual(
+                        split_name=split_name,
+                        user_id=row[self.processor.UID_COL],
+                        sequence=usable_sequence,
+                        history_uids=usable_sequence[:-1],
+                        target_uid=usable_sequence[-1],
+                        target_pos=target_pos,
+                        total_input_length=total_input_length,
+                    )
+            else:
+                target_pos = len(sequence) - 1
                 prefix_uids = sequence[:target_pos]
                 target_uid = sequence[target_pos]
                 history_uids, total_input_length = self._build_usable_history(prefix_uids, target_uid)
                 if not history_uids:
                     invalid_target_count += 1
+                    iterator.set_postfix(samples=len(rows), invalid=invalid_target_count, maxhist=resolved_maxitems)
                     continue
 
                 rows.append(
@@ -667,12 +747,17 @@ class Compiler:
             'dropped_short_sequence_count': int(dropped_short_sequence_count),
             'candidate_target_count': int(total_candidate_targets),
         }
-        avg_history_items = float(np.mean([row['history_item_count'] for row in rows])) if rows else 0.0
+        if split_name == 'finetune':
+            avg_item_count = float(np.mean([row['sequence_item_count'] for row in rows])) if rows else 0.0
+            avg_item_label = 'avg_sequence_items'
+        else:
+            avg_item_count = float(np.mean([row['history_item_count'] for row in rows])) if rows else 0.0
+            avg_item_label = 'avg_history_items'
         avg_input_length = float(np.mean([row['total_input_length'] for row in rows])) if rows else 0.0
         pnt(
             f'{split_name} samples ready count={len(rows)}/{total_candidate_targets} '
             f'invalid={invalid_target_count} dropped_short_seq={dropped_short_sequence_count} '
-            f'avg_history_items={avg_history_items:.2f} avg_input_length={avg_input_length:.2f} '
+            f'{avg_item_label}={avg_item_count:.2f} avg_input_length={avg_input_length:.2f} '
             f'resolved_maxitems={resolved_maxitems} saved={output_path}'
         )
 

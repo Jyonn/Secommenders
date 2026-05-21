@@ -6,7 +6,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from core import CompiledArtifacts, SequentialRecModel, TrainConfig
-from core.dataset import CompiledSampleDataset
+from core.dataset import CompiledFinetuneTrajectoryDataset, CompiledTestSampleDataset
 from utils import function
 from utils.artifact import ArtifactStore
 from utils.config_init import ConfigInit
@@ -31,8 +31,8 @@ class Trainer:
 
     def build_dataloaders(self):
         self.train_loader, self.test_loader = function.build_dataloaders(
-            CompiledSampleDataset(self.compiled.finetune),
-            CompiledSampleDataset(self.compiled.test),
+            CompiledFinetuneTrajectoryDataset(self.compiled.finetune),
+            CompiledTestSampleDataset(self.compiled.test),
             batch_size=self.config.batch_size,
         )
         pnt(
@@ -80,7 +80,10 @@ class Trainer:
         for batch in iterator:
             if is_train:
                 optimizer.zero_grad()
-            loss, metrics = self.model.forward_batch(batch)
+            if is_train:
+                loss, metrics = self.model.forward_finetune_batch(batch)
+            else:
+                loss, metrics = self.model.forward_next_item_batch(batch)
             if is_train:
                 loss.backward()
                 optimizer.step()
@@ -146,9 +149,12 @@ class Trainer:
         while True:
             epoch += 1
             train_metrics = self._run_loader(self.train_loader, optimizer=optimizer, desc=f'train@{epoch}')
+            train_metric_name = metric_name if metric_name in train_metrics else (
+                'sid_token_acc' if 'sid_token_acc' in train_metrics else metric_name
+            )
             pnt(
                 f'epoch {epoch:03d} train_loss={train_metrics["loss"]:.4f} '
-                f'{metric_name}={train_metrics.get(metric_name, 0.0):.4f}'
+                f'{train_metric_name}={train_metrics.get(train_metric_name, 0.0):.4f}'
             )
 
             current_loss = train_metrics['loss']
