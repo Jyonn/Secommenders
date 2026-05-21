@@ -13,11 +13,6 @@ class ScratchTokenizer:
     NEXT_TOKEN = '<next>'
     ALIGN_TOKEN = '<align>'
     TO_TOKEN = '<to>'
-    UID_TOKEN = '<uid>'
-    SID_TOKEN = '<sid>'
-    TEXT_TOKEN = '<text>'
-    EMBEDDING_TOKEN = '<embedding>'
-    UID_EMBEDDING_TOKEN = '<uid+embedding>'
 
     def __init__(self, texts: list[str]):
         base_tokens = [
@@ -28,11 +23,6 @@ class ScratchTokenizer:
             self.NEXT_TOKEN,
             self.ALIGN_TOKEN,
             self.TO_TOKEN,
-            self.UID_TOKEN,
-            self.SID_TOKEN,
-            self.TEXT_TOKEN,
-            self.EMBEDDING_TOKEN,
-            self.UID_EMBEDDING_TOKEN,
         ]
         vocab = {}
         tokens = []
@@ -93,13 +83,6 @@ class ScratchTransformerBackbone(BaseBackbone):
             'history_prefix_ids': [self.tokenizer.vocab[ScratchTokenizer.HISTORY_TOKEN]],
             'item_separator_ids': [self.tokenizer.vocab[ScratchTokenizer.SEP_TOKEN]],
             'query_prefix_ids': [self.tokenizer.vocab[ScratchTokenizer.NEXT_TOKEN]],
-            'type_marker_ids': {
-                'uid': [self.tokenizer.vocab[ScratchTokenizer.UID_TOKEN]],
-                'sid': [self.tokenizer.vocab[ScratchTokenizer.SID_TOKEN]],
-                'text': [self.tokenizer.vocab[ScratchTokenizer.TEXT_TOKEN]],
-                'embedding': [self.tokenizer.vocab[ScratchTokenizer.EMBEDDING_TOKEN]],
-                'uid+embedding': [self.tokenizer.vocab[ScratchTokenizer.UID_EMBEDDING_TOKEN]],
-            },
             'max_length': self.max_length,
             'kind': self.kind,
         }
@@ -109,13 +92,6 @@ class ScratchTransformerBackbone(BaseBackbone):
         return {
             'align_prefix_ids': [self.tokenizer.vocab[ScratchTokenizer.ALIGN_TOKEN]],
             'align_bridge_ids': [self.tokenizer.vocab[ScratchTokenizer.TO_TOKEN]],
-            'type_marker_ids': {
-                'uid': [self.tokenizer.vocab[ScratchTokenizer.UID_TOKEN]],
-                'sid': [self.tokenizer.vocab[ScratchTokenizer.SID_TOKEN]],
-                'text': [self.tokenizer.vocab[ScratchTokenizer.TEXT_TOKEN]],
-                'embedding': [self.tokenizer.vocab[ScratchTokenizer.EMBEDDING_TOKEN]],
-                'uid+embedding': [self.tokenizer.vocab[ScratchTokenizer.UID_EMBEDDING_TOKEN]],
-            },
             'kind': self.kind,
         }
 

@@ -1,5 +1,14 @@
 from abc import ABC, abstractmethod
 
+TYPE_MARKER_TOKENS = {
+    'uid': '<uid>',
+    'sid': '<sid>',
+    'text': '<text>',
+    'embedding': '<embedding>',
+    'uid+embedding': '<uid+embedding>',
+}
+TYPE_MARKER_ORDER = list(TYPE_MARKER_TOKENS)
+
 
 class BaseBackbone(ABC):
     DEFAULT_MAX_LENGTH = 512

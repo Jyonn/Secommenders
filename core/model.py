@@ -45,6 +45,7 @@ class SequentialRecModel(nn.Module):
             )
 
         hidden_size = self.encoder.hidden_size
+        self.type_marker_embedding = nn.Embedding(len(self.compiled.special_vocab['tokens']), hidden_size)
         self.uid_embedding = nn.Embedding(compiled.num_items, hidden_size)
         self.sid_embedding = nn.Embedding(max(compiled.sid_vocab_size, 1), hidden_size)
         self.embedding_projection = None
@@ -71,6 +72,7 @@ class SequentialRecModel(nn.Module):
             raise ValueError(f'Unsupported task type: {config.task_type}')
 
         self.compute_dtype = getattr(self.encoder, 'compute_dtype', torch.float32)
+        self.type_marker_embedding.to(dtype=self.compute_dtype)
         self.uid_embedding.to(dtype=self.compute_dtype)
         self.sid_embedding.to(dtype=self.compute_dtype)
         if self.embedding_projection is not None:
@@ -89,32 +91,34 @@ class SequentialRecModel(nn.Module):
         trainable_names = {name for name, param in self.named_parameters() if param.requires_grad}
         return {name: tensor.detach().cpu() for name, tensor in state.items() if name in trainable_names}
 
+    def _type_marker_index(self, marker_name: str):
+        return int(self.compiled.special_vocab['marker_to_index'][marker_name])
+
     def _render_history_item(self, uid: int):
-        marker_ids = self.compiled.prompt_main['type_marker_ids']
         if self.config.repr_combine == 'add':
             if 'embedding' not in self.compiled.item_views:
                 raise ValueError('repr.combine=add requires compiled embedding view')
             emb_index = int(self.compiled.item_views['embedding'][uid])
             return [
-                ('model_tokens', [int(token_id) for token_id in marker_ids['uid+embedding']]),
+                ('type_marker', 'uid+embedding'),
                 ('uid_embedding_add', (uid, emb_index)),
             ]
 
         specs = []
         for repr_type in self.config.compile_config.repr_types:
             if repr_type == 'uid':
-                specs.append(('model_tokens', [int(token_id) for token_id in marker_ids['uid']]))
+                specs.append(('type_marker', 'uid'))
                 specs.append(('uid', uid))
             elif repr_type == 'text':
-                specs.append(('model_tokens', [int(token_id) for token_id in marker_ids['text']]))
+                specs.append(('type_marker', 'text'))
                 token_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['text'][uid])]
                 specs.append(('model_tokens', token_ids))
             elif repr_type == 'sid':
-                specs.append(('model_tokens', [int(token_id) for token_id in marker_ids['sid']]))
+                specs.append(('type_marker', 'sid'))
                 sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
                 specs.append(('sid', sid_ids))
             elif repr_type == 'embedding':
-                specs.append(('model_tokens', [int(token_id) for token_id in marker_ids['embedding']]))
+                specs.append(('type_marker', 'embedding'))
                 emb_index = int(self.compiled.item_views['embedding'][uid])
                 specs.append(('embedding', emb_index))
             else:
@@ -129,13 +133,16 @@ class SequentialRecModel(nn.Module):
             if index != len(history_uids) - 1:
                 specs.append(('model_tokens', [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]))
         specs.append(('model_tokens', [int(token_id) for token_id in self.compiled.prompt_main['query_prefix_ids']]))
-        specs.append(('model_tokens', [int(token_id) for token_id in self.compiled.prompt_main['type_marker_ids'][self.config.task_type]]))
+        specs.append(('type_marker', self.config.task_type))
         return specs
 
     def _embed_spec(self, kind: str, value):
         if kind == 'model_tokens':
             token_ids = torch.tensor(value, dtype=torch.long, device=self.device)
             return self.encoder.embed_model_tokens(token_ids)
+        if kind == 'type_marker':
+            marker_index = torch.tensor([self._type_marker_index(value)], dtype=torch.long, device=self.device)
+            return self.type_marker_embedding(marker_index)
         if kind == 'uid':
             token_ids = torch.tensor([int(value)], dtype=torch.long, device=self.device)
             return self.uid_embedding(token_ids)
@@ -189,7 +196,6 @@ class SequentialRecModel(nn.Module):
         prefix_ids = [int(token_id) for token_id in self.compiled.prompt_main['history_prefix_ids']]
         separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
         query_ids = [int(token_id) for token_id in self.compiled.prompt_main['query_prefix_ids']]
-        query_ids += [int(token_id) for token_id in self.compiled.prompt_main['type_marker_ids'][self.config.task_type]]
         sequence_uids = sample['sequence_uids']
         history_uids = sequence_uids[:-1]
         target_uids = sequence_uids[1:]
@@ -236,10 +242,12 @@ class SequentialRecModel(nn.Module):
             block_start = sum(piece.shape[0] for piece in embeddings)
             query_piece = self._embed_spec('model_tokens', query_ids)
             query_start, query_end = append_embedded(query_piece, list(range(query_base, query_base + len(query_ids))))
+            marker_piece = self._embed_spec('type_marker', self.config.task_type)
+            marker_start, marker_end = append_embedded(marker_piece, [query_base + len(query_ids)])
 
             if self.config.task_type == 'embedding':
-                target_start, target_end = query_start, query_end
-                target_positions.append(query_end)
+                target_start, target_end = marker_start, marker_end
+                target_positions.append(marker_end)
                 target_labels.append(self._target_embedding_index(target_uid))
             else:
                 token_values = self._target_token_values(target_uid)
@@ -247,7 +255,7 @@ class SequentialRecModel(nn.Module):
                 target_value = token_values[0] if target_kind == 'uid' else token_values
                 target_start, target_end = append_embedded(
                     self._embed_spec(target_kind, target_value),
-                    list(range(query_base + len(query_ids), query_base + len(query_ids) + len(token_values))),
+                    list(range(query_base + len(query_ids) + 1, query_base + len(query_ids) + 1 + len(token_values))),
                 )
                 for slot_index, label in enumerate(token_values):
                     target_positions.append(target_start + slot_index)

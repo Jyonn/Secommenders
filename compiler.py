@@ -10,6 +10,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from models import BaseBackbone, build_backbone
+from models.base import TYPE_MARKER_ORDER, TYPE_MARKER_TOKENS
 from processors.base_processor import Processor
 from utils.artifact import ArtifactStore
 from utils.compile import CompileConfig, normalize_model_name
@@ -38,7 +39,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v1.9'
+    VER = 'v2.0'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -236,6 +237,7 @@ class Compiler:
             required_item_view_paths.append(self.item_views_dir / 'embedding.parquet')
         required_paths = [
             self.output_dir / 'stats.json',
+            self.vocab_dir / 'special.json',
             self.vocab_dir / 'meta.json',
             self.prompts_dir / 'main.json',
             self.prompts_dir / 'alignment.json',
@@ -354,6 +356,21 @@ class Compiler:
             kind='uid',
             size=len(self.uid_raw_items),
             path=uid_vocab_path,
+        )
+        special_vocab_path = self.vocab_dir / 'special.json'
+        self._save_json(
+            special_vocab_path,
+            {
+                'tokens': [TYPE_MARKER_TOKENS[name] for name in TYPE_MARKER_ORDER],
+                'marker_to_index': {name: index for index, name in enumerate(TYPE_MARKER_ORDER)},
+                'external_ids': {name: -1 for name in TYPE_MARKER_ORDER},
+            },
+        )
+        self.registry.register(
+            'special',
+            kind='special',
+            size=len(TYPE_MARKER_ORDER),
+            path=special_vocab_path,
         )
 
         if self.requires_view('sid'):
@@ -556,14 +573,12 @@ class Compiler:
         return None
 
     def _history_item_length(self, uid: int):
-        prompt = self.backbone.build_prompt_spec()
-        marker_ids = prompt['type_marker_ids']
         if self.config.repr_combine == 'add':
-            return len(marker_ids['uid+embedding']) + 1
+            return 2
 
         total = 0
         for repr_type in self.config.repr_types:
-            total += len(marker_ids[repr_type])
+            total += 1
             value = self._get_repr_view_value(repr_type, uid)
             total += len(value) if isinstance(value, list) else 1
         return total
@@ -593,7 +608,7 @@ class Compiler:
         target_uids = sequence_uids[1:]
         history_len = sum(self._history_item_length(uid) for uid in history_uids)
         separator_len = len(prompt['item_separator_ids']) * max(0, len(history_uids) - 1)
-        query_len = (len(prompt['query_prefix_ids']) + len(prompt['type_marker_ids'][self.config.task_type])) * len(target_uids)
+        query_len = (len(prompt['query_prefix_ids']) + 1) * len(target_uids)
         target_len = 0
         for target_uid in target_uids:
             target_value = self._target_value(target_uid)
@@ -650,7 +665,7 @@ class Compiler:
                 + history_len
                 + separator_len
                 + len(prompt['query_prefix_ids'])
-                + len(prompt['type_marker_ids'][self.config.task_type])
+                + 1
                 + target_len
             )
             if total_input_length <= self.backbone.max_length:

@@ -19,6 +19,7 @@ class CompiledArtifacts:
         self.prompt_main = None
         self.prompt_align = None
         self.vocab_meta = None
+        self.special_vocab = None
         self.uid_raw_items = None
         self.item_views = {}
         self.finetune = None
@@ -55,6 +56,7 @@ class CompiledArtifacts:
             self.compile_dir / 'samples' / 'finetune.parquet',
             self.compile_dir / 'samples' / 'test.parquet',
             self.compile_dir / 'vocab' / 'uid.json',
+            self.compile_dir / 'vocab' / 'special.json',
             self.compile_dir / 'vocab' / 'meta.json',
             self.compile_dir / 'prompts' / 'main.json',
             self.compile_dir / 'prompts' / 'alignment.json',
@@ -65,6 +67,7 @@ class CompiledArtifacts:
 
         self.meta = self._read_json(self.compile_dir / 'meta.json')
         self.vocab_meta = self._read_json(self.compile_dir / 'vocab' / 'meta.json')
+        self.special_vocab = self._read_json(self.compile_dir / 'vocab' / 'special.json')
         self.prompt_main = self._read_json(self.compile_dir / 'prompts' / 'main.json')
         self.prompt_align = self._read_json(self.compile_dir / 'prompts' / 'alignment.json')
         self.uid_raw_items = self._read_json(self.compile_dir / 'vocab' / 'uid.json')['raw_item_ids']
