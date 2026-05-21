@@ -257,10 +257,17 @@ class SequentialRecModel(nn.Module):
                     self._embed_spec(target_kind, target_value),
                     list(range(query_base + len(query_ids) + 1, query_base + len(query_ids) + 1 + len(token_values))),
                 )
-                for slot_index, label in enumerate(token_values):
-                    target_positions.append(target_start + slot_index)
-                    target_labels.append(int(label))
-                    target_slots.append(slot_index)
+                if self.config.task_type == 'uid':
+                    target_positions.append(marker_end)
+                    target_labels.append(int(token_values[0]))
+                else:
+                    target_positions.append(marker_end)
+                    target_labels.append(int(token_values[0]))
+                    target_slots.append(0)
+                    for slot_index, label in enumerate(token_values[1:], start=1):
+                        target_positions.append(target_start + slot_index - 1)
+                        target_labels.append(int(label))
+                        target_slots.append(slot_index)
 
             prediction_blocks.append((block_start, target_end, history_block_ends[target_index]))
 
