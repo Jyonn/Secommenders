@@ -421,3 +421,10 @@ class SequentialRecModel(nn.Module):
         return loss, {
             'sid_token_acc': token_acc.item(),
         }
+
+    def forward(self, batch, mode: str):
+        if mode == 'finetune':
+            return self.forward_finetune_batch(batch)
+        if mode == 'test':
+            return self.forward_next_item_batch(batch)
+        raise ValueError(f'Unsupported forward mode: {mode}')

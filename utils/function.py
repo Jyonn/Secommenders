@@ -4,6 +4,7 @@ import re
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from utils.class_hub import ClassHub
 
@@ -77,9 +78,27 @@ def coerce_bool(value: str, default: bool) -> bool:
     return value == 'true'
 
 
-def build_dataloaders(train_dataset, test_dataset, batch_size: int):
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=lambda batch: batch)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=lambda batch: batch)
+def build_dataloaders(
+        train_dataset,
+        test_dataset,
+        batch_size: int,
+        train_sampler: DistributedSampler | None = None,
+        test_sampler: DistributedSampler | None = None,
+):
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
+        collate_fn=lambda batch: batch,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        sampler=test_sampler,
+        collate_fn=lambda batch: batch,
+    )
     return train_loader, test_loader
 
 

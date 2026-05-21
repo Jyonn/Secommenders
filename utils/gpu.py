@@ -7,6 +7,21 @@ from pigmento import pnt
 
 class GPU:
     @classmethod
+    def distributed_device(cls, torch_format=False):
+        local_rank = os.environ.get('LOCAL_RANK')
+        world_size = int(os.environ.get('WORLD_SIZE', '1'))
+        if local_rank is None or world_size <= 1:
+            return None
+        if not torch.cuda.is_available():
+            pnt('distributed launch detected without CUDA; using CPU backend')
+            return 'cpu' if torch_format else -1
+        local_rank = int(local_rank)
+        pnt(f'distributed launch detected world_size={world_size} local_rank={local_rank}')
+        if torch_format:
+            return f'cuda:{local_rank}'
+        return local_rank
+
+    @classmethod
     def parse_gpu_info(cls, line, args):
         def to_number(v):
             return float(v.upper().strip().replace('MIB', '').replace('W', ''))
@@ -26,6 +41,9 @@ class GPU:
 
     @classmethod
     def auto_choose(cls, torch_format=False):
+        distributed_device = cls.distributed_device(torch_format=torch_format)
+        if distributed_device is not None:
+            return distributed_device
         if not torch.cuda.is_available():
             pnt('system does not support CUDA')
             if torch_format:

@@ -1,8 +1,12 @@
+import os
 import json
 from dataclasses import asdict
 
 import torch
+import torch.distributed as dist
 from pigmento import pnt
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from core import CompiledArtifacts, SequentialRecModel, TrainConfig
@@ -17,27 +21,80 @@ from utils.logging import setup_logging
 class Trainer:
     def __init__(self, config: TrainConfig):
         self.config = config
+        self.local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+        self.rank = int(os.environ.get('RANK', '0'))
+        self.world_size = int(os.environ.get('WORLD_SIZE', '1'))
+        self.distributed = self.world_size > 1
+        self._init_distributed()
         self.compiled = CompiledArtifacts(config).load()
         self.run_dir = ArtifactStore(config.data).trained_dir(config.run_id)
         self.device = self._resolve_device()
-        self.model = SequentialRecModel(self.compiled, config).to(self.device)
+        self.model_core = SequentialRecModel(self.compiled, config).to(self.device)
+        if self.distributed:
+            ddp_kwargs = {
+                'module': self.model_core,
+                'find_unused_parameters': True,
+            }
+            if self.device.type == 'cuda':
+                ddp_kwargs['device_ids'] = [self.local_rank]
+                ddp_kwargs['output_device'] = self.local_rank
+            self.model = DDP(**ddp_kwargs)
+        else:
+            self.model = self.model_core
         self.train_loader = None
         self.test_loader = None
+        self.train_sampler = None
+        self.test_sampler = None
+
+    @property
+    def is_main_process(self):
+        return self.rank == 0
+
+    def _pnt(self, text: str):
+        if self.is_main_process:
+            pnt(text)
+
+    def _init_distributed(self):
+        if not self.distributed:
+            return
+        backend = 'nccl' if torch.cuda.is_available() else 'gloo'
+        if torch.cuda.is_available():
+            torch.cuda.set_device(self.local_rank)
+        if not dist.is_initialized():
+            dist.init_process_group(backend=backend)
 
     def _resolve_device(self):
+        if self.distributed:
+            if torch.cuda.is_available():
+                return torch.device(f'cuda:{self.local_rank}')
+            return torch.device('cpu')
         if self.config.device:
             return torch.device(self.config.device)
         return torch.device(GPU.auto_choose(torch_format=True))
 
     def build_dataloaders(self):
+        train_dataset = CompiledFinetuneTrajectoryDataset(self.compiled.finetune)
+        test_dataset = CompiledTestSampleDataset(self.compiled.test)
+        if self.distributed:
+            self.train_sampler = DistributedSampler(
+                train_dataset,
+                num_replicas=self.world_size,
+                rank=self.rank,
+                shuffle=True,
+                drop_last=False,
+            )
         self.train_loader, self.test_loader = function.build_dataloaders(
-            CompiledFinetuneTrajectoryDataset(self.compiled.finetune),
-            CompiledTestSampleDataset(self.compiled.test),
+            train_dataset,
+            test_dataset,
             batch_size=self.config.batch_size,
+            train_sampler=self.train_sampler,
         )
-        pnt(
+        if not self.is_main_process:
+            self.test_loader = None
+        self._pnt(
             f'built dataloaders finetune={len(self.train_loader.dataset)} '
-            f'test={len(self.test_loader.dataset)} batch_size={self.config.batch_size}'
+            f'test={len(test_dataset)} batch_size={self.config.batch_size} '
+            f'world_size={self.world_size}'
         )
 
     def _metric_name(self):
@@ -48,21 +105,21 @@ class Trainer:
         return 'embedding_cosine'
 
     def build_optimizer(self):
-        params = [param for param in self.model.parameters() if param.requires_grad]
-        total = sum(param.numel() for param in self.model.parameters())
+        params = [param for param in self.model_core.parameters() if param.requires_grad]
+        total = sum(param.numel() for param in self.model_core.parameters())
         trainable = sum(param.numel() for param in params)
-        pnt('trainable parameters:')
-        for label, shape, _, example in function.summarize_trainable_parameters(self.model.named_parameters()):
-            pnt(f'  {label}: {shape}')
+        self._pnt('trainable parameters:')
+        for label, shape, _, example in function.summarize_trainable_parameters(self.model_core.named_parameters()):
+            self._pnt(f'  {label}: {shape}')
             if label != example:
-                pnt(f'    example: {example}')
+                self._pnt(f'    example: {example}')
         if self.compiled.model_kind == 'llm':
-            pnt('text/model token embeddings come from the LLM backbone input embedding table')
-            if self.model.freeze_backbone:
-                pnt('that embedding table is frozen with the backbone; current trainable text-path params are LoRA adapters only')
+            self._pnt('text/model token embeddings come from the LLM backbone input embedding table')
+            if self.model_core.freeze_backbone:
+                self._pnt('that embedding table is frozen with the backbone; current trainable text-path params are LoRA adapters only')
             else:
-                pnt('that embedding table is trainable because the backbone is not frozen')
-        pnt(f'build optimizer with trainable params {trainable:,}/{total:,}')
+                self._pnt('that embedding table is trainable because the backbone is not frozen')
+        self._pnt(f'build optimizer with trainable params {trainable:,}/{total:,}')
         return torch.optim.AdamW(
             params,
             lr=self.config.learning_rate,
@@ -76,14 +133,15 @@ class Trainer:
         total_batches = 0
         metric_sums = {}
 
-        iterator = tqdm(loader, desc=desc, leave=False)
+        iterator = tqdm(loader, desc=desc, leave=False, disable=not self.is_main_process)
+        model_runner = self.model if is_train or not self.distributed else self.model_core
         for batch in iterator:
             if is_train:
                 optimizer.zero_grad()
             if is_train:
-                loss, metrics = self.model.forward_finetune_batch(batch)
+                loss, metrics = model_runner(batch, mode='finetune')
             else:
-                loss, metrics = self.model.forward_next_item_batch(batch)
+                loss, metrics = model_runner(batch, mode='test')
             if is_train:
                 loss.backward()
                 optimizer.step()
@@ -98,15 +156,29 @@ class Trainer:
                 postfix[key] = f'{value:.4f}'
             iterator.set_postfix(postfix)
 
+        if self.distributed:
+            totals = torch.tensor([total_loss, float(total_batches)], dtype=torch.float64, device=self.device)
+            dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+            total_loss = float(totals[0].item())
+            total_batches = int(totals[1].item())
+            reduced_metric_sums = {}
+            for key, value in metric_sums.items():
+                tensor = torch.tensor(float(value), dtype=torch.float64, device=self.device)
+                dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+                reduced_metric_sums[key] = float(tensor.item())
+            metric_sums = reduced_metric_sums
+
         summary = {'loss': total_loss / max(total_batches, 1)}
         for key, value in metric_sums.items():
             summary[key] = value / max(total_batches, 1)
         return summary
 
     def _save_checkpoint(self, epoch: int, best_loss: float, finetune_metrics: dict):
+        if not self.is_main_process:
+            return
         checkpoint = {
             'epoch': epoch,
-            'model_state_dict': self.model.trainable_state_dict(),
+            'model_state_dict': self.model_core.trainable_state_dict(),
             'checkpoint_kind': 'trainable_only',
             'config': asdict(self.config),
             'finetune_metrics': finetune_metrics,
@@ -114,9 +186,11 @@ class Trainer:
         }
         path = self.run_dir / 'best.pt'
         torch.save(checkpoint, path)
-        pnt(f'saved best checkpoint to {path} with trainable-only state')
+        self._pnt(f'saved best checkpoint to {path} with trainable-only state')
 
     def _save_meta(self, best_epoch: int, best_finetune_loss: float, test_metrics: dict):
+        if not self.is_main_process:
+            return
         meta = {
             'config': asdict(self.config),
             'compiled_dir': str(self.compiled.compile_dir),
@@ -125,10 +199,11 @@ class Trainer:
             'best_finetune_loss': best_finetune_loss,
             'metric_name': self._metric_name(),
             'test_metrics': test_metrics,
+            'world_size': self.world_size,
         }
         path = self.run_dir / 'meta.json'
         path.write_text(json.dumps(meta, indent=2) + '\n')
-        pnt(f'wrote trainer meta to {path}')
+        self._pnt(f'wrote trainer meta to {path}')
 
     def train(self):
         self.build_dataloaders()
@@ -139,20 +214,23 @@ class Trainer:
         wait = 0
         unlimited_epochs = self.config.epochs <= 0
 
-        pnt(
+        self._pnt(
             f'start training on {self.config.data} with {self.config.model} '
             f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
+            f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
             f'epochs={"until-early-stop" if unlimited_epochs else self.config.epochs}'
         )
 
         epoch = 0
         while True:
             epoch += 1
+            if self.train_sampler is not None:
+                self.train_sampler.set_epoch(epoch)
             train_metrics = self._run_loader(self.train_loader, optimizer=optimizer, desc=f'train@{epoch}')
             train_metric_name = metric_name if metric_name in train_metrics else (
                 'sid_token_acc' if 'sid_token_acc' in train_metrics else metric_name
             )
-            pnt(
+            self._pnt(
                 f'epoch {epoch:03d} train_loss={train_metrics["loss"]:.4f} '
                 f'{train_metric_name}={train_metrics.get(train_metric_name, 0.0):.4f}'
             )
@@ -165,27 +243,35 @@ class Trainer:
                 self._save_checkpoint(epoch, best_metric, train_metrics)
             else:
                 wait += 1
-                pnt(f'no finetune loss improvement for {wait} epoch(s), patience={self.config.patience}')
+                self._pnt(f'no finetune loss improvement for {wait} epoch(s), patience={self.config.patience}')
                 if wait >= self.config.patience:
-                    pnt(f'early stop at epoch {epoch:03d} with best_finetune_loss={best_metric:.4f}')
+                    self._pnt(f'early stop at epoch {epoch:03d} with best_finetune_loss={best_metric:.4f}')
                     break
 
             if not unlimited_epochs and epoch >= self.config.epochs:
                 break
 
-        checkpoint = torch.load(self.run_dir / 'best.pt', map_location=self.device)
-        load_info = self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        missing = getattr(load_info, 'missing_keys', [])
-        unexpected = getattr(load_info, 'unexpected_keys', [])
-        if unexpected:
-            raise RuntimeError(f'unexpected checkpoint keys: {unexpected}')
-        pnt(f'loaded best checkpoint with {len(missing)} missing frozen/base keys')
-        test_metrics = self._run_loader(self.test_loader, optimizer=None, desc='test')
-        pnt(
-            f'best_epoch={best_epoch} test_loss={test_metrics["loss"]:.4f} '
-            f'{metric_name}={test_metrics.get(metric_name, 0.0):.4f}'
-        )
-        self._save_meta(best_epoch, best_metric, test_metrics)
+        if self.distributed:
+            dist.barrier()
+
+        if self.is_main_process:
+            checkpoint = torch.load(self.run_dir / 'best.pt', map_location=self.device)
+            load_info = self.model_core.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            missing = getattr(load_info, 'missing_keys', [])
+            unexpected = getattr(load_info, 'unexpected_keys', [])
+            if unexpected:
+                raise RuntimeError(f'unexpected checkpoint keys: {unexpected}')
+            self._pnt(f'loaded best checkpoint with {len(missing)} missing frozen/base keys')
+            test_metrics = self._run_loader(self.test_loader, optimizer=None, desc='test')
+            self._pnt(
+                f'best_epoch={best_epoch} test_loss={test_metrics["loss"]:.4f} '
+                f'{metric_name}={test_metrics.get(metric_name, 0.0):.4f}'
+            )
+            self._save_meta(best_epoch, best_metric, test_metrics)
+
+        if self.distributed:
+            dist.barrier()
+            dist.destroy_process_group()
 
 
 if __name__ == '__main__':
