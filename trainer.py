@@ -276,6 +276,16 @@ class Trainer:
         path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote trainer meta to {path}')
 
+    def _evaluate_test_set(self, desc: str = 'test'):
+        if self.distributed:
+            dist.barrier()
+        test_metrics = None
+        if self.is_main_process:
+            test_metrics = self._run_loader(self.test_loader, optimizer=None, desc=desc)
+        if self.distributed:
+            dist.barrier()
+        return test_metrics
+
     def train(self):
         self.build_dataloaders()
         optimizer = self.build_optimizer()
@@ -290,7 +300,8 @@ class Trainer:
             f'start training on {self.config.data} with {self.config.model} '
             f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
             f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
-            f'epochs={"until-early-stop" if unlimited_epochs else self.config.epochs}'
+            f'epochs={"until-early-stop" if unlimited_epochs else self.config.epochs} '
+            f'eval_test_every_epoch={self.config.eval_test_every_epoch}'
         )
 
         epoch = 0
@@ -306,6 +317,13 @@ class Trainer:
                 f'epoch {epoch:03d} train_loss={train_metrics["loss"]:.4f} '
                 f'{train_metric_name}={train_metrics.get(train_metric_name, 0.0):.4f}'
             )
+            if self.config.eval_test_every_epoch:
+                epoch_test_metrics = self._evaluate_test_set(desc=f'test@{epoch}')
+                if self.is_main_process:
+                    self._pnt(
+                        f'epoch {epoch:03d} test_loss={epoch_test_metrics["loss"]:.4f} '
+                        f'{test_metric_name}={epoch_test_metrics.get(test_metric_name, 0.0):.4f}'
+                    )
 
             current_loss = train_metrics['loss']
             if current_loss < best_metric:
@@ -323,9 +341,6 @@ class Trainer:
             if not unlimited_epochs and epoch >= self.config.epochs:
                 break
 
-        if self.distributed:
-            dist.barrier()
-
         if self.is_main_process:
             checkpoint = torch.load(self.run_dir / 'best.pt', map_location=self.device)
             load_info = self.model_core.load_state_dict(checkpoint['model_state_dict'], strict=False)
@@ -334,7 +349,8 @@ class Trainer:
             if unexpected:
                 raise RuntimeError(f'unexpected checkpoint keys: {unexpected}')
             self._pnt(f'loaded best checkpoint with {len(missing)} missing frozen/base keys')
-            test_metrics = self._run_loader(self.test_loader, optimizer=None, desc='test')
+        test_metrics = self._evaluate_test_set(desc='test')
+        if self.is_main_process:
             self._pnt(
                 f'best_epoch={best_epoch} test_loss={test_metrics["loss"]:.4f} '
                 f'{test_metric_name}={test_metrics.get(test_metric_name, 0.0):.4f}'
@@ -342,7 +358,6 @@ class Trainer:
             self._save_meta(best_epoch, best_metric, test_metrics)
 
         if self.distributed:
-            dist.barrier()
             dist.destroy_process_group()
 
 
