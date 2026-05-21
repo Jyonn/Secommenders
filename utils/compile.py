@@ -27,6 +27,9 @@ class CompileConfig:
 
     @property
     def prepare_id(self):
+        used_views = set(self.repr_types + [self.task_type])
+        uses_sid = 'sid' in used_views
+        uses_embedding = 'embedding' in used_views
         parts = [
             f'model-{self.model}',
             f'repr-{self.repr_type}',
@@ -37,9 +40,9 @@ class CompileConfig:
         ]
         if self.model_max_length:
             parts.append(f'modellen-{self.model_max_length}')
-        if self.repr_model:
+        if self.repr_model and (uses_sid or uses_embedding):
             parts.append(f'reprmodel-{self.repr_model}')
-        if self.repr_best:
+        if self.repr_best and uses_sid:
             parts.append(f'reprbest-{self.repr_best}')
         return '__'.join(parts)
 
