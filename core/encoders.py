@@ -35,6 +35,7 @@ class LLMSequenceEncoder(nn.Module):
         self.freeze_backbone = freeze_backbone
         self.use_lora = use_lora
         self.model_dtype = torch_dtype or next(base_model.parameters()).dtype
+        self.compute_dtype = self.model_dtype
 
         if self.use_lora:
             target_modules = 'all-linear' if lora_target_modules == 'all-linear' else [
@@ -91,6 +92,7 @@ class ScratchSequenceEncoder(nn.Module):
     def __init__(self, vocab_size: int, hidden_size: int, num_layers: int, num_heads: int, dropout: float, max_length: int):
         super().__init__()
         self.hidden_size = hidden_size
+        self.compute_dtype = torch.float32
         self.token_embedding = nn.Embedding(vocab_size, hidden_size)
         self.position_embedding = nn.Embedding(max_length, hidden_size)
         layer = nn.TransformerEncoderLayer(

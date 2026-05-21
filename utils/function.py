@@ -71,7 +71,7 @@ def to_list(value):
     return value
 
 
-def coerce_bool(value: str, default: bool):
+def coerce_bool(value: str, default: bool) -> bool:
     if value == 'auto':
         return default
     return value == 'true'

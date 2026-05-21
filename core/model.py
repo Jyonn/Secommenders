@@ -70,6 +70,16 @@ class SequentialRecModel(nn.Module):
         else:
             raise ValueError(f'Unsupported task type: {config.task_type}')
 
+        self.compute_dtype = getattr(self.encoder, 'compute_dtype', torch.float32)
+        self.uid_embedding.to(dtype=self.compute_dtype)
+        self.sid_embedding.to(dtype=self.compute_dtype)
+        if self.embedding_projection is not None:
+            self.embedding_projection.to(dtype=self.compute_dtype)
+        if self.embedding_head is not None:
+            self.embedding_head.to(dtype=self.compute_dtype)
+        if self.target_head is not None:
+            self.target_head.to(dtype=self.compute_dtype)
+
     @property
     def device(self):
         return next(self.parameters()).device
@@ -125,14 +135,14 @@ class SequentialRecModel(nn.Module):
             return self.sid_embedding(token_ids)
         if kind == 'embedding':
             emb_index = torch.tensor([int(value)], dtype=torch.long, device=self.device)
-            projected = self.embedding_projection(self.embedding_matrix[emb_index])
+            projected = self.embedding_projection(self.embedding_matrix[emb_index].to(dtype=self.compute_dtype))
             return projected
         if kind == 'uid_embedding_add':
             uid, emb_index = value
             uid_tensor = torch.tensor([int(uid)], dtype=torch.long, device=self.device)
             emb_tensor = torch.tensor([int(emb_index)], dtype=torch.long, device=self.device)
             uid_embed = self.uid_embedding(uid_tensor)
-            content_embed = self.embedding_projection(self.embedding_matrix[emb_tensor])
+            content_embed = self.embedding_projection(self.embedding_matrix[emb_tensor].to(dtype=self.compute_dtype))
             return uid_embed + content_embed
         raise ValueError(f'Unknown spec kind: {kind}')
 
@@ -144,6 +154,7 @@ class SequentialRecModel(nn.Module):
             sample_embeddings.append(torch.cat(pieces, dim=0))
 
         padded = pad_sequence(sample_embeddings, batch_first=True)
+        padded = padded.to(dtype=self.compute_dtype)
         lengths = torch.tensor([emb.shape[0] for emb in sample_embeddings], dtype=torch.long, device=self.device)
         attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
         return padded, attention_mask.long(), lengths
@@ -151,7 +162,7 @@ class SequentialRecModel(nn.Module):
     def _compute_uid_loss(self, pooled: torch.Tensor, batch):
         logits = self.target_head(pooled)
         labels = torch.tensor([sample['target_uid'] for sample in batch], dtype=torch.long, device=self.device)
-        loss = F.cross_entropy(logits, labels)
+        loss = F.cross_entropy(logits.float(), labels)
         accuracy = (logits.argmax(dim=-1) == labels).float().mean()
         return loss, {
             'uid_acc': accuracy.item(),
@@ -164,7 +175,7 @@ class SequentialRecModel(nn.Module):
         ]
         labels = torch.tensor(sid_targets, dtype=torch.long, device=self.device)
         logits = self.target_head(pooled).view(len(batch), self.compiled.sid_num_quantizers, self.compiled.sid_vocab_size)
-        loss = F.cross_entropy(logits.reshape(-1, self.compiled.sid_vocab_size), labels.reshape(-1))
+        loss = F.cross_entropy(logits.float().reshape(-1, self.compiled.sid_vocab_size), labels.reshape(-1))
         token_acc = (logits.argmax(dim=-1) == labels).float().mean()
         seq_acc = (logits.argmax(dim=-1) == labels).all(dim=-1).float().mean()
         return loss, {
@@ -178,10 +189,10 @@ class SequentialRecModel(nn.Module):
             dtype=torch.long,
             device=self.device,
         )
-        targets = self.embedding_matrix[target_indices]
+        targets = self.embedding_matrix[target_indices].to(dtype=self.compute_dtype)
         predictions = self.embedding_head(pooled)
-        loss = F.mse_loss(predictions, targets)
-        cosine = F.cosine_similarity(predictions, targets, dim=-1).mean()
+        loss = F.mse_loss(predictions.float(), targets.float())
+        cosine = F.cosine_similarity(predictions.float(), targets.float(), dim=-1).mean()
         return loss, {
             'embedding_cosine': cosine.item(),
         }
