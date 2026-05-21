@@ -1,10 +1,12 @@
 import os
 import json
 import random
+import socket
 from dataclasses import asdict
 
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 from pigmento import pnt
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
@@ -344,6 +346,38 @@ class Trainer:
             dist.destroy_process_group()
 
 
+def _find_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(('127.0.0.1', 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return sock.getsockname()[1]
+
+
+def _requested_world_size(config: TrainConfig):
+    requested = int(getattr(config, 'num_gpus', 1))
+    if requested <= 0:
+        requested = torch.cuda.device_count()
+    if requested < 1:
+        return 1
+    return requested
+
+
+def _distributed_env_present():
+    return 'LOCAL_RANK' in os.environ or 'RANK' in os.environ or 'WORLD_SIZE' in os.environ
+
+
+def _run_trainer(config: TrainConfig):
+    trainer = Trainer(config)
+    trainer.train()
+
+
+def _spawn_worker(local_rank: int, world_size: int, config: TrainConfig):
+    os.environ['LOCAL_RANK'] = str(local_rank)
+    os.environ['RANK'] = str(local_rank)
+    os.environ['WORLD_SIZE'] = str(world_size)
+    _run_trainer(config)
+
+
 if __name__ == '__main__':
     setup_logging()
 
@@ -356,5 +390,22 @@ if __name__ == '__main__':
     ).parse()
 
     config = TrainConfig.from_refconfig(configurations)
-    trainer = Trainer(config)
-    trainer.train()
+    requested_world_size = _requested_world_size(config)
+
+    if _distributed_env_present() or requested_world_size <= 1:
+        _run_trainer(config)
+    else:
+        available_gpus = torch.cuda.device_count()
+        if available_gpus < requested_world_size:
+            raise RuntimeError(
+                f'requested num_gpus={requested_world_size}, but only {available_gpus} CUDA devices are available'
+            )
+        os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
+        os.environ.setdefault('MASTER_PORT', str(_find_free_port()))
+        pnt(f'launch distributed training via python entrypoint with num_gpus={requested_world_size}')
+        mp.spawn(
+            _spawn_worker,
+            args=(requested_world_size, config),
+            nprocs=requested_world_size,
+            join=True,
+        )

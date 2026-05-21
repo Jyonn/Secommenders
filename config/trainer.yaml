@@ -30,6 +30,7 @@ trainer:
   weight_decay: ${weight_decay:0.01}$
   seed: ${seed:42}$
   device: ${device:null}$
+  num_gpus: ${num_gpus:1}$
   freeze_backbone: ${freeze_backbone:auto}$
   patience: ${patience:3}$
   sid_beam_width: ${sid_beam_width:20}$

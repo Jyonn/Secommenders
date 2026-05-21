@@ -22,6 +22,7 @@ class TrainConfig:
     weight_decay: float
     seed: int
     device: Optional[str]
+    num_gpus: int
     freeze_backbone: str
     patience: int
     alignment_enable: bool
@@ -64,6 +65,7 @@ class TrainConfig:
             weight_decay=float(trainer.weight_decay),
             seed=int(trainer.seed),
             device=trainer.device,
+            num_gpus=int(getattr(trainer, 'num_gpus', 1)),
             freeze_backbone=str(trainer.freeze_backbone).lower(),
             patience=int(trainer.patience),
             alignment_enable=alignment_enable,
