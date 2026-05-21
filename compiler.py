@@ -223,6 +223,8 @@ class Compiler:
         if not self.meta_path.exists():
             return False
         meta = json.loads(self.meta_path.read_text())
+        if meta.get('version') != self.VER:
+            return False
         if meta.get('config') != self.config.config_dict:
             return False
         required_item_view_paths = [self.item_views_dir / 'uid.parquet']
