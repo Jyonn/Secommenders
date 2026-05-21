@@ -49,11 +49,11 @@ class TrainConfig:
         lora = model.lora
         scratch = model.config
         alignment_enable = alignment.enable if isinstance(alignment.enable, bool) else str(alignment.enable).lower() == 'true'
-        raw_metrics = getattr(trainer, 'metrics', '')
+        raw_metrics = getattr(trainer, 'metrics', [])
         if isinstance(raw_metrics, str):
             metrics = [metric.strip().lower() for metric in raw_metrics.split(',') if metric.strip()]
         else:
-            metrics = [str(metric).strip().lower() for metric in raw_metrics if str(metric).strip()]
+            metrics = [str(metric).strip().lower() for metric in list(raw_metrics) if str(metric).strip()]
         return cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
