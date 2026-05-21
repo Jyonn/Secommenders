@@ -24,6 +24,8 @@ class TrainConfig:
     device: Optional[str]
     freeze_backbone: str
     patience: int
+    alignment_enable: bool
+    alignment_weight: float
     model_dtype: str
     use_lora: str
     lora_rank: int
@@ -39,9 +41,11 @@ class TrainConfig:
     def from_refconfig(cls, configurations):
         data_config = configurations.config.data
         trainer = configurations.config.trainer
+        alignment = trainer.alignment
         model = configurations.config.model
         lora = model.lora
         scratch = model.config
+        alignment_enable = alignment.enable if isinstance(alignment.enable, bool) else str(alignment.enable).lower() == 'true'
         return cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
@@ -61,6 +65,8 @@ class TrainConfig:
             device=trainer.device,
             freeze_backbone=str(trainer.freeze_backbone).lower(),
             patience=int(trainer.patience),
+            alignment_enable=alignment_enable,
+            alignment_weight=float(alignment.weight),
             model_dtype=str(model.dtype).lower(),
             use_lora=str(lora.use).lower(),
             lora_rank=int(lora.rank),
@@ -98,7 +104,10 @@ class TrainConfig:
             f'seed-{self.seed}',
             f'freeze-{self.freeze_backbone}',
             f'lora-{self.use_lora}',
+            f'align-{int(self.alignment_enable)}',
         ]
+        if self.alignment_enable:
+            parts.append(f'alignw-{self.alignment_weight:g}')
         if self.model != 'transformer':
             parts.extend(
                 [

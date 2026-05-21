@@ -1,5 +1,6 @@
 import os
 import json
+import random
 from dataclasses import asdict
 
 import torch
@@ -45,6 +46,11 @@ class Trainer:
         self.test_loader = None
         self.train_sampler = None
         self.test_sampler = None
+        self.alignment_rng = random.Random(self.config.seed + self.rank)
+        self.alignment_step = 0
+        self.alignment_sources = self._resolve_alignment_sources()
+        if not self.alignment_sources:
+            self.config.alignment_enable = False
 
     @property
     def is_main_process(self):
@@ -53,6 +59,36 @@ class Trainer:
     def _pnt(self, text: str):
         if self.is_main_process:
             pnt(text)
+
+    def _resolve_alignment_sources(self):
+        sources = []
+        candidate_views = []
+        for view_name in self.config.compile_config.repr_types:
+            if view_name not in candidate_views:
+                candidate_views.append(view_name)
+        if 'text' not in candidate_views:
+            candidate_views.append('text')
+        for view_name in candidate_views:
+            if view_name == self.config.task_type:
+                continue
+            if view_name not in self.compiled.item_views:
+                continue
+            sources.append(view_name)
+        return sources
+
+    def _sample_alignment_batch(self):
+        if not self.alignment_sources:
+            return None, None
+        source_view = self.alignment_sources[self.alignment_step % len(self.alignment_sources)]
+        self.alignment_step += 1
+        item_count = self.compiled.num_items
+        batch_size = min(self.config.batch_size, item_count)
+        if item_count <= batch_size:
+            target_uids = list(range(item_count))
+        else:
+            target_uids = self.alignment_rng.sample(range(item_count), batch_size)
+        batch = [{'target_uid': int(uid)} for uid in target_uids]
+        return batch, source_view
 
     def _init_distributed(self):
         if not self.distributed:
@@ -96,6 +132,11 @@ class Trainer:
             f'test={len(test_dataset)} batch_size={self.config.batch_size} '
             f'world_size={self.world_size}'
         )
+        if self.config.alignment_enable:
+            self._pnt(
+                f'alignment enabled weight={self.config.alignment_weight:g} '
+                f'sources={self.alignment_sources} sampler=uniform'
+            )
 
     def _metric_name(self):
         if self.config.task_type == 'uid':
@@ -139,7 +180,18 @@ class Trainer:
             if is_train:
                 optimizer.zero_grad()
             if is_train:
-                loss, metrics = model_runner(batch, mode='finetune')
+                rec_loss, metrics = model_runner(batch, mode='finetune')
+                loss = rec_loss
+                if self.config.alignment_enable:
+                    align_batch, source_view = self._sample_alignment_batch()
+                    if align_batch:
+                        align_loss, align_metrics = model_runner(align_batch, mode='alignment', source_view=source_view)
+                        loss = rec_loss + self.config.alignment_weight * align_loss
+                        metrics = dict(metrics)
+                        metrics['rec_loss'] = float(rec_loss.item())
+                        metrics['align_loss'] = float(align_loss.item())
+                        for key, value in align_metrics.items():
+                            metrics[f'align_{key}'] = value
             else:
                 loss, metrics = model_runner(batch, mode='test')
             if is_train:
@@ -149,10 +201,15 @@ class Trainer:
             total_loss += float(loss.item())
             total_batches += 1
             for key, value in metrics.items():
+                if isinstance(value, str):
+                    continue
                 metric_sums[key] = metric_sums.get(key, 0.0) + float(value)
 
             postfix = {'loss': f'{loss.item():.4f}'}
             for key, value in metrics.items():
+                if isinstance(value, str):
+                    postfix[key] = value
+                    continue
                 postfix[key] = f'{value:.4f}'
             iterator.set_postfix(postfix)
 

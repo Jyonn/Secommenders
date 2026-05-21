@@ -125,6 +125,20 @@ class SequentialRecModel(nn.Module):
                 raise ValueError(f'Unsupported repr type: {repr_type}')
         return specs
 
+    def _render_single_view_item(self, uid: int, view_name: str):
+        if view_name == 'uid':
+            return [('type_marker', 'uid'), ('uid', uid)]
+        if view_name == 'text':
+            token_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['text'][uid])]
+            return [('type_marker', 'text'), ('model_tokens', token_ids)]
+        if view_name == 'sid':
+            sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
+            return [('type_marker', 'sid'), ('sid', sid_ids)]
+        if view_name == 'embedding':
+            emb_index = int(self.compiled.item_views['embedding'][uid])
+            return [('type_marker', 'embedding'), ('embedding', emb_index)]
+        raise ValueError(f'Unsupported alignment source view: {view_name}')
+
     def _build_sample_specs(self, sample):
         specs = [('model_tokens', [int(token_id) for token_id in self.compiled.prompt_main['history_prefix_ids']])]
         history_uids = sample['history_uids']
@@ -346,6 +360,110 @@ class SequentialRecModel(nn.Module):
             torch.tensor(target_slots, dtype=torch.long, device=self.device),
         )
 
+    def _build_alignment_sample_inputs(self, sample, source_view: str):
+        prefix_ids = [int(token_id) for token_id in self.compiled.prompt_align['align_prefix_ids']]
+        bridge_ids = [int(token_id) for token_id in self.compiled.prompt_align['align_bridge_ids']]
+        target_uid = int(sample['target_uid'])
+
+        specs = [('model_tokens', prefix_ids)]
+        specs.extend(self._render_single_view_item(target_uid, source_view))
+        specs.append(('model_tokens', bridge_ids))
+
+        embeddings = []
+        target_positions = []
+        target_labels = []
+        target_slots = []
+
+        def append_embedded(tensor: torch.Tensor):
+            start = sum(piece.shape[0] for piece in embeddings)
+            embeddings.append(tensor)
+            return start, start + tensor.shape[0] - 1
+
+        for kind, value in specs:
+            append_embedded(self._embed_spec(kind, value))
+
+        marker_start, marker_end = append_embedded(self._embed_spec('type_marker', self.config.task_type))
+
+        if self.config.task_type == 'embedding':
+            target_positions.append(marker_end)
+            target_labels.append(self._target_embedding_index(target_uid))
+        else:
+            token_values = self._target_token_values(target_uid)
+            target_kind = 'uid' if self.config.task_type == 'uid' else 'sid'
+            target_value = token_values[0] if target_kind == 'uid' else token_values
+            target_start, _ = append_embedded(self._embed_spec(target_kind, target_value))
+            if self.config.task_type == 'uid':
+                target_positions.append(marker_end)
+                target_labels.append(int(token_values[0]))
+            else:
+                target_positions.append(marker_end)
+                target_labels.append(int(token_values[0]))
+                target_slots.append(0)
+                for slot_index, label in enumerate(token_values[1:], start=1):
+                    target_positions.append(target_start + slot_index - 1)
+                    target_labels.append(int(label))
+                    target_slots.append(slot_index)
+
+        sample_embeddings = torch.cat(embeddings, dim=0)
+        seq_len = sample_embeddings.shape[0]
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=self.device)
+        loss_mask = torch.zeros(seq_len, dtype=torch.bool, device=self.device)
+        if target_positions:
+            loss_mask[torch.tensor(target_positions, dtype=torch.long, device=self.device)] = True
+        min_dtype = torch.finfo(self.compute_dtype).min
+        attention_mask = torch.triu(
+            torch.full((seq_len, seq_len), fill_value=min_dtype, dtype=self.compute_dtype, device=self.device),
+            diagonal=1,
+        )
+
+        return {
+            'inputs_embeds': sample_embeddings,
+            'position_ids': position_ids,
+            'attention_mask': attention_mask,
+            'loss_mask': loss_mask,
+            'target_labels': target_labels,
+            'target_slots': target_slots,
+        }
+
+    def _build_alignment_batch_inputs(self, batch, source_view: str):
+        packed_samples = [self._build_alignment_sample_inputs(sample, source_view) for sample in batch]
+        max_len = max(sample['inputs_embeds'].shape[0] for sample in packed_samples)
+        batch_size = len(packed_samples)
+        hidden_size = packed_samples[0]['inputs_embeds'].shape[-1]
+        padded_embeds = torch.zeros((batch_size, max_len, hidden_size), dtype=self.compute_dtype, device=self.device)
+        padded_position_ids = torch.zeros((batch_size, max_len), dtype=torch.long, device=self.device)
+        min_dtype = torch.finfo(self.compute_dtype).min
+        padded_attention_mask = torch.full(
+            (batch_size, 1, max_len, max_len),
+            fill_value=min_dtype,
+            dtype=self.compute_dtype,
+            device=self.device,
+        )
+        padded_loss_mask = torch.zeros((batch_size, max_len), dtype=torch.bool, device=self.device)
+
+        target_labels = []
+        target_slots = []
+
+        for batch_index, sample in enumerate(packed_samples):
+            seq_len = sample['inputs_embeds'].shape[0]
+            padded_embeds[batch_index, :seq_len] = sample['inputs_embeds']
+            padded_position_ids[batch_index, :seq_len] = sample['position_ids']
+            padded_attention_mask[batch_index, 0, :seq_len, :seq_len] = sample['attention_mask']
+            padded_loss_mask[batch_index, :seq_len] = sample['loss_mask']
+            for pad_pos in range(seq_len, max_len):
+                padded_attention_mask[batch_index, 0, pad_pos, pad_pos] = 0
+            target_labels.extend(sample['target_labels'])
+            target_slots.extend(sample['target_slots'])
+
+        return (
+            padded_embeds,
+            padded_attention_mask,
+            padded_position_ids,
+            padded_loss_mask,
+            torch.tensor(target_labels, dtype=torch.long, device=self.device),
+            torch.tensor(target_slots, dtype=torch.long, device=self.device),
+        )
+
     def _compute_uid_loss(self, pooled: torch.Tensor, batch):
         logits = self.target_head(pooled)
         labels = torch.tensor([sample['target_uid'] for sample in batch], dtype=torch.long, device=self.device)
@@ -447,9 +565,60 @@ class SequentialRecModel(nn.Module):
             'sid_token_acc': token_acc.item(),
         }
 
-    def forward(self, batch, mode: str):
+    def forward_alignment_batch(self, batch, source_view: str):
+        (
+            inputs_embeds,
+            attention_mask,
+            position_ids,
+            loss_mask,
+            target_labels,
+            target_slots,
+        ) = self._build_alignment_batch_inputs(batch, source_view)
+
+        hidden = self.encoder(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+        )
+        selected_hidden = hidden[loss_mask]
+
+        if self.config.task_type == 'uid':
+            logits = self.target_head(selected_hidden)
+            loss = F.cross_entropy(logits.float(), target_labels)
+            accuracy = (logits.argmax(dim=-1) == target_labels).float().mean()
+            return loss, {
+                'uid_acc': accuracy.item(),
+            }
+
+        if self.config.task_type == 'embedding':
+            predictions = self.embedding_head(selected_hidden)
+            targets = self.embedding_matrix[target_labels].to(dtype=self.compute_dtype)
+            norm_predictions = F.normalize(predictions.float(), dim=-1)
+            norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
+            logits = norm_predictions @ norm_table.T
+            loss = F.cross_entropy(logits, target_labels)
+            cosine = F.cosine_similarity(predictions.float(), targets.float(), dim=-1).mean()
+            accuracy = (logits.argmax(dim=-1) == target_labels).float().mean()
+            return loss, {
+                'embedding_cosine': cosine.item(),
+                'embedding_acc': accuracy.item(),
+            }
+
+        logits = self.target_head(selected_hidden).view(-1, self.compiled.sid_num_quantizers, self.compiled.sid_vocab_size)
+        selected_logits = logits[torch.arange(logits.shape[0], device=self.device), target_slots]
+        loss = F.cross_entropy(selected_logits.float(), target_labels)
+        token_acc = (selected_logits.argmax(dim=-1) == target_labels).float().mean()
+        return loss, {
+            'sid_token_acc': token_acc.item(),
+        }
+
+    def forward(self, batch, mode: str, source_view: str | None = None):
         if mode == 'finetune':
             return self.forward_finetune_batch(batch)
+        if mode == 'alignment':
+            if source_view is None:
+                raise ValueError('alignment forward requires source_view')
+            return self.forward_alignment_batch(batch, source_view=source_view)
         if mode == 'test':
             return self.forward_next_item_batch(batch)
         raise ValueError(f'Unsupported forward mode: {mode}')
