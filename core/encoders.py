@@ -26,7 +26,9 @@ class LLMSequenceEncoder(nn.Module):
             trust_remote_code=True,
             torch_dtype=torch_dtype,
         )
-        hidden_size = getattr(base_model.config, 'hidden_size', None)
+        hidden_size = getattr(base_model.config, 'word_embed_proj_dim', None)
+        if hidden_size is None:
+            hidden_size = getattr(base_model.config, 'hidden_size', None)
         if hidden_size is None:
             hidden_size = getattr(base_model.config, 'd_model', None)
         if hidden_size is None:
