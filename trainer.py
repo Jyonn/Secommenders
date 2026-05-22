@@ -160,15 +160,21 @@ class Trainer:
             return 'sid_token_acc'
         return 'embedding_cosine'
 
-    def _test_metric_name(self):
-        if self.config.metrics:
-            return self.config.metrics[0]
+    def _default_ranking_metric(self):
         return f'ndcg@{max(self.model_core.ranking_ks())}'
+
+    def _main_metric_name(self):
+        return self.config.main_metric or 'loss'
+
+    def _main_metric_higher_is_better(self):
+        metric = self._main_metric_name()
+        return metric != 'loss'
 
     def _format_test_metrics(self, metrics: dict):
         selected_keys = [metric for metric in self.config.metrics if metric in metrics]
         if not selected_keys:
-            selected_keys = [self._test_metric_name()]
+            fallback_metric = self._default_ranking_metric()
+            selected_keys = [fallback_metric] if fallback_metric in metrics else ['loss']
         parts = [f'{key}={metrics.get(key, 0.0):.4f}' for key in selected_keys]
         return ' '.join(parts)
 
@@ -258,7 +264,7 @@ class Trainer:
             summary[key] = value / max(total_batches, 1)
         return summary
 
-    def _save_checkpoint(self, epoch: int, best_loss: float, valid_metrics: dict):
+    def _save_checkpoint(self, epoch: int, best_metric: float, valid_metrics: dict):
         if not self.is_main_process:
             return
         checkpoint = {
@@ -267,13 +273,14 @@ class Trainer:
             'checkpoint_kind': 'trainable_only',
             'config': asdict(self.config),
             'valid_metrics': valid_metrics,
-            'best_valid_loss': best_loss,
+            'best_valid_metric': best_metric,
+            'main_metric': self._main_metric_name(),
         }
         path = self.run_dir / 'best.pt'
         torch.save(checkpoint, path)
         self._pnt(f'saved best checkpoint to {path} with trainable-only state')
 
-    def _save_meta(self, best_epoch: int, best_valid_loss: float, test_metrics: dict):
+    def _save_meta(self, best_epoch: int, best_valid_metric: float, test_metrics: dict):
         if not self.is_main_process:
             return
         meta = {
@@ -281,9 +288,10 @@ class Trainer:
             'compiled_dir': str(self.compiled.compile_dir),
             'run_dir': str(self.run_dir),
             'best_epoch': best_epoch,
-            'best_valid_loss': best_valid_loss,
+            'main_metric': self._main_metric_name(),
+            'best_valid_metric': best_valid_metric,
             'train_metric_name': self._metric_name(),
-            'test_metric_name': self._test_metric_name(),
+            'test_metric_name': self._default_ranking_metric(),
             'declared_test_metrics': self.config.metrics,
             'test_metrics': test_metrics,
             'world_size': self.world_size,
@@ -306,18 +314,20 @@ class Trainer:
         self.build_dataloaders()
         optimizer = self.build_optimizer()
         metric_name = self._metric_name()
-        best_metric = float('inf')
+        main_metric_name = self._main_metric_name()
+        higher_is_better = self._main_metric_higher_is_better()
+        best_metric = float('-inf') if higher_is_better else float('inf')
         best_epoch = 0
         wait = 0
         unlimited_epochs = self.config.epochs <= 0
 
         self._pnt(
-            f'start training on {self.config.data} with {self.config.model} '
-            f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
-            f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
-            f'epochs={"until-early-stop" if unlimited_epochs else self.config.epochs} '
-            f'test_eval=every-epoch'
-        )
+                f'start training on {self.config.data} with {self.config.model} '
+                f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
+                f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
+                f'epochs={"until-early-stop" if unlimited_epochs else self.config.epochs} '
+                f'valid_main_metric={main_metric_name} valid_eval=every-epoch test_eval=final-only'
+            )
 
         epoch = 0
         while True:
@@ -338,24 +348,28 @@ class Trainer:
                     f'epoch {epoch:03d} valid_loss={epoch_valid_metrics["loss"]:.4f} '
                     f'{self._format_test_metrics(epoch_valid_metrics)}'
                 )
-            epoch_test_metrics = self._evaluate_eval_set(self.test_loader, desc=f'test@{epoch}')
-            if self.is_main_process:
-                self._pnt(
-                    f'epoch {epoch:03d} test_loss={epoch_test_metrics["loss"]:.4f} '
-                    f'{self._format_test_metrics(epoch_test_metrics)}'
+            if main_metric_name not in epoch_valid_metrics:
+                raise KeyError(
+                    f'evaluator.main_metric={main_metric_name} not found in valid metrics: '
+                    f'{sorted(epoch_valid_metrics.keys())}'
                 )
-
-            current_loss = epoch_valid_metrics['loss']
-            if current_loss < best_metric:
-                best_metric = current_loss
+            current_metric = epoch_valid_metrics[main_metric_name]
+            improved = current_metric > best_metric if higher_is_better else current_metric < best_metric
+            if improved:
+                best_metric = current_metric
                 best_epoch = epoch
                 wait = 0
                 self._save_checkpoint(epoch, best_metric, epoch_valid_metrics)
             else:
                 wait += 1
-                self._pnt(f'no valid loss improvement for {wait} epoch(s), patience={self.config.patience}')
+                self._pnt(
+                    f'no valid {main_metric_name} improvement for {wait} epoch(s), '
+                    f'patience={self.config.patience}'
+                )
                 if wait >= self.config.patience:
-                    self._pnt(f'early stop at epoch {epoch:03d} with best_valid_loss={best_metric:.4f}')
+                    self._pnt(
+                        f'early stop at epoch {epoch:03d} with best_valid_{main_metric_name}={best_metric:.4f}'
+                    )
                     break
 
             if not unlimited_epochs and epoch >= self.config.epochs:

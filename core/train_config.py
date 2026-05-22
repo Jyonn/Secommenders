@@ -17,7 +17,6 @@ class TrainConfig:
     model_max_length: Optional[int]
     item_text_max_tokens: int
     batch_size: int
-    metrics: list[str]
     epochs: int
     learning_rate: float
     weight_decay: float
@@ -25,6 +24,8 @@ class TrainConfig:
     device: Optional[str]
     num_gpus: int
     freeze_backbone: str
+    main_metric: str
+    metrics: list[str]
     patience: int
     alignment_enable: bool
     alignment_weight: float
@@ -44,12 +45,13 @@ class TrainConfig:
     def from_refconfig(cls, configurations):
         data_config = configurations.config.data
         trainer = configurations.config.trainer
+        evaluator = configurations.config.evaluator
         alignment = trainer.alignment
         model = configurations.config.model
         lora = model.lora
         scratch = model.config
         alignment_enable = alignment.enable if isinstance(alignment.enable, bool) else str(alignment.enable).lower() == 'true'
-        raw_metrics = getattr(trainer, 'metrics', [])
+        raw_metrics = getattr(evaluator, 'metrics', [])
         if isinstance(raw_metrics, str):
             metrics = [metric.strip().lower() for metric in raw_metrics.split(',') if metric.strip()]
         else:
@@ -66,7 +68,6 @@ class TrainConfig:
             model_max_length=int(model.max_length) or None,
             item_text_max_tokens=int(data_config.item_text_max_tokens),
             batch_size=int(trainer.batch_size),
-            metrics=metrics,
             epochs=int(trainer.epochs),
             learning_rate=float(trainer.learning_rate),
             weight_decay=float(trainer.weight_decay),
@@ -74,7 +75,9 @@ class TrainConfig:
             device=trainer.device,
             num_gpus=int(getattr(trainer, 'num_gpus', 1)),
             freeze_backbone=str(trainer.freeze_backbone).lower(),
-            patience=int(trainer.patience),
+            main_metric=str(getattr(evaluator, 'main_metric', 'loss')).strip().lower(),
+            metrics=metrics,
+            patience=int(evaluator.patience),
             alignment_enable=alignment_enable,
             alignment_weight=float(alignment.weight),
             sid_beam_width=int(getattr(trainer, 'sid_beam_width', 20)),
