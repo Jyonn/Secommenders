@@ -19,5 +19,6 @@ if __name__ == '__main__':
 
     pnt(f'Dataset: {data}')
     pnt(f'Processed items: {len(processor.items)}')
+    pnt(f'Valid users: {0 if processor.valid_set is None else len(processor.valid_set)}')
     pnt(f'Test users: {0 if processor.test_set is None else len(processor.test_set)}')
     pnt(f'Finetune users: {0 if processor.finetune_set is None else len(processor.finetune_set)}')

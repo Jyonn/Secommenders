@@ -25,6 +25,7 @@ class CompiledArtifacts:
         self.uid_raw_items = None
         self.item_views = {}
         self.finetune = None
+        self.valid = None
         self.test = None
         self.embedding_matrix = None
         self.sid_num_quantizers = None
@@ -76,6 +77,7 @@ class CompiledArtifacts:
         required_paths = [
             self.compile_dir / 'meta.json',
             self.compile_dir / 'samples' / 'finetune.parquet',
+            self.compile_dir / 'samples' / 'valid.parquet',
             self.compile_dir / 'samples' / 'test.parquet',
             self.compile_dir / 'vocab' / 'uid.json',
             self.compile_dir / 'vocab' / 'special.json',
@@ -93,6 +95,7 @@ class CompiledArtifacts:
         self.prompt_align = self._read_json(self.compile_dir / 'prompts' / 'alignment.json')
         self.uid_raw_items = self._read_json(self.compile_dir / 'vocab' / 'uid.json')['raw_item_ids']
         self.finetune = pd.read_parquet(self.compile_dir / 'samples' / 'finetune.parquet')
+        self.valid = pd.read_parquet(self.compile_dir / 'samples' / 'valid.parquet')
         self.test = pd.read_parquet(self.compile_dir / 'samples' / 'test.parquet')
 
         for view_name in ['uid', 'text', 'sid', 'embedding']:

@@ -12,10 +12,11 @@ from utils.pipeline import ensure_formatted
 
 
 class Processor:
-    VER = 'v2.0'
+    VER = 'v2.1'
 
     NUM_TEST = 5_000
     NUM_FINETUNE = 40_000
+    VALID_RATIO = 0.2
 
     def __init__(self, dataset: str, num_test=None, num_finetune=None):
         self.dataset = dataset.lower()
@@ -40,6 +41,7 @@ class Processor:
         self.user_vocab: Optional[dict] = None
 
         self.test_set: Optional[pd.DataFrame] = None
+        self.valid_set: Optional[pd.DataFrame] = None
         self.finetune_set: Optional[pd.DataFrame] = None
 
     def get_name(self):
@@ -53,6 +55,7 @@ class Processor:
         base_dir = Path(self.store_dir)
         return {
             'items': base_dir / 'items.parquet',
+            'valid': base_dir / 'valid.parquet',
             'test': base_dir / 'test.parquet',
             'finetune': base_dir / 'finetune.parquet',
             'user_order': base_dir / 'user_order.txt',
@@ -129,7 +132,7 @@ class Processor:
             yield uid, history
 
     def get_source_set(self, source):
-        assert source in ['test', 'finetune', 'original'], 'source must be test, finetune, or original'
+        assert source in ['test', 'valid', 'finetune', 'original'], 'source must be test, valid, finetune, or original'
         if source == 'original':
             self._ensure_original_users_loaded()
             return self.users
@@ -147,6 +150,9 @@ class Processor:
 
     def test(self, slicer: Union[int, Callable], **kwargs):
         return self.generate(slicer, source='test')
+
+    def valid(self, slicer: Union[int, Callable], **kwargs):
+        return self.generate(slicer, source='valid')
 
     def finetune(self, slicer: Union[int, Callable], **kwargs):
         return self.generate(slicer, source='finetune')
@@ -183,6 +189,10 @@ class Processor:
         return self.num_test > 0
 
     @property
+    def valid_set_required(self):
+        return self.test_set_required
+
+    @property
     def finetune_set_required(self):
         return self.num_finetune > 0
 
@@ -190,6 +200,8 @@ class Processor:
     def processed_valid(self):
         paths = self._paths()
         required = [paths['items'], paths['meta']]
+        if self.valid_set_required:
+            required.append(paths['valid'])
         if self.test_set_required:
             required.append(paths['test'])
         if self.finetune_set_required:
@@ -207,6 +219,7 @@ class Processor:
             processed_meta.get('formatted_version') == formatted_meta.get('version')
             and int(processed_meta.get('num_test', -1)) == int(self.num_test)
             and int(processed_meta.get('num_finetune', -1)) == int(self.num_finetune)
+            and float(processed_meta.get('valid_ratio', -1)) == float(self.VALID_RATIO)
         )
 
     def load_formatted(self):
@@ -231,7 +244,7 @@ class Processor:
             return set(self.items[self.IID_COL].unique())
 
         item_set = set()
-        for dataframe in [self.test_set, self.finetune_set]:
+        for dataframe in [self.valid_set, self.test_set, self.finetune_set]:
             if dataframe is None:
                 continue
             dataframe[self.HIS_COL].apply(lambda x: [item_set.add(i) for i in x])
@@ -252,6 +265,7 @@ class Processor:
             'formatted_dir': str(self.formatted_dir),
             'num_test': int(self.num_test),
             'num_finetune': int(self.num_finetune),
+            'valid_ratio': float(self.VALID_RATIO),
             'item_col': self.IID_COL,
             'user_col': self.UID_COL,
             'history_col': self.HIS_COL,
@@ -267,10 +281,19 @@ class Processor:
         stats = {
             'processed_item_count': int(len(self.items)),
             'formatted_user_count': int(len(self.users)),
+            'valid_user_count': int(len(self.valid_set)) if self.valid_set is not None else 0,
             'test_user_count': int(len(self.test_set)) if self.test_set is not None else 0,
             'finetune_user_count': int(len(self.finetune_set)) if self.finetune_set is not None else 0,
         }
         paths['stats'].write_text(json.dumps(stats, indent=2) + '\n')
+
+    def _split_valid_from_test(self, test_set: pd.DataFrame):
+        valid_count = int(len(test_set) * self.VALID_RATIO)
+        if len(test_set) > 0 and valid_count <= 0:
+            valid_count = 1
+        valid_set = test_set.iloc[:valid_count].reset_index(drop=True)
+        remain_test = test_set.iloc[valid_count:].reset_index(drop=True)
+        return valid_set, remain_test
 
     def load_public_sets(self):
         paths = self._paths()
@@ -278,6 +301,8 @@ class Processor:
             pnt(f'loading processed {self.get_name()} splits from cache')
             self._load_processed_meta()
             self.items = pd.read_parquet(paths['items'])
+            if self.valid_set_required:
+                self.valid_set = pd.read_parquet(paths['valid'])
             if self.test_set_required:
                 self.test_set = pd.read_parquet(paths['test'])
             if self.finetune_set_required:
@@ -290,10 +315,15 @@ class Processor:
         iterator = self._iterator(users_order, self.users)
 
         if self.test_set_required:
-            self.test_set = self._split(iterator, self.num_test)
-            self.test_set.reset_index(drop=True, inplace=True)
+            raw_test_set = self._split(iterator, self.num_test)
+            raw_test_set.reset_index(drop=True, inplace=True)
+            self.valid_set, self.test_set = self._split_valid_from_test(raw_test_set)
+            self.valid_set.to_parquet(paths['valid'], index=False)
             self.test_set.to_parquet(paths['test'], index=False)
-            pnt(f'generated test set with {len(self.test_set)}/{self.num_test} samples')
+            pnt(
+                f'generated valid/test sets from {len(raw_test_set)}/{self.num_test} public users '
+                f'valid={len(self.valid_set)} test={len(self.test_set)} ratio={self.VALID_RATIO:g}'
+            )
 
         if self.finetune_set_required:
             self.finetune_set = self._split(iterator, self.num_finetune)
@@ -315,10 +345,14 @@ class Processor:
         self.items = self._stringify(self.items)
         if self.test_set is not None:
             self.test_set = self._stringify(self.test_set)
+        if self.valid_set is not None:
+            self.valid_set = self._stringify(self.valid_set)
         if self.finetune_set is not None:
             self.finetune_set = self._stringify(self.finetune_set)
 
         if self.REQUIRE_STRINGIFY:
+            if self.valid_set is not None:
+                self.valid_set[self.HIS_COL] = self.valid_set[self.HIS_COL].apply(lambda x: [str(item) for item in x])
             if self.test_set is not None:
                 self.test_set[self.HIS_COL] = self.test_set[self.HIS_COL].apply(lambda x: [str(item) for item in x])
             if self.finetune_set is not None:

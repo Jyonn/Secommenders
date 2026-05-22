@@ -26,6 +26,10 @@ class CompiledTestSampleDataset(Dataset):
         return self.rows[index]
 
 
+class CompiledValidSampleDataset(CompiledTestSampleDataset):
+    pass
+
+
 class CompiledFinetuneTrajectoryDataset(Dataset):
     def __init__(self, dataframe: pd.DataFrame):
         self.rows = []

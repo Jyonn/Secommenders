@@ -40,7 +40,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v2.1'
+    VER = 'v2.2'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -244,6 +244,7 @@ class Compiler:
             self.prompts_dir / 'alignment.json',
             self.item_views_dir / 'meta.json',
             self.samples_dir / 'finetune.parquet',
+            self.samples_dir / 'valid.parquet',
             self.samples_dir / 'test.parquet',
             self.alignment_dir / 'meta.json',
         ] + required_item_view_paths
@@ -294,6 +295,7 @@ class Compiler:
         self.build_vocab_and_prompts()
         self.build_item_views()
         self.build_samples('finetune', self.processor.finetune_set)
+        self.build_samples('valid', self.processor.valid_set)
         self.build_samples('test', self.processor.test_set)
         self.build_alignment_meta()
         self.save_meta()
@@ -849,11 +851,14 @@ class Compiler:
         stats = {
             'item_count': len(self.uid_raw_items),
             'finetune_sample_count': self.samples_stats['finetune']['sample_count'],
+            'valid_sample_count': self.samples_stats['valid']['sample_count'],
             'test_sample_count': self.samples_stats['test']['sample_count'],
             'finetune_invalid_target_count': self.samples_stats['finetune']['invalid_target_count'],
+            'valid_invalid_target_count': self.samples_stats['valid']['invalid_target_count'],
             'test_invalid_target_count': self.samples_stats['test']['invalid_target_count'],
             'resolved_maxitems': max(
                 self.samples_stats['finetune']['resolved_maxitems'],
+                self.samples_stats['valid']['resolved_maxitems'],
                 self.samples_stats['test']['resolved_maxitems'],
             ),
         }

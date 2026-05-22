@@ -13,7 +13,7 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from core import CompiledArtifacts, SequentialRecModel, TrainConfig
-from core.dataset import CompiledFinetuneTrajectoryDataset, CompiledTestSampleDataset
+from core.dataset import CompiledFinetuneTrajectoryDataset, CompiledTestSampleDataset, CompiledValidSampleDataset
 from utils import function
 from utils.artifact import ArtifactStore
 from utils.config_init import ConfigInit
@@ -45,6 +45,7 @@ class Trainer:
         else:
             self.model = self.model_core
         self.train_loader = None
+        self.valid_loader = None
         self.test_loader = None
         self.train_sampler = None
         self.test_sampler = None
@@ -112,6 +113,7 @@ class Trainer:
 
     def build_dataloaders(self):
         train_dataset = CompiledFinetuneTrajectoryDataset(self.compiled.finetune)
+        valid_dataset = CompiledValidSampleDataset(self.compiled.valid)
         test_dataset = CompiledTestSampleDataset(self.compiled.test)
         if self.distributed:
             self.train_sampler = DistributedSampler(
@@ -121,17 +123,23 @@ class Trainer:
                 shuffle=True,
                 drop_last=False,
             )
-        self.train_loader, self.test_loader = function.build_dataloaders(
+        self.train_loader, self.valid_loader = function.build_dataloaders(
             train_dataset,
-            test_dataset,
+            valid_dataset,
             batch_size=self.config.batch_size,
             train_sampler=self.train_sampler,
         )
+        _, self.test_loader = function.build_dataloaders(
+            train_dataset,
+            test_dataset,
+            batch_size=self.config.batch_size,
+        )
         if not self.is_main_process:
+            self.valid_loader = None
             self.test_loader = None
         self._pnt(
             f'built dataloaders finetune={len(self.train_loader.dataset)} '
-            f'test={len(test_dataset)} batch_size={self.config.batch_size} '
+            f'valid={len(valid_dataset)} test={len(test_dataset)} batch_size={self.config.batch_size} '
             f'world_size={self.world_size}'
         )
         if self.config.task_type == 'sid':
@@ -250,7 +258,7 @@ class Trainer:
             summary[key] = value / max(total_batches, 1)
         return summary
 
-    def _save_checkpoint(self, epoch: int, best_loss: float, finetune_metrics: dict):
+    def _save_checkpoint(self, epoch: int, best_loss: float, valid_metrics: dict):
         if not self.is_main_process:
             return
         checkpoint = {
@@ -258,14 +266,14 @@ class Trainer:
             'model_state_dict': self.model_core.trainable_state_dict(),
             'checkpoint_kind': 'trainable_only',
             'config': asdict(self.config),
-            'finetune_metrics': finetune_metrics,
-            'best_finetune_loss': best_loss,
+            'valid_metrics': valid_metrics,
+            'best_valid_loss': best_loss,
         }
         path = self.run_dir / 'best.pt'
         torch.save(checkpoint, path)
         self._pnt(f'saved best checkpoint to {path} with trainable-only state')
 
-    def _save_meta(self, best_epoch: int, best_finetune_loss: float, test_metrics: dict):
+    def _save_meta(self, best_epoch: int, best_valid_loss: float, test_metrics: dict):
         if not self.is_main_process:
             return
         meta = {
@@ -273,7 +281,7 @@ class Trainer:
             'compiled_dir': str(self.compiled.compile_dir),
             'run_dir': str(self.run_dir),
             'best_epoch': best_epoch,
-            'best_finetune_loss': best_finetune_loss,
+            'best_valid_loss': best_valid_loss,
             'train_metric_name': self._metric_name(),
             'test_metric_name': self._test_metric_name(),
             'declared_test_metrics': self.config.metrics,
@@ -284,15 +292,15 @@ class Trainer:
         path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote trainer meta to {path}')
 
-    def _evaluate_test_set(self, desc: str = 'test'):
+    def _evaluate_eval_set(self, loader, desc: str):
         if self.distributed:
             dist.barrier()
-        test_metrics = None
+        metrics = None
         if self.is_main_process:
-            test_metrics = self._run_loader(self.test_loader, optimizer=None, desc=desc)
+            metrics = self._run_loader(loader, optimizer=None, desc=desc)
         if self.distributed:
             dist.barrier()
-        return test_metrics
+        return metrics
 
     def train(self):
         self.build_dataloaders()
@@ -324,24 +332,30 @@ class Trainer:
                 f'epoch {epoch:03d} train_loss={train_metrics["loss"]:.4f} '
                 f'{train_metric_name}={train_metrics.get(train_metric_name, 0.0):.4f}'
             )
-            epoch_test_metrics = self._evaluate_test_set(desc=f'test@{epoch}')
+            epoch_valid_metrics = self._evaluate_eval_set(self.valid_loader, desc=f'valid@{epoch}')
+            if self.is_main_process:
+                self._pnt(
+                    f'epoch {epoch:03d} valid_loss={epoch_valid_metrics["loss"]:.4f} '
+                    f'{self._format_test_metrics(epoch_valid_metrics)}'
+                )
+            epoch_test_metrics = self._evaluate_eval_set(self.test_loader, desc=f'test@{epoch}')
             if self.is_main_process:
                 self._pnt(
                     f'epoch {epoch:03d} test_loss={epoch_test_metrics["loss"]:.4f} '
                     f'{self._format_test_metrics(epoch_test_metrics)}'
                 )
 
-            current_loss = train_metrics['loss']
+            current_loss = epoch_valid_metrics['loss']
             if current_loss < best_metric:
                 best_metric = current_loss
                 best_epoch = epoch
                 wait = 0
-                self._save_checkpoint(epoch, best_metric, train_metrics)
+                self._save_checkpoint(epoch, best_metric, epoch_valid_metrics)
             else:
                 wait += 1
-                self._pnt(f'no finetune loss improvement for {wait} epoch(s), patience={self.config.patience}')
+                self._pnt(f'no valid loss improvement for {wait} epoch(s), patience={self.config.patience}')
                 if wait >= self.config.patience:
-                    self._pnt(f'early stop at epoch {epoch:03d} with best_finetune_loss={best_metric:.4f}')
+                    self._pnt(f'early stop at epoch {epoch:03d} with best_valid_loss={best_metric:.4f}')
                     break
 
             if not unlimited_epochs and epoch >= self.config.epochs:
@@ -355,7 +369,7 @@ class Trainer:
             if unexpected:
                 raise RuntimeError(f'unexpected checkpoint keys: {unexpected}')
             self._pnt(f'loaded best checkpoint with {len(missing)} missing frozen/base keys')
-        test_metrics = self._evaluate_test_set(desc='test')
+        test_metrics = self._evaluate_eval_set(self.test_loader, desc='test')
         if self.is_main_process:
             self._pnt(
                 f'best_epoch={best_epoch} test_loss={test_metrics["loss"]:.4f} '
