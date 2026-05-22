@@ -48,15 +48,16 @@ class SequentialRecModel(nn.Module):
             )
 
         hidden_size = self.encoder.hidden_size
-        self.type_marker_embedding = nn.Embedding(len(self.compiled.special_vocab['tokens']), hidden_size)
-        self.uid_embedding = nn.Embedding(compiled.num_items, hidden_size)
-        self.sid_embedding = nn.Embedding(max(compiled.sid_vocab_size, 1), hidden_size)
+        input_embed_dim = getattr(self.encoder, 'input_embed_dim', hidden_size)
+        self.type_marker_embedding = nn.Embedding(len(self.compiled.special_vocab['tokens']), input_embed_dim)
+        self.uid_embedding = nn.Embedding(compiled.num_items, input_embed_dim)
+        self.sid_embedding = nn.Embedding(max(compiled.sid_vocab_size, 1), input_embed_dim)
         self.embedding_projection = None
         self.embedding_head = None
 
         if compiled.embedding_matrix is not None:
             self.register_buffer('embedding_matrix', compiled.embedding_matrix)
-            self.embedding_projection = nn.Linear(compiled.embedding_matrix.shape[1], hidden_size, bias=False)
+            self.embedding_projection = nn.Linear(compiled.embedding_matrix.shape[1], input_embed_dim, bias=False)
         else:
             self.register_buffer('embedding_matrix', torch.empty(0))
 

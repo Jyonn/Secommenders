@@ -32,6 +32,7 @@ class LLMSequenceEncoder(nn.Module):
         if hidden_size is None:
             raise ValueError(f'Cannot resolve hidden size from model config for {model_key}')
         self.hidden_size = int(hidden_size)
+        self.input_embed_dim = int(base_model.get_input_embeddings().embedding_dim)
         self.freeze_backbone = freeze_backbone
         self.use_lora = use_lora
         self.model_dtype = torch_dtype or next(base_model.parameters()).dtype
@@ -93,6 +94,7 @@ class ScratchSequenceEncoder(nn.Module):
     def __init__(self, vocab_size: int, hidden_size: int, num_layers: int, num_heads: int, dropout: float, max_length: int):
         super().__init__()
         self.hidden_size = hidden_size
+        self.input_embed_dim = hidden_size
         self.compute_dtype = torch.float32
         self.num_heads = num_heads
         self.token_embedding = nn.Embedding(vocab_size, hidden_size)
