@@ -40,7 +40,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v2.2'
+    VER = 'v2.3'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -58,6 +58,7 @@ class Compiler:
         self.item_views = {}
         self.samples_stats = {}
         self.sample_visuals = {}
+        self.sid_stats = {}
 
         self._init_dirs()
 
@@ -386,13 +387,22 @@ class Compiler:
                 f'q{quantizer}_c{code}'
                 for quantizer in range(sid_meta['num_quantizers'])
                 for code in range(sid_meta['codebook_size'])
+            ] + [
+                f'collision_{index}'
+                for index in range(sid_meta['collision_vocab_size'])
             ]
             self._save_json(
                 sid_vocab_path,
                 {
                     'tokens': tokens,
-                    'num_quantizers': sid_meta['num_quantizers'],
+                    'num_quantizers': sid_meta['final_num_quantizers'],
+                    'base_num_quantizers': sid_meta['num_quantizers'],
                     'codebook_size': sid_meta['codebook_size'],
+                    'collision_vocab_size': sid_meta['collision_vocab_size'],
+                    'collision_token_offset': sid_meta['collision_token_offset'],
+                    'collision_group_count': sid_meta['collision_group_count'],
+                    'collided_item_count': sid_meta['collided_item_count'],
+                    'max_collision_size': sid_meta['max_collision_size'],
                 },
             )
             self.registry.register(
@@ -400,12 +410,18 @@ class Compiler:
                 kind='sid',
                 size=len(tokens),
                 path=sid_vocab_path,
-                num_quantizers=sid_meta['num_quantizers'],
+                num_quantizers=sid_meta['final_num_quantizers'],
+                base_num_quantizers=sid_meta['num_quantizers'],
                 codebook_size=sid_meta['codebook_size'],
+                collision_vocab_size=sid_meta['collision_vocab_size'],
             )
             pnt(
                 f"registered sid vocab size={len(tokens)} "
-                f"num_quantizers={sid_meta['num_quantizers']} codebook_size={sid_meta['codebook_size']}"
+                f"base_num_quantizers={sid_meta['num_quantizers']} "
+                f"final_num_quantizers={sid_meta['final_num_quantizers']} "
+                f"codebook_size={sid_meta['codebook_size']} "
+                f"collision_vocab_size={sid_meta['collision_vocab_size']} "
+                f"max_collision_size={sid_meta['max_collision_size']}"
             )
 
         self._save_json(self.vocab_dir / 'meta.json', self.registry.to_dict())
@@ -511,22 +527,48 @@ class Compiler:
         _, meta, item_ids, codes = self._load_quantized_export()
         num_quantizers = int(codes.shape[1]) if codes.ndim > 1 else 1
         codebook_size = int(meta['quantizer_config']['codebook_size'])
+        collision_token_offset = num_quantizers * codebook_size
+
+        base_sid_groups = {}
+        for item_id, row in zip(item_ids, codes):
+            row = np.atleast_1d(row).tolist()
+            base_sid = tuple(index * codebook_size + int(code) for index, code in enumerate(row))
+            base_sid_groups.setdefault(base_sid, []).append(item_id)
+
+        max_collision_size = max((len(group) for group in base_sid_groups.values()), default=1)
+        collision_vocab_size = max_collision_size
+        final_num_quantizers = num_quantizers + 1
+        collision_group_count = sum(1 for group in base_sid_groups.values() if len(group) > 1)
+        collided_item_count = sum(len(group) for group in base_sid_groups.values() if len(group) > 1)
+
+        self.sid_stats = {
+            'base_num_quantizers': num_quantizers,
+            'final_num_quantizers': final_num_quantizers,
+            'codebook_size': codebook_size,
+            'collision_vocab_size': collision_vocab_size,
+            'collision_token_offset': collision_token_offset,
+            'collision_group_count': collision_group_count,
+            'collided_item_count': collided_item_count,
+            'max_collision_size': max_collision_size,
+        }
 
         if build_only_meta:
             return {
                 'num_quantizers': num_quantizers,
                 'codebook_size': codebook_size,
+                'final_num_quantizers': final_num_quantizers,
+                'collision_vocab_size': collision_vocab_size,
+                'collision_token_offset': collision_token_offset,
+                'collision_group_count': collision_group_count,
+                'collided_item_count': collided_item_count,
+                'max_collision_size': max_collision_size,
             }
 
         sid_map = {}
-        for item_id, row in tqdm(
-                zip(item_ids, codes),
-                total=len(item_ids),
-                desc='sid map',
-                leave=False,
-        ):
-            row = np.atleast_1d(row).tolist()
-            sid_map[item_id] = [index * codebook_size + int(code) for index, code in enumerate(row)]
+        for base_sid, grouped_item_ids in tqdm(base_sid_groups.items(), total=len(base_sid_groups), desc='sid map', leave=False):
+            ordered_item_ids = sorted(grouped_item_ids, key=lambda value: str(value))
+            for collision_index, item_id in enumerate(ordered_item_ids):
+                sid_map[item_id] = list(base_sid) + [collision_token_offset + collision_index]
 
         missing = []
         ordered_values = []
@@ -861,13 +903,21 @@ class Compiler:
                 self.samples_stats['valid']['resolved_maxitems'],
                 self.samples_stats['test']['resolved_maxitems'],
             ),
+            'sid_base_num_quantizers': self.sid_stats.get('base_num_quantizers', 0),
+            'sid_final_num_quantizers': self.sid_stats.get('final_num_quantizers', 0),
+            'sid_collision_vocab_size': self.sid_stats.get('collision_vocab_size', 0),
+            'sid_collision_group_count': self.sid_stats.get('collision_group_count', 0),
+            'sid_collided_item_count': self.sid_stats.get('collided_item_count', 0),
+            'sid_max_collision_size': self.sid_stats.get('max_collision_size', 0),
         }
         stats_path = self.output_dir / 'stats.json'
         self._save_json(stats_path, stats)
         pnt(
             f"stats saved to {stats_path}: item_count={stats['item_count']} "
             f"finetune_samples={stats['finetune_sample_count']} test_samples={stats['test_sample_count']} "
-            f"resolved_maxitems={stats['resolved_maxitems']}"
+            f"resolved_maxitems={stats['resolved_maxitems']} "
+            f"sid_final_num_quantizers={stats['sid_final_num_quantizers']} "
+            f"sid_max_collision_size={stats['sid_max_collision_size']}"
         )
 
     def log_sample_visuals(self):

@@ -30,6 +30,8 @@ class CompiledArtifacts:
         self.embedding_matrix = None
         self.sid_num_quantizers = None
         self.sid_codebook_size = None
+        self.sid_collision_vocab_size = None
+        self.sid_collision_token_offset = None
         self.sid_prefix_to_next = {}
         self.sid_sequence_to_items = {}
 
@@ -108,6 +110,8 @@ class CompiledArtifacts:
             sid_vocab = self._read_json(sid_vocab_path)
             self.sid_num_quantizers = int(sid_vocab['num_quantizers'])
             self.sid_codebook_size = int(sid_vocab['codebook_size'])
+            self.sid_collision_vocab_size = int(sid_vocab.get('collision_vocab_size', 0))
+            self.sid_collision_token_offset = int(sid_vocab.get('collision_token_offset', 0))
             self._build_sid_indices()
 
         self.embedding_matrix = self._load_embedding_matrix()
