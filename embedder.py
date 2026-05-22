@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from pigmento import pnt
 from tqdm import tqdm
 
@@ -57,7 +58,32 @@ class Embedder:
         self.meta_path.write_text(json.dumps(meta, indent=2))
 
     def is_cached(self):
-        return self.embedding_path.exists() and self.item_ids_path.exists() and self.meta_path.exists()
+        if not (self.embedding_path.exists() and self.item_ids_path.exists() and self.meta_path.exists()):
+            return False
+        try:
+            meta = json.loads(self.meta_path.read_text())
+        except json.JSONDecodeError:
+            pnt(f'invalid embedding meta found at {self.meta_path}, rebuilding cache')
+            return False
+
+        if meta.get('processed_items_path') != str(self.items_path):
+            pnt('embedding cache points to a different processed items path, rebuilding cache')
+            return False
+        if int(meta.get('item_count', -1)) != int(len(self.processor.items)):
+            pnt('embedding cache item_count mismatches current processed items, rebuilding cache')
+            return False
+
+        cached_item_ids = self._load_cached_item_ids()
+        current_item_ids = self.processor.items[self.processor.IID_COL].tolist()
+        if cached_item_ids != current_item_ids:
+            pnt('embedding cache item id ordering mismatches current processed items, rebuilding cache')
+            return False
+        return True
+
+    def _load_cached_item_ids(self):
+        frame = pd.read_parquet(self.item_ids_path)
+        frame = self.processor._stringify(frame)
+        return frame[self.processor.IID_COL].tolist()
 
     def embed(self):
         if self.is_cached() and not self.conf.overwrite:
