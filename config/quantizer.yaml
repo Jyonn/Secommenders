@@ -11,7 +11,7 @@ quantizer:
     ema_epsilon: ${ema_epsilon:0.00001}$
     dead_code_reset: false
     dead_code_threshold: 0
-    num_quantizers: ${num_quantizers:4}$
+    num_quantizers: ${num_quantizers:3}$
     assignment_strategy: sinkhorn
     sinkhorn_epsilon: [0.0, 0.0, 0.0, 0.003]
     sinkhorn_iters: 50
