@@ -8,11 +8,31 @@ def normalize_model_name(name: Optional[str]):
     return name.replace('.', '').lower()
 
 
+def canonicalize_repr_type(task_type: str, repr_type: Optional[str]):
+    task = str(task_type).strip().lower()
+    if not task:
+        raise ValueError('task_type is required')
+
+    parts = []
+    if repr_type:
+        parts = [part.strip().lower() for part in str(repr_type).split('+') if part.strip()]
+
+    if task in parts:
+        parts = [part for part in parts if part != task]
+    parts = [task] + parts
+
+    deduped = []
+    for part in parts:
+        if part not in deduped:
+            deduped.append(part)
+    return '+'.join(deduped)
+
+
 @dataclass
 class CompileConfig:
     data: str
     model: str
-    repr_type: str
+    repr_type: Optional[str]
     repr_model: Optional[str]
     repr_best: Optional[str]
     task_type: str
@@ -20,6 +40,15 @@ class CompileConfig:
     model_max_length: Optional[int] = None
     item_text_max_tokens: int = 50
     repr_combine: str = 'concat'
+
+    def __post_init__(self):
+        self.data = str(self.data).lower()
+        self.model = str(self.model).lower()
+        self.task_type = str(self.task_type).lower()
+        self.repr_type = canonicalize_repr_type(self.task_type, self.repr_type)
+        self.repr_combine = str(self.repr_combine).lower()
+        self.repr_model = normalize_model_name(self.repr_model)
+        self.repr_best = self.repr_best.lower() if self.repr_best else None
 
     @property
     def repr_types(self):

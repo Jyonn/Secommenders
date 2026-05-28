@@ -1,6 +1,6 @@
 data:
   name: ${data}$
-  repr_type: ${repr_type}$
+  repr_type: ${repr_type:null}$
   repr_model: ${repr_model:null}$
   repr_best: ${repr_best:coll}$
   repr_combine: ${repr_combine:concat}$

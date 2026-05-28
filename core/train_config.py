@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from utils.compile import CompileConfig, normalize_model_name
+from utils.compile import CompileConfig, canonicalize_repr_type, normalize_model_name
 
 
 @dataclass
@@ -50,6 +50,12 @@ class TrainConfig:
         model = configurations.config.model
         lora = model.lora
         scratch = model.config
+        try:
+            raw_repr_type = data_config.repr_type
+        except Exception:
+            raw_repr_type = None
+        raw_task_type = str(data_config.task_type).lower()
+        normalized_repr_type = canonicalize_repr_type(raw_task_type, raw_repr_type)
         alignment_enable = alignment.enable if isinstance(alignment.enable, bool) else str(alignment.enable).lower() == 'true'
         raw_metrics = getattr(evaluator, 'metrics', [])
         if isinstance(raw_metrics, str):
@@ -59,11 +65,11 @@ class TrainConfig:
         return cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
-            repr_type=data_config.repr_type.lower(),
+            repr_type=normalized_repr_type,
             repr_model=normalize_model_name(data_config.repr_model),
             repr_best=data_config.repr_best.lower() if data_config.repr_best else None,
             repr_combine=data_config.repr_combine.lower(),
-            task_type=data_config.task_type.lower(),
+            task_type=raw_task_type,
             maxitems=int(data_config.maxitems),
             model_max_length=int(model.max_length) or None,
             item_text_max_tokens=int(data_config.item_text_max_tokens),

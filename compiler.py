@@ -940,7 +940,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Compile processed data into trainer-ready dataset assets.')
     parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
     parser.add_argument('--model', required=True, help='Backbone model name, such as llama3 or transformer.')
-    parser.add_argument('--repr.type', dest='repr_type', required=True, help='Representation types, such as uid, text, or uid+text.')
+    parser.add_argument('--repr.type', dest='repr_type', default=None, help='Representation types, such as uid, text, or uid+text. Defaults to task.type.')
     parser.add_argument('--repr.model', dest='repr_model', default=None, help='External representation model, such as bertbase.')
     parser.add_argument('--repr.best', dest='repr_best', default=None, help='Best checkpoint metric for quantized codes, such as coll.')
     parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
