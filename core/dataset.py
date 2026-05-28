@@ -18,6 +18,7 @@ class CompiledTestSampleDataset(Dataset):
                     'target_pos': int(row['target_pos']),
                 }
             )
+        self.rows.sort(key=lambda row: (row['total_input_length'], row['history_item_count']), reverse=True)
 
     def __len__(self):
         return len(self.rows)
@@ -43,6 +44,7 @@ class CompiledFinetuneTrajectoryDataset(Dataset):
                     'total_input_length': int(row['total_input_length']),
                 }
             )
+        self.rows.sort(key=lambda row: (row['total_input_length'], row['sequence_item_count']), reverse=True)
 
     def __len__(self):
         return len(self.rows)

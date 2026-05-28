@@ -84,7 +84,7 @@ class Trainer:
                 train_dataset,
                 num_replicas=self.world_size,
                 rank=self.rank,
-                shuffle=True,
+                shuffle=False,
                 drop_last=False,
             )
         self.train_loader, self.valid_loader = function.build_dataloaders(
@@ -104,7 +104,7 @@ class Trainer:
         self._pnt(
             f'built dataloaders finetune={len(self.train_loader.dataset)} '
             f'valid={len(valid_dataset)} test={len(test_dataset)} batch_size={self.config.batch_size} '
-            f'world_size={self.world_size}'
+            f'world_size={self.world_size} order=length-sorted'
         )
         if self.config.task_type == 'sid':
             self._pnt(
