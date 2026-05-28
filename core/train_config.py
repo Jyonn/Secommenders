@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from utils.compile import CompileConfig, canonicalize_repr_type, normalize_model_name
+from utils.compile import CompileConfig, canonicalize_repr_type, normalize_model_name, short_config_hash
 
 
 @dataclass
@@ -121,7 +121,6 @@ class TrainConfig:
             f'bs-{self.batch_size}',
             f'lr-{self.learning_rate:g}',
             f'wd-{self.weight_decay:g}',
-            f'seed-{self.seed}',
             f'freeze-{self.freeze_backbone}',
             f'lora-{self.use_lora}',
             f'align-{int(self.alignment_enable)}',
@@ -138,4 +137,5 @@ class TrainConfig:
                     f'drop-{self.lora_dropout:g}',
                 ]
             )
+        parts.append(f'h-{short_config_hash(self.__dict__)}')
         return '__'.join(parts)

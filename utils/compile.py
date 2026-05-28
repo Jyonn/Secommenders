@@ -1,3 +1,5 @@
+import hashlib
+import json
 from dataclasses import asdict, dataclass
 from typing import Optional
 
@@ -26,6 +28,11 @@ def canonicalize_repr_type(task_type: str, repr_type: Optional[str]):
         if part not in deduped:
             deduped.append(part)
     return '+'.join(deduped)
+
+
+def short_config_hash(payload: dict, length: int = 8):
+    serialized = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()[:length]
 
 
 @dataclass
@@ -67,12 +74,11 @@ class CompileConfig:
             f'maxitems-{"auto" if self.maxitems == 0 else self.maxitems}',
             f'textlen-{self.item_text_max_tokens}',
         ]
-        if self.model_max_length:
-            parts.append(f'modellen-{self.model_max_length}')
         if self.repr_model and (uses_sid or uses_embedding):
             parts.append(f'reprmodel-{self.repr_model}')
         if self.repr_best and uses_sid:
             parts.append(f'reprbest-{self.repr_best}')
+        parts.append(f'h-{short_config_hash(self.config_dict)}')
         return '__'.join(parts)
 
     @property
