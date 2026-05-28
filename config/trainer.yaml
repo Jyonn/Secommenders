@@ -14,7 +14,7 @@ model:
   dtype: ${model_dtype:bfloat16}$
   lora:
     use: ${use_lora:auto}$
-    rank: ${lora_rank:16}$
+    rank: ${lora_rank:8}$
     alpha: ${lora_alpha:32}$
     dropout: ${lora_dropout:0.05}$
   config:
