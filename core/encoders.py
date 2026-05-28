@@ -80,6 +80,9 @@ class LLMSequenceEncoder(nn.Module):
     def embed_model_tokens(self, token_ids: torch.Tensor):
         return self.model.get_input_embeddings()(token_ids)
 
+    def get_input_embedding_weight(self):
+        return self.model.get_input_embeddings().weight
+
     def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor | None = None):
         use_no_grad = self.freeze_backbone and not self.use_lora
         with torch.set_grad_enabled(not use_no_grad):
@@ -113,6 +116,9 @@ class ScratchSequenceEncoder(nn.Module):
 
     def embed_model_tokens(self, token_ids: torch.Tensor):
         return self.token_embedding(token_ids)
+
+    def get_input_embedding_weight(self):
+        return self.token_embedding.weight
 
     def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor | None = None):
         batch_size, seq_len, _ = inputs_embeds.shape

@@ -40,7 +40,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v2.3'
+    VER = 'v2.4'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -213,7 +213,10 @@ class Compiler:
                 repr_text = 'not used in this sample'
             lines.append(f'    {role_tag} pos={index + 1:>2} uid={uid:<5} raw={raw_id} -> {repr_text}')
         if split_name == 'finetune':
-            lines.append('  policy    : finetune uses one packed suffix per user; the model predicts every next item in that suffix with custom mask/positions')
+            lines.append(
+                '  policy    : finetune uses one packed suffix per user; each item block starts with task repr, '
+                'next-item supervision is standard causal prediction, and later reprs in the same block serve as alignment targets'
+            )
         else:
             lines.append('  policy    : only the final item is evaluated; its history is the longest suffix that still fits model max length')
         return '\n'.join(lines)
@@ -265,9 +268,12 @@ class Compiler:
             raise ValueError(f'Unsupported task.type: {self.config.task_type}')
         if self.config.repr_combine not in self.SUPPORTED_REPR_COMBINES:
             raise ValueError(f'Unsupported repr.combine: {self.config.repr_combine}')
+        if self.config.task_type not in repr_types:
+            raise ValueError('repr.type must contain task.type so each item block starts with task representation')
+        if repr_types[0] != self.config.task_type:
+            raise ValueError('task.type must be the first entry in repr.type for causal mixed-view training')
         if self.config.repr_combine == 'add':
-            if set(repr_types) != {'uid', 'embedding'} or len(repr_types) != 2:
-                raise ValueError('repr.combine=add is only supported for repr.type=uid+embedding')
+            raise ValueError('repr.combine=add is not supported by the mixed-view causal training protocol')
         if is_scratch_model and 'text' in repr_types:
             raise ValueError('scratch backbone currently does not support repr.type containing text')
 
@@ -438,8 +444,6 @@ class Compiler:
 
     def requires_view(self, view_name: str):
         views = {'uid', *self.config.repr_types, self.config.task_type}
-        if model_utils.match(self.config.model) is not None and ('text' not in views or len(views) > 1):
-            views.add('text')
         return view_name in views
 
     def build_item_views(self):
@@ -648,25 +652,28 @@ class Compiler:
             return self.item_views['uid'][target_uid]
         return self.item_views[self.config.task_type][target_uid]
 
+    def _repr_segment_length(self, repr_type: str, uid: int):
+        value = self._get_repr_view_value(repr_type, uid)
+        payload_length = len(value) if isinstance(value, list) else 1
+        return 1 + payload_length
+
+    def _finetune_item_length(self, uid: int, include_non_task: bool):
+        total = self._repr_segment_length(self.config.task_type, uid)
+        if include_non_task:
+            for repr_type in self.config.repr_types[1:]:
+                total += self._repr_segment_length(repr_type, uid)
+        return total
+
     def _estimate_packed_length(self, sequence_uids: list[int]):
         if len(sequence_uids) < 2:
             return None
         prompt = self.backbone.build_prompt_spec()
-        history_uids = sequence_uids[:-1]
-        target_uids = sequence_uids[1:]
-        history_len = sum(self._history_item_length(uid) for uid in history_uids)
-        separator_len = len(prompt['item_separator_ids']) * max(0, len(history_uids) - 1)
-        query_len = (len(prompt['query_prefix_ids']) + 1) * len(target_uids)
-        target_len = 0
-        for target_uid in target_uids:
-            target_value = self._target_value(target_uid)
-            if self.config.task_type == 'embedding':
-                continue
-            if isinstance(target_value, list):
-                target_len += len(target_value)
-            else:
-                target_len += 1
-        return len(prompt['history_prefix_ids']) + history_len + separator_len + query_len + target_len
+        separator_len = len(prompt['item_separator_ids']) * max(0, len(sequence_uids) - 1)
+        total = separator_len
+        for index, uid in enumerate(sequence_uids):
+            include_non_task = index < len(sequence_uids) - 1
+            total += self._finetune_item_length(uid, include_non_task=include_non_task)
+        return total
 
     def _build_usable_sequence(self, sequence_uids: list[int]):
         if self.config.maxitems > 0:
@@ -857,7 +864,7 @@ class Compiler:
         )
 
     def build_alignment_meta(self):
-        views = {self.config.repr_type, self.config.task_type, 'text'}
+        views = set(self.config.repr_types + [self.config.task_type])
         available_views = sorted(view for view in views if view in self.item_views)
         pairs = [list(pair) for pair in combinations(available_views, 2)]
         self._save_json(

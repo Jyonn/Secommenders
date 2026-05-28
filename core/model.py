@@ -54,6 +54,9 @@ class SequentialRecModel(nn.Module):
         self.sid_embedding = nn.Embedding(max(compiled.sid_vocab_size, 1), input_embed_dim)
         self.embedding_projection = None
         self.embedding_head = None
+        self.uid_head = None
+        self.sid_head = None
+        self.model_token_head = None
 
         if compiled.embedding_matrix is not None:
             self.register_buffer('embedding_matrix', compiled.embedding_matrix)
@@ -61,18 +64,20 @@ class SequentialRecModel(nn.Module):
         else:
             self.register_buffer('embedding_matrix', torch.empty(0))
 
-        if config.task_type == 'uid':
-            self.target_head = nn.Linear(hidden_size, compiled.num_items)
-        elif config.task_type == 'sid':
+        supervised_repr_types = set(config.compile_config.repr_types)
+        if 'uid' in supervised_repr_types or config.task_type == 'uid':
+            self.uid_head = nn.Linear(hidden_size, compiled.num_items)
+        if 'sid' in supervised_repr_types or config.task_type == 'sid':
             if not compiled.sid_vocab_size or not compiled.sid_num_quantizers:
                 raise ValueError('sid task requires sid vocab metadata in compiled artifacts')
-            self.target_head = nn.Linear(hidden_size, compiled.sid_vocab_size)
-        elif config.task_type == 'embedding':
+            self.sid_head = nn.Linear(hidden_size, compiled.sid_vocab_size)
+        if 'text' in supervised_repr_types:
+            self.model_token_head = nn.Linear(hidden_size, input_embed_dim, bias=False)
+        if 'embedding' in supervised_repr_types or config.task_type == 'embedding':
             if compiled.embedding_matrix is None:
-                raise ValueError('embedding task requires compiled embedding view and source matrix')
+                raise ValueError('embedding supervision requires compiled embedding view and source matrix')
             self.embedding_head = nn.Linear(hidden_size, compiled.embedding_matrix.shape[1], bias=False)
-            self.target_head = None
-        else:
+        if config.task_type not in {'uid', 'sid', 'embedding'}:
             raise ValueError(f'Unsupported task type: {config.task_type}')
 
         self.compute_dtype = getattr(self.encoder, 'compute_dtype', torch.float32)
@@ -83,8 +88,12 @@ class SequentialRecModel(nn.Module):
             self.embedding_projection.to(dtype=self.compute_dtype)
         if self.embedding_head is not None:
             self.embedding_head.to(dtype=self.compute_dtype)
-        if self.target_head is not None:
-            self.target_head.to(dtype=self.compute_dtype)
+        if self.uid_head is not None:
+            self.uid_head.to(dtype=self.compute_dtype)
+        if self.sid_head is not None:
+            self.sid_head.to(dtype=self.compute_dtype)
+        if self.model_token_head is not None:
+            self.model_token_head.to(dtype=self.compute_dtype)
 
     @property
     def device(self):
@@ -180,6 +189,23 @@ class SequentialRecModel(nn.Module):
             return uid_embed + content_embed
         raise ValueError(f'Unknown spec kind: {kind}')
 
+    def _text_logits(self, hidden_states: torch.Tensor):
+        if self.model_token_head is None:
+            raise ValueError('text supervision requested but model_token_head is not initialized')
+        projected = self.model_token_head(hidden_states)
+        token_table = self.encoder.get_input_embedding_weight().to(dtype=self.compute_dtype)
+        return projected.float() @ token_table.float().T
+
+    def _uid_logits(self, hidden_states: torch.Tensor):
+        if self.uid_head is None:
+            raise ValueError('uid supervision requested but uid_head is not initialized')
+        return self.uid_head(hidden_states)
+
+    def _sid_logits(self, hidden_states: torch.Tensor):
+        if self.sid_head is None:
+            raise ValueError('sid supervision requested but sid_head is not initialized')
+        return self.sid_head(hidden_states)
+
     def _build_batch_inputs(self, batch):
         sample_embeddings = []
         for sample in batch:
@@ -222,7 +248,7 @@ class SequentialRecModel(nn.Module):
         inputs_embeds, attention_mask, lengths = self._build_sid_generation_batch_inputs(sample, sid_prefixes)
         hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
         pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
-        return self.target_head(pooled)
+        return self._sid_logits(pooled)
 
     def _pick_sid_item(self, sid_sequence: tuple[int, ...]):
         candidates = self.compiled.sid_sequence_to_items.get(sid_sequence, [])
@@ -368,118 +394,85 @@ class SequentialRecModel(nn.Module):
     def _target_embedding_index(self, target_uid: int):
         return int(self.compiled.item_views['embedding'][target_uid])
 
+    def _repr_payload_labels(self, repr_type: str, uid: int):
+        if repr_type == 'uid':
+            return [int(self.compiled.item_views['uid'][uid])]
+        if repr_type == 'sid':
+            return [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
+        if repr_type == 'text':
+            return [int(token_id) for token_id in function.to_list(self.compiled.item_views['text'][uid])]
+        if repr_type == 'embedding':
+            return [self._target_embedding_index(uid)]
+        raise ValueError(f'Unsupported repr type for supervision: {repr_type}')
+
+    def _build_repr_supervision(self, repr_type: str, uid: int, marker_position: int, payload_positions: list[int], group: str):
+        labels = self._repr_payload_labels(repr_type, uid)
+        if not labels:
+            return []
+        if repr_type == 'embedding':
+            return [{'kind': 'embedding', 'position': int(marker_position), 'label': int(labels[0]), 'group': group}]
+        anchor_positions = [int(marker_position)] + [int(position) for position in payload_positions[:-1]]
+        return [
+            {'kind': repr_type, 'position': anchor_position, 'label': int(label), 'group': group}
+            for anchor_position, label in zip(anchor_positions, labels)
+        ]
+
     def _build_finetune_sample_inputs(self, sample):
-        prefix_ids = [int(token_id) for token_id in self.compiled.prompt_main['history_prefix_ids']]
         separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
-        query_ids = [int(token_id) for token_id in self.compiled.prompt_main['query_prefix_ids']]
         sequence_uids = sample['sequence_uids']
-        history_uids = sequence_uids[:-1]
-        target_uids = sequence_uids[1:]
-
         embeddings = []
-        position_ids = []
-        history_block_ends = []
+        supervision = []
 
-        def append_embedded(tensor: torch.Tensor, positions: list[int]):
+        def append_embedded(tensor: torch.Tensor):
             start = sum(piece.shape[0] for piece in embeddings)
             embeddings.append(tensor)
-            position_ids.extend(positions)
             return start, start + tensor.shape[0] - 1
 
-        append_embedded(
-            self._embed_spec('model_tokens', prefix_ids),
-            list(range(len(prefix_ids))),
-        )
-        logical_cursor = len(prefix_ids)
-        history_region_end = len(prefix_ids) - 1
+        for item_index, uid in enumerate(sequence_uids):
+            if item_index > 0 and separator_ids:
+                append_embedded(self._embed_spec('model_tokens', separator_ids))
 
-        for index, uid in enumerate(history_uids):
-            block_specs = []
-            if index > 0 and separator_ids:
-                block_specs.append(('model_tokens', separator_ids))
-            block_specs.extend(self._render_history_item(uid))
+            include_alignment_repr = item_index < len(sequence_uids) - 1
+            repr_types = [self.config.task_type]
+            if include_alignment_repr:
+                repr_types.extend([repr_type for repr_type in self.config.compile_config.repr_types[1:]])
 
-            for kind, value in block_specs:
-                piece = self._embed_spec(kind, value)
-                piece_len = piece.shape[0]
-                positions = list(range(logical_cursor, logical_cursor + piece_len))
-                _, block_end = append_embedded(piece, positions)
-                logical_cursor += piece_len
-                history_region_end = block_end
-            history_block_ends.append(history_region_end)
+            for repr_type in repr_types:
+                segment_specs = self._render_single_view_item(uid, repr_type)
+                marker_position = None
+                payload_positions = []
+                for kind, value in segment_specs:
+                    start, end = append_embedded(self._embed_spec(kind, value))
+                    if kind == 'type_marker':
+                        marker_position = start
+                    else:
+                        payload_positions.extend(range(start, end + 1))
 
-        prediction_blocks = []
-        target_positions = []
-        target_labels = []
-        target_slots = []
-
-        for target_index, target_uid in enumerate(target_uids):
-            query_base = history_block_ends[target_index] + 1
-            block_start = sum(piece.shape[0] for piece in embeddings)
-            query_piece = self._embed_spec('model_tokens', query_ids)
-            query_start, query_end = append_embedded(query_piece, list(range(query_base, query_base + len(query_ids))))
-            marker_piece = self._embed_spec('type_marker', self.config.task_type)
-            marker_start, marker_end = append_embedded(marker_piece, [query_base + len(query_ids)])
-
-            if self.config.task_type == 'embedding':
-                target_start, target_end = marker_start, marker_end
-                target_positions.append(marker_end)
-                target_labels.append(self._target_embedding_index(target_uid))
-            else:
-                token_values = self._target_token_values(target_uid)
-                target_kind = 'uid' if self.config.task_type == 'uid' else 'sid'
-                target_value = token_values[0] if target_kind == 'uid' else token_values
-                target_start, target_end = append_embedded(
-                    self._embed_spec(target_kind, target_value),
-                    list(range(query_base + len(query_ids) + 1, query_base + len(query_ids) + 1 + len(token_values))),
-                )
-                if self.config.task_type == 'uid':
-                    target_positions.append(marker_end)
-                    target_labels.append(int(token_values[0]))
-                else:
-                    target_positions.append(marker_end)
-                    target_labels.append(int(token_values[0]))
-                    target_slots.append(0)
-                    for slot_index, label in enumerate(token_values[1:], start=1):
-                        target_positions.append(target_start + slot_index - 1)
-                        target_labels.append(int(label))
-                        target_slots.append(slot_index)
-
-            prediction_blocks.append((block_start, target_end, history_block_ends[target_index]))
+                if repr_type == self.config.task_type and item_index > 0:
+                    supervision.extend(
+                        self._build_repr_supervision(
+                            repr_type=repr_type,
+                            uid=uid,
+                            marker_position=marker_position,
+                            payload_positions=payload_positions,
+                            group='primary',
+                        )
+                    )
+                elif repr_type != self.config.task_type and self.config.alignment_enable and include_alignment_repr:
+                    supervision.extend(
+                        self._build_repr_supervision(
+                            repr_type=repr_type,
+                            uid=uid,
+                            marker_position=marker_position,
+                            payload_positions=payload_positions,
+                            group='alignment',
+                        )
+                    )
 
         sample_embeddings = torch.cat(embeddings, dim=0)
-        position_ids = torch.tensor(position_ids, dtype=torch.long, device=self.device)
-        seq_len = sample_embeddings.shape[0]
-        loss_mask = torch.zeros(seq_len, dtype=torch.bool, device=self.device)
-        if target_positions:
-            loss_mask[torch.tensor(target_positions, dtype=torch.long, device=self.device)] = True
-        min_dtype = torch.finfo(self.compute_dtype).min
-        attention_mask = torch.full((seq_len, seq_len), fill_value=min_dtype, dtype=self.compute_dtype, device=self.device)
-
-        if history_region_end >= 0:
-            history_mask = torch.triu(
-                torch.full((history_region_end + 1, history_region_end + 1), fill_value=min_dtype, dtype=self.compute_dtype, device=self.device),
-                diagonal=1,
-            )
-            attention_mask[:history_region_end + 1, :history_region_end + 1] = history_mask
-
-        for block_start, block_end, visible_history_end in prediction_blocks:
-            if visible_history_end >= 0:
-                attention_mask[block_start:block_end + 1, :visible_history_end + 1] = 0
-            block_len = block_end - block_start + 1
-            attention_mask[block_start:block_end + 1, block_start:block_end + 1] = torch.triu(
-                torch.full((block_len, block_len), fill_value=min_dtype, dtype=self.compute_dtype, device=self.device),
-                diagonal=1,
-            )
-
         return {
             'inputs_embeds': sample_embeddings,
-            'position_ids': position_ids,
-            'attention_mask': attention_mask,
-            'loss_mask': loss_mask,
-            'target_positions': target_positions,
-            'target_labels': target_labels,
-            'target_slots': target_slots,
+            'supervision': supervision,
         }
 
     def _build_finetune_batch_inputs(self, batch):
@@ -488,38 +481,35 @@ class SequentialRecModel(nn.Module):
         batch_size = len(packed_samples)
         hidden_size = packed_samples[0]['inputs_embeds'].shape[-1]
         padded_embeds = torch.zeros((batch_size, max_len, hidden_size), dtype=self.compute_dtype, device=self.device)
-        padded_position_ids = torch.zeros((batch_size, max_len), dtype=torch.long, device=self.device)
-        min_dtype = torch.finfo(self.compute_dtype).min
-        padded_attention_mask = torch.full(
-            (batch_size, 1, max_len, max_len),
-            fill_value=min_dtype,
-            dtype=self.compute_dtype,
-            device=self.device,
-        )
-        padded_loss_mask = torch.zeros((batch_size, max_len), dtype=torch.bool, device=self.device)
-
-        target_labels = []
-        target_slots = []
+        lengths = torch.tensor([sample['inputs_embeds'].shape[0] for sample in packed_samples], dtype=torch.long, device=self.device)
+        attention_mask = torch.arange(max_len, device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
+        supervision_batch_indices = []
+        supervision_positions = []
+        supervision_kinds = []
+        supervision_labels = []
+        supervision_groups = []
 
         for batch_index, sample in enumerate(packed_samples):
             seq_len = sample['inputs_embeds'].shape[0]
             padded_embeds[batch_index, :seq_len] = sample['inputs_embeds']
-            padded_position_ids[batch_index, :seq_len] = sample['position_ids']
-            padded_attention_mask[batch_index, 0, :seq_len, :seq_len] = sample['attention_mask']
-            padded_loss_mask[batch_index, :seq_len] = sample['loss_mask']
-            for pad_pos in range(seq_len, max_len):
-                padded_attention_mask[batch_index, 0, pad_pos, pad_pos] = 0
-
-            target_labels.extend(sample['target_labels'])
-            target_slots.extend(sample['target_slots'])
+            for entry in sample['supervision']:
+                supervision_batch_indices.append(batch_index)
+                supervision_positions.append(int(entry['position']))
+                supervision_kinds.append(entry['kind'])
+                supervision_labels.append(int(entry['label']))
+                supervision_groups.append(entry['group'])
 
         return (
             padded_embeds,
-            padded_attention_mask,
-            padded_position_ids,
-            padded_loss_mask,
-            torch.tensor(target_labels, dtype=torch.long, device=self.device),
-            torch.tensor(target_slots, dtype=torch.long, device=self.device),
+            attention_mask.long(),
+            lengths,
+            {
+                'batch_indices': torch.tensor(supervision_batch_indices, dtype=torch.long, device=self.device),
+                'positions': torch.tensor(supervision_positions, dtype=torch.long, device=self.device),
+                'kinds': supervision_kinds,
+                'labels': torch.tensor(supervision_labels, dtype=torch.long, device=self.device),
+                'groups': supervision_groups,
+            },
         )
 
     def _build_alignment_sample_inputs(self, sample, source_view: str):
@@ -627,7 +617,7 @@ class SequentialRecModel(nn.Module):
         )
 
     def _compute_uid_loss(self, pooled: torch.Tensor, batch):
-        logits = self.target_head(pooled)
+        logits = self._uid_logits(pooled)
         labels = torch.tensor([sample['target_uid'] for sample in batch], dtype=torch.long, device=self.device)
         loss = F.cross_entropy(logits.float(), labels)
         accuracy = (logits.argmax(dim=-1) == labels).float().mean()
@@ -654,6 +644,73 @@ class SequentialRecModel(nn.Module):
             'embedding_acc': accuracy.item(),
         }
 
+    def _compute_mixed_supervision_loss(self, selected_hidden: torch.Tensor, supervision: dict):
+        kinds = supervision['kinds']
+        labels = supervision['labels']
+        groups = supervision['groups']
+        primary_losses = []
+        alignment_losses = []
+        metrics = {}
+
+        for kind in ['uid', 'sid', 'text', 'embedding']:
+            mask_indices = [index for index, entry_kind in enumerate(kinds) if entry_kind == kind]
+            if not mask_indices:
+                continue
+            index_tensor = torch.tensor(mask_indices, dtype=torch.long, device=self.device)
+            kind_hidden = selected_hidden[index_tensor]
+            kind_labels = labels[index_tensor]
+            group_mask = [groups[index] for index in mask_indices]
+
+            if kind == 'uid':
+                logits = self._uid_logits(kind_hidden)
+                losses = F.cross_entropy(logits.float(), kind_labels, reduction='none')
+                predictions = logits.argmax(dim=-1)
+                accuracy = (predictions == kind_labels).float().mean().item()
+                metrics['uid_acc'] = accuracy
+            elif kind == 'sid':
+                logits = self._sid_logits(kind_hidden)
+                losses = F.cross_entropy(logits.float(), kind_labels, reduction='none')
+                predictions = logits.argmax(dim=-1)
+                accuracy = (predictions == kind_labels).float().mean().item()
+                metrics['sid_token_acc'] = accuracy
+            elif kind == 'text':
+                logits = self._text_logits(kind_hidden)
+                losses = F.cross_entropy(logits, kind_labels, reduction='none')
+                predictions = logits.argmax(dim=-1)
+                accuracy = (predictions == kind_labels).float().mean().item()
+                metrics['text_token_acc'] = accuracy
+            else:
+                predictions = self.embedding_head(kind_hidden)
+                targets = self.embedding_matrix[kind_labels].to(dtype=self.compute_dtype)
+                norm_predictions = F.normalize(predictions.float(), dim=-1)
+                norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
+                logits = norm_predictions @ norm_table.T
+                losses = F.cross_entropy(logits, kind_labels, reduction='none')
+                accuracy = (logits.argmax(dim=-1) == kind_labels).float().mean().item()
+                cosine = F.cosine_similarity(predictions.float(), targets.float(), dim=-1).mean().item()
+                metrics['embedding_acc'] = accuracy
+                metrics['embedding_cosine'] = cosine
+
+            for local_index, loss_value in enumerate(losses):
+                if group_mask[local_index] == 'primary':
+                    primary_losses.append(loss_value)
+                else:
+                    alignment_losses.append(loss_value)
+
+        if not primary_losses:
+            raise RuntimeError('no primary supervision entries were constructed for finetune batch')
+
+        primary_loss = torch.stack(primary_losses).mean()
+        if alignment_losses:
+            alignment_loss = torch.stack(alignment_losses).mean()
+            total_loss = primary_loss + self.config.alignment_weight * alignment_loss
+            metrics['alignment_loss'] = float(alignment_loss.item())
+        else:
+            alignment_loss = None
+            total_loss = primary_loss
+        metrics['primary_loss'] = float(primary_loss.item())
+        return total_loss, metrics, primary_loss, alignment_loss
+
     def forward_next_item_batch(self, batch):
         inputs_embeds, attention_mask, lengths = self._build_batch_inputs(batch)
         hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
@@ -662,7 +719,7 @@ class SequentialRecModel(nn.Module):
         if self.config.task_type == 'uid':
             loss, metrics = self._compute_uid_loss(pooled, batch)
             labels = torch.tensor([sample['target_uid'] for sample in batch], dtype=torch.long, device=self.device)
-            logits = self.target_head(pooled)
+            logits = self._uid_logits(pooled)
             metrics.update(self._compute_ranking_metrics_from_logits(logits, labels))
             return loss, metrics
         if self.config.task_type == 'sid':
@@ -686,47 +743,17 @@ class SequentialRecModel(nn.Module):
         (
             inputs_embeds,
             attention_mask,
-            position_ids,
-            loss_mask,
-            target_labels,
-            target_slots,
+            lengths,
+            supervision,
         ) = self._build_finetune_batch_inputs(batch)
 
         hidden = self.encoder(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
-            position_ids=position_ids,
         )
-        selected_hidden = hidden[loss_mask]
-
-        if self.config.task_type == 'uid':
-            logits = self.target_head(selected_hidden)
-            loss = F.cross_entropy(logits.float(), target_labels)
-            accuracy = (logits.argmax(dim=-1) == target_labels).float().mean()
-            return loss, {
-                'uid_acc': accuracy.item(),
-            }
-
-        if self.config.task_type == 'embedding':
-            predictions = self.embedding_head(selected_hidden)
-            targets = self.embedding_matrix[target_labels].to(dtype=self.compute_dtype)
-            norm_predictions = F.normalize(predictions.float(), dim=-1)
-            norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
-            logits = norm_predictions @ norm_table.T
-            loss = F.cross_entropy(logits, target_labels)
-            cosine = F.cosine_similarity(predictions.float(), targets.float(), dim=-1).mean()
-            accuracy = (logits.argmax(dim=-1) == target_labels).float().mean()
-            return loss, {
-                'embedding_cosine': cosine.item(),
-                'embedding_acc': accuracy.item(),
-            }
-
-        logits = self.target_head(selected_hidden)
-        loss = F.cross_entropy(logits.float(), target_labels)
-        token_acc = (logits.argmax(dim=-1) == target_labels).float().mean()
-        return loss, {
-            'sid_token_acc': token_acc.item(),
-        }
+        selected_hidden = hidden[supervision['batch_indices'], supervision['positions']]
+        loss, metrics, primary_loss, alignment_loss = self._compute_mixed_supervision_loss(selected_hidden, supervision)
+        return loss, metrics
 
     def forward_alignment_batch(self, batch, source_view: str):
         (
@@ -746,7 +773,7 @@ class SequentialRecModel(nn.Module):
         selected_hidden = hidden[loss_mask]
 
         if self.config.task_type == 'uid':
-            logits = self.target_head(selected_hidden)
+            logits = self._uid_logits(selected_hidden)
             loss = F.cross_entropy(logits.float(), target_labels)
             accuracy = (logits.argmax(dim=-1) == target_labels).float().mean()
             return loss, {
@@ -767,7 +794,7 @@ class SequentialRecModel(nn.Module):
                 'embedding_acc': accuracy.item(),
             }
 
-        logits = self.target_head(selected_hidden)
+        logits = self._sid_logits(selected_hidden)
         loss = F.cross_entropy(logits.float(), target_labels)
         token_acc = (logits.argmax(dim=-1) == target_labels).float().mean()
         return loss, {
