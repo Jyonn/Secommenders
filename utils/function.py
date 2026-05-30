@@ -130,6 +130,86 @@ def format_torch_dtype(dtype):
     return str(dtype).replace('torch.', '')
 
 
+def normalize_optional_string(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == 'null':
+        return None
+    return text
+
+
+def normalize_lora_layers(value):
+    text = normalize_optional_string(value)
+    if text is None:
+        return None
+    return re.sub(r'\s+', '', text)
+
+
+def resolve_hidden_layer_count(config):
+    for attr in ('num_hidden_layers', 'n_layer', 'num_layers', 'n_layers'):
+        value = getattr(config, attr, None)
+        if value is not None:
+            return int(value)
+    decoder = getattr(config, 'decoder', None)
+    if decoder is not None:
+        for attr in ('num_hidden_layers', 'n_layer', 'num_layers', 'n_layers'):
+            value = getattr(decoder, attr, None)
+            if value is not None:
+                return int(value)
+    return None
+
+
+def parse_layer_selection(spec, total_layers: int):
+    normalized = normalize_lora_layers(spec)
+    if normalized is None:
+        return None
+    if total_layers <= 0:
+        raise ValueError('total_layers must be positive when parsing layer selection')
+
+    chunks = normalized
+    if chunks.startswith('[') and chunks.endswith(']'):
+        chunks = chunks[1:-1]
+    items = [item for item in chunks.split(',') if item]
+    if not items:
+        raise ValueError(f'Invalid LoRA layer selection: {spec}')
+
+    selected = set()
+    for item in items:
+        if ':' in item:
+            start_text, end_text = item.split(':', 1)
+            start = int(start_text) if start_text else None
+            end = int(end_text) if end_text else None
+            layer_range = range(total_layers)[slice(start, end)]
+            selected.update(layer_range)
+            continue
+        index = int(item)
+        if index < 0:
+            index += total_layers
+        if index < 0 or index >= total_layers:
+            raise ValueError(f'Layer index out of range in LoRA layer selection: {item}')
+        selected.add(index)
+
+    if not selected:
+        raise ValueError(f'LoRA layer selection {spec} resolved to no layers')
+    return selected
+
+
+_LAYER_INDEX_PATTERNS = [
+    re.compile(r'(?:^|\.)layers\.(\d+)(?:\.|$)'),
+    re.compile(r'(?:^|\.)h\.(\d+)(?:\.|$)'),
+    re.compile(r'(?:^|\.)blocks?\.(\d+)(?:\.|$)'),
+]
+
+
+def extract_layer_index(parameter_name: str):
+    for pattern in _LAYER_INDEX_PATTERNS:
+        match = pattern.search(parameter_name)
+        if match:
+            return int(match.group(1))
+    return None
+
+
 def summarize_trainable_parameters(named_parameters):
     entries = []
     pattern = re.compile(r'\.(\d+)(?=\.|$)')

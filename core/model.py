@@ -34,6 +34,7 @@ class SequentialRecModel(nn.Module):
                 lora_rank=config.lora_rank,
                 lora_alpha=config.lora_alpha,
                 lora_dropout=config.lora_dropout,
+                lora_layers=config.lora_layers,
                 lora_target_modules=config.lora_target_modules,
                 model_dtype=config.model_dtype,
             )

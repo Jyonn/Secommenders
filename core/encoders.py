@@ -16,6 +16,7 @@ class LLMSequenceEncoder(nn.Module):
             lora_rank: int,
             lora_alpha: int,
             lora_dropout: float,
+            lora_layers: str | None,
             lora_target_modules: str,
             model_dtype: str,
     ):
@@ -39,6 +40,7 @@ class LLMSequenceEncoder(nn.Module):
         self.use_lora = use_lora
         self.model_dtype = torch_dtype or next(base_model.parameters()).dtype
         self.compute_dtype = self.model_dtype
+        self.total_hidden_layers = function.resolve_hidden_layer_count(base_model.config)
 
         if self.use_lora:
             target_modules = 'all-linear' if lora_target_modules == 'all-linear' else [
@@ -55,13 +57,38 @@ class LLMSequenceEncoder(nn.Module):
                     target_modules=target_modules,
                 ),
             )
+            if lora_layers and self.total_hidden_layers is None:
+                raise ValueError(f'Cannot resolve hidden layer count for model {model_key}; unable to apply LoRA layer selection {lora_layers}')
+            selected_layers = function.parse_layer_selection(lora_layers, self.total_hidden_layers) if lora_layers else None
+            if selected_layers is not None:
+                kept_trainable = 0
+                kept_layers = set()
+                for name, param in self.model.named_parameters():
+                    if not param.requires_grad:
+                        continue
+                    layer_index = function.extract_layer_index(name)
+                    if layer_index is None or layer_index not in selected_layers:
+                        param.requires_grad = False
+                        continue
+                    kept_trainable += param.numel()
+                    kept_layers.add(layer_index)
+                if not kept_layers:
+                    raise ValueError(
+                        f'LoRA layer selection {lora_layers} did not match any trainable adapter parameters '
+                        f'for model {model_key}'
+                    )
+                pnt(
+                    f'filtered LoRA trainable layers={sorted(kept_layers)} '
+                    f'from spec={lora_layers} kept_params={kept_trainable:,}'
+                )
             trainable_params = sum(param.numel() for param in self.model.parameters() if param.requires_grad)
             total_params = sum(param.numel() for param in self.model.parameters())
             pnt(
                 f'initialized LoRA for {model_key} '
                 f'trainable={trainable_params:,}/{total_params:,} '
                 f'r={lora_rank} alpha={lora_alpha} dropout={lora_dropout:g} '
-                f'targets={lora_target_modules} dtype={function.format_torch_dtype(self.model_dtype)}'
+                f'targets={lora_target_modules} layers={lora_layers or "all"} '
+                f'dtype={function.format_torch_dtype(self.model_dtype)}'
             )
         else:
             self.model = base_model

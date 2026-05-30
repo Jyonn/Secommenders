@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from utils import function
 from utils import model as model_utils
 from utils.compile import CompileConfig, canonicalize_repr_type, compact_float, normalize_model_name, short_config_hash
 
@@ -36,6 +37,7 @@ class TrainConfig:
     lora_rank: int
     lora_alpha: int
     lora_dropout: float
+    lora_layers: Optional[str]
     lora_target_modules: str
     hidden_size: int
     num_layers: int
@@ -93,6 +95,7 @@ class TrainConfig:
             lora_rank=int(lora.rank),
             lora_alpha=int(lora.alpha),
             lora_dropout=float(lora.dropout),
+            lora_layers=function.normalize_lora_layers(getattr(lora, 'layers', None)),
             lora_target_modules='all-linear',
             hidden_size=int(scratch.hidden_size),
             num_layers=int(scratch.num_layers),
@@ -143,5 +146,7 @@ class TrainConfig:
                     f'd{compact_float(self.lora_dropout)}',
                 ]
             )
+            if self.lora_layers:
+                parts.append(f'ly{self.lora_layers}')
         parts.append(f'h{short_config_hash(self.__dict__)}')
         return '__'.join(parts)

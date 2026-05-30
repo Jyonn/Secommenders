@@ -17,6 +17,7 @@ model:
     rank: ${lora_rank:8}$
     alpha: ${lora_alpha:32}$
     dropout: ${lora_dropout:0.05}$
+    layers: ${lora_layers:null}$
   config:
     hidden_size: ${hidden_size:256}$
     num_layers: ${num_layers:4}$
