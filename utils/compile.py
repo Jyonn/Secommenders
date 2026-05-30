@@ -35,6 +35,10 @@ def short_config_hash(payload: dict, length: int = 8):
     return hashlib.sha256(serialized.encode('utf-8')).hexdigest()[:length]
 
 
+def compact_float(value):
+    return f'{float(value):g}'
+
+
 @dataclass
 class CompileConfig:
     data: str
@@ -67,18 +71,20 @@ class CompileConfig:
         uses_sid = 'sid' in used_views
         uses_embedding = 'embedding' in used_views
         parts = [
-            f'model-{self.model}',
-            f'repr-{self.repr_type}',
-            f'combine-{self.repr_combine}',
-            f'task-{self.task_type}',
-            f'maxitems-{"auto" if self.maxitems == 0 else self.maxitems}',
-            f'textlen-{self.item_text_max_tokens}',
+            self.model,
+            f'{self.repr_type}2{self.task_type}',
         ]
+        if self.repr_combine != 'concat':
+            parts.append(self.repr_combine)
+        if self.maxitems != 0:
+            parts.append(f'mi{self.maxitems}')
+        if self.item_text_max_tokens != 50:
+            parts.append(f'tl{self.item_text_max_tokens}')
         if self.repr_model and (uses_sid or uses_embedding):
-            parts.append(f'reprmodel-{self.repr_model}')
+            parts.append(f'rm-{self.repr_model}')
         if self.repr_best and uses_sid:
-            parts.append(f'reprbest-{self.repr_best}')
-        parts.append(f'h-{short_config_hash(self.config_dict)}')
+            parts.append(f'rb-{self.repr_best}')
+        parts.append(f'h{short_config_hash(self.config_dict)}')
         return '__'.join(parts)
 
     @property

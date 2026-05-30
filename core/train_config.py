@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from utils.compile import CompileConfig, canonicalize_repr_type, normalize_model_name, short_config_hash
+from utils import model as model_utils
+from utils.compile import CompileConfig, canonicalize_repr_type, compact_float, normalize_model_name, short_config_hash
 
 
 @dataclass
@@ -116,26 +117,28 @@ class TrainConfig:
 
     @property
     def run_id(self):
+        is_llm = model_utils.match(self.model) is not None
         parts = [
             self.compile_config.prepare_id,
-            f'bs-{self.batch_size}',
-            f'lr-{self.learning_rate:g}',
-            f'wd-{self.weight_decay:g}',
-            f'freeze-{self.freeze_backbone}',
-            f'lora-{self.use_lora}',
-            f'align-{int(self.alignment_enable)}',
+            f'bs{self.batch_size}',
+            f'lr{compact_float(self.learning_rate)}',
+            f'wd{compact_float(self.weight_decay)}',
         ]
+        if self.freeze_backbone != 'auto':
+            parts.append(f'fr-{self.freeze_backbone}')
+        if self.use_lora != 'auto':
+            parts.append(f'lo-{self.use_lora}')
         if self.alignment_enable:
-            parts.append(f'alignw-{self.alignment_weight:g}')
-        if self.task_type == 'sid':
-            parts.append(f'beam-{self.sid_beam_width}')
-        if self.model != 'transformer':
+            parts.append(f'al{compact_float(self.alignment_weight)}')
+        if self.task_type == 'sid' and self.sid_beam_width != 20:
+            parts.append(f'bm{self.sid_beam_width}')
+        if is_llm:
             parts.extend(
                 [
-                    f'r-{self.lora_rank}',
-                    f'a-{self.lora_alpha}',
-                    f'drop-{self.lora_dropout:g}',
+                    f'r{self.lora_rank}',
+                    f'a{self.lora_alpha}',
+                    f'd{compact_float(self.lora_dropout)}',
                 ]
             )
-        parts.append(f'h-{short_config_hash(self.__dict__)}')
+        parts.append(f'h{short_config_hash(self.__dict__)}')
         return '__'.join(parts)
