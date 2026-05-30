@@ -256,7 +256,13 @@ class Compiler:
 
     def validate(self):
         repr_types = self.config.repr_types
-        is_scratch_model = model_utils.match(self.config.model) is None
+        model_name = str(self.config.model).strip().lower()
+        is_scratch_model = model_name == 'scratch'
+        if not is_scratch_model and model_utils.match(model_name) is None:
+            raise ValueError(
+                f'Unknown model "{self.config.model}". '
+                f'Use "scratch" for the scratch backbone or add the model alias to .model'
+            )
         if not repr_types:
             raise ValueError('repr.type must contain at least one representation')
         if len(set(repr_types)) != len(repr_types):
