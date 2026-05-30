@@ -13,7 +13,7 @@ quantizer:
     dead_code_threshold: 0
     num_quantizers: ${num_quantizers:3}$
     assignment_strategy: sinkhorn
-    sinkhorn_epsilon: [0.0, 0.0, 0.0, 0.003]
+    sinkhorn_epsilon: [0.0, 0.0, 0.003]
     sinkhorn_iters: 50
     kmeans_init: true
     kmeans_iters: 100
