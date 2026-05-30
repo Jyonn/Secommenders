@@ -119,11 +119,14 @@ class TrainConfig:
     def run_id(self):
         is_llm = model_utils.match(self.model) is not None
         parts = [
-            self.compile_config.prepare_id,
+            self.model,
+            f'{self.repr_type}2{self.task_type}',
             f'bs{self.batch_size}',
             f'lr{compact_float(self.learning_rate)}',
             f'wd{compact_float(self.weight_decay)}',
         ]
+        if self.repr_combine != 'concat':
+            parts.append(self.repr_combine)
         if self.freeze_backbone != 'auto':
             parts.append(f'fr-{self.freeze_backbone}')
         if self.use_lora != 'auto':

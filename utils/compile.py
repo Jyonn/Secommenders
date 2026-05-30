@@ -66,7 +66,7 @@ class CompileConfig:
         return [part.strip().lower() for part in self.repr_type.split('+') if part.strip()]
 
     @property
-    def prepare_id(self):
+    def sign_parts(self):
         used_views = set(self.repr_types + [self.task_type])
         uses_sid = 'sid' in used_views
         uses_embedding = 'embedding' in used_views
@@ -80,11 +80,17 @@ class CompileConfig:
             parts.append(f'mi{self.maxitems}')
         if self.item_text_max_tokens != 50:
             parts.append(f'tl{self.item_text_max_tokens}')
+        if self.model_max_length:
+            parts.append(f'ml{self.model_max_length}')
         if self.repr_model and (uses_sid or uses_embedding):
             parts.append(f'rm-{self.repr_model}')
         if self.repr_best and uses_sid:
             parts.append(f'rb-{self.repr_best}')
-        parts.append(f'h{short_config_hash(self.config_dict)}')
+        return parts
+
+    @property
+    def prepare_id(self):
+        parts = self.sign_parts.copy()
         return '__'.join(parts)
 
     @property
