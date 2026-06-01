@@ -32,6 +32,7 @@ class TrainConfig:
     alignment_enable: bool
     alignment_weight: float
     sid_beam_width: int
+    sid_collision_loss_weight: float
     model_dtype: str
     use_lora: str
     lora_rank: int
@@ -90,6 +91,7 @@ class TrainConfig:
             alignment_enable=alignment_enable,
             alignment_weight=float(alignment.weight),
             sid_beam_width=int(getattr(trainer, 'sid_beam_width', 20)),
+            sid_collision_loss_weight=float(getattr(trainer, 'sid_collision_loss_weight', 0.1)),
             model_dtype=str(model.dtype).lower(),
             use_lora=str(lora.use).lower(),
             lora_rank=int(lora.rank),
@@ -138,6 +140,8 @@ class TrainConfig:
             parts.append(f'al{compact_float(self.alignment_weight)}')
         if self.task_type == 'sid' and self.sid_beam_width != 20:
             parts.append(f'bm{self.sid_beam_width}')
+        if self.task_type == 'sid' and self.sid_collision_loss_weight != 0.1:
+            parts.append(f'scw{compact_float(self.sid_collision_loss_weight)}')
         if is_llm:
             parts.extend(
                 [

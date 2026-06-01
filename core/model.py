@@ -13,8 +13,6 @@ from .encoders import LLMSequenceEncoder, ScratchSequenceEncoder
 
 
 class SequentialRecModel(nn.Module):
-    SID_COLLISION_LOSS_WEIGHT = 0.1
-
     def __init__(self, compiled, config):
         super().__init__()
         self.compiled = compiled
@@ -84,6 +82,7 @@ class SequentialRecModel(nn.Module):
             raise ValueError(f'Unsupported task type: {config.task_type}')
 
         self.compute_dtype = getattr(self.encoder, 'compute_dtype', torch.float32)
+        self.sid_collision_loss_weight = float(getattr(config, 'sid_collision_loss_weight', 0.1))
         self.type_marker_embedding.to(dtype=self.compute_dtype)
         self.uid_embedding.to(dtype=self.compute_dtype)
         self.sid_embedding.to(dtype=self.compute_dtype)
@@ -244,7 +243,7 @@ class SequentialRecModel(nn.Module):
         weights = torch.ones(slot_indices.shape[0], dtype=torch.float32, device=slot_indices.device)
         collision_mask = slot_indices >= base_num_quantizers
         if collision_mask.any():
-            weights[collision_mask] = self.SID_COLLISION_LOSS_WEIGHT
+            weights[collision_mask] = self.sid_collision_loss_weight
         return weights
 
     def _build_batch_inputs(self, batch):
