@@ -13,6 +13,8 @@ from .encoders import LLMSequenceEncoder, ScratchSequenceEncoder
 
 
 class SequentialRecModel(nn.Module):
+    SID_COLLISION_LOSS_WEIGHT = 0.1
+
     def __init__(self, compiled, config):
         super().__init__()
         self.compiled = compiled
@@ -207,6 +209,44 @@ class SequentialRecModel(nn.Module):
             raise ValueError('sid supervision requested but sid_head is not initialized')
         return self.sid_head(hidden_states)
 
+    def _sid_slot_allowed_codes(self, slot_index: int):
+        base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
+        codebook_size = int(self.compiled.sid_codebook_size or 0)
+        collision_offset = int(self.compiled.sid_collision_token_offset or 0)
+        collision_vocab_size = int(self.compiled.sid_collision_vocab_size or 0)
+
+        if slot_index < 0:
+            raise ValueError(f'Invalid sid slot index: {slot_index}')
+        if slot_index < base_num_quantizers:
+            start = slot_index * codebook_size
+            return list(range(start, start + codebook_size))
+        if slot_index == base_num_quantizers:
+            return list(range(collision_offset, collision_offset + collision_vocab_size))
+        raise ValueError(
+            f'SID slot index {slot_index} exceeds configured slots '
+            f'(base={base_num_quantizers}, final={self.compiled.sid_num_quantizers})'
+        )
+
+    def _mask_sid_logits_for_slots(self, logits: torch.Tensor, slot_indices: torch.Tensor):
+        masked_logits = torch.full_like(logits, fill_value=torch.finfo(logits.dtype).min)
+        unique_slots = sorted({int(slot) for slot in slot_indices.tolist()})
+        for slot_index in unique_slots:
+            row_indices = (slot_indices == slot_index).nonzero(as_tuple=False).view(-1)
+            if row_indices.numel() == 0:
+                continue
+            allowed_codes = self._sid_slot_allowed_codes(slot_index)
+            allowed_tensor = torch.tensor(allowed_codes, dtype=torch.long, device=logits.device)
+            masked_logits[row_indices[:, None], allowed_tensor[None, :]] = logits[row_indices[:, None], allowed_tensor[None, :]]
+        return masked_logits
+
+    def _sid_loss_weights(self, slot_indices: torch.Tensor):
+        base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
+        weights = torch.ones(slot_indices.shape[0], dtype=torch.float32, device=slot_indices.device)
+        collision_mask = slot_indices >= base_num_quantizers
+        if collision_mask.any():
+            weights[collision_mask] = self.SID_COLLISION_LOSS_WEIGHT
+        return weights
+
     def _build_batch_inputs(self, batch):
         sample_embeddings = []
         for sample in batch:
@@ -341,9 +381,13 @@ class SequentialRecModel(nn.Module):
             for slot_index, label in enumerate(target_codes):
                 prefix = target_codes[:slot_index]
                 logits = self._predict_sid_step_logits(sample, [prefix], slot_index)
+                slot_tensor = torch.tensor([slot_index], dtype=torch.long, device=self.device)
+                masked_logits = self._mask_sid_logits_for_slots(logits, slot_tensor)
                 label_tensor = torch.tensor([label], dtype=torch.long, device=self.device)
-                sample_loss = sample_loss + F.cross_entropy(logits.float(), label_tensor)
-                pred = int(logits.argmax(dim=-1).item())
+                token_loss = F.cross_entropy(masked_logits.float(), label_tensor, reduction='none')
+                token_loss = token_loss * self._sid_loss_weights(slot_tensor)
+                sample_loss = sample_loss + token_loss.squeeze(0)
+                pred = int(masked_logits.argmax(dim=-1).item())
                 sample_preds.append(pred)
                 token_correct += float(pred == label)
                 token_total += 1
@@ -411,10 +455,15 @@ class SequentialRecModel(nn.Module):
         if not labels:
             return []
         if repr_type == 'embedding':
-            return [{'kind': 'embedding', 'position': int(marker_position), 'label': int(labels[0]), 'group': group}]
+            return [{'kind': 'embedding', 'position': int(marker_position), 'label': int(labels[0]), 'group': group, 'slot': -1}]
         anchor_positions = [int(marker_position)] + [int(position) for position in payload_positions[:-1]]
+        if repr_type == 'sid':
+            return [
+                {'kind': repr_type, 'position': anchor_position, 'label': int(label), 'group': group, 'slot': slot_index}
+                for slot_index, (anchor_position, label) in enumerate(zip(anchor_positions, labels))
+            ]
         return [
-            {'kind': repr_type, 'position': anchor_position, 'label': int(label), 'group': group}
+            {'kind': repr_type, 'position': anchor_position, 'label': int(label), 'group': group, 'slot': -1}
             for anchor_position, label in zip(anchor_positions, labels)
         ]
 
@@ -489,6 +538,7 @@ class SequentialRecModel(nn.Module):
         supervision_kinds = []
         supervision_labels = []
         supervision_groups = []
+        supervision_slots = []
 
         for batch_index, sample in enumerate(packed_samples):
             seq_len = sample['inputs_embeds'].shape[0]
@@ -499,6 +549,7 @@ class SequentialRecModel(nn.Module):
                 supervision_kinds.append(entry['kind'])
                 supervision_labels.append(int(entry['label']))
                 supervision_groups.append(entry['group'])
+                supervision_slots.append(int(entry.get('slot', -1)))
 
         return (
             padded_embeds,
@@ -510,6 +561,7 @@ class SequentialRecModel(nn.Module):
                 'kinds': supervision_kinds,
                 'labels': torch.tensor(supervision_labels, dtype=torch.long, device=self.device),
                 'groups': supervision_groups,
+                'slots': torch.tensor(supervision_slots, dtype=torch.long, device=self.device),
             },
         )
 
@@ -649,6 +701,7 @@ class SequentialRecModel(nn.Module):
         kinds = supervision['kinds']
         labels = supervision['labels']
         groups = supervision['groups']
+        slots = supervision['slots']
         primary_losses = []
         alignment_losses = []
         metrics = {}
@@ -660,6 +713,7 @@ class SequentialRecModel(nn.Module):
             index_tensor = torch.tensor(mask_indices, dtype=torch.long, device=self.device)
             kind_hidden = selected_hidden[index_tensor]
             kind_labels = labels[index_tensor]
+            kind_slots = slots[index_tensor]
             group_mask = [groups[index] for index in mask_indices]
 
             if kind == 'uid':
@@ -670,8 +724,10 @@ class SequentialRecModel(nn.Module):
                 metrics['uid_acc'] = accuracy
             elif kind == 'sid':
                 logits = self._sid_logits(kind_hidden)
-                losses = F.cross_entropy(logits.float(), kind_labels, reduction='none')
-                predictions = logits.argmax(dim=-1)
+                masked_logits = self._mask_sid_logits_for_slots(logits, kind_slots)
+                losses = F.cross_entropy(masked_logits.float(), kind_labels, reduction='none')
+                losses = losses * self._sid_loss_weights(kind_slots)
+                predictions = masked_logits.argmax(dim=-1)
                 accuracy = (predictions == kind_labels).float().mean().item()
                 metrics['sid_token_acc'] = accuracy
             elif kind == 'text':
@@ -796,8 +852,10 @@ class SequentialRecModel(nn.Module):
             }
 
         logits = self._sid_logits(selected_hidden)
-        loss = F.cross_entropy(logits.float(), target_labels)
-        token_acc = (logits.argmax(dim=-1) == target_labels).float().mean()
+        masked_logits = self._mask_sid_logits_for_slots(logits, target_slots)
+        per_token_loss = F.cross_entropy(masked_logits.float(), target_labels, reduction='none')
+        loss = (per_token_loss * self._sid_loss_weights(target_slots)).mean()
+        token_acc = (masked_logits.argmax(dim=-1) == target_labels).float().mean()
         return loss, {
             'sid_token_acc': token_acc.item(),
         }

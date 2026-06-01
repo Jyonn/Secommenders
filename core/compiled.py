@@ -29,6 +29,7 @@ class CompiledArtifacts:
         self.test = None
         self.embedding_matrix = None
         self.sid_num_quantizers = None
+        self.sid_base_num_quantizers = None
         self.sid_codebook_size = None
         self.sid_collision_vocab_size = None
         self.sid_collision_token_offset = None
@@ -109,6 +110,7 @@ class CompiledArtifacts:
         if sid_vocab_path.exists():
             sid_vocab = self._read_json(sid_vocab_path)
             self.sid_num_quantizers = int(sid_vocab['num_quantizers'])
+            self.sid_base_num_quantizers = int(sid_vocab.get('base_num_quantizers', self.sid_num_quantizers))
             self.sid_codebook_size = int(sid_vocab['codebook_size'])
             self.sid_collision_vocab_size = int(sid_vocab.get('collision_vocab_size', 0))
             self.sid_collision_token_offset = int(sid_vocab.get('collision_token_offset', 0))
