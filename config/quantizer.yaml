@@ -1,5 +1,5 @@
 quantizer:
-  name: rqvae
+  name: ${quantizer_name:rqvae}$
   config:
     latent_dim: ${latent_dim:32}$
     reconstruction_loss: mse
