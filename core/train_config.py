@@ -49,7 +49,6 @@ class TrainConfig:
         data_config = configurations.config.data
         trainer = configurations.config.trainer
         evaluator = configurations.config.evaluator
-        alignment = trainer.alignment
         model = configurations.config.model
         lora = model.lora
         scratch = model.config
@@ -86,7 +85,7 @@ class TrainConfig:
             main_metric=str(getattr(evaluator, 'main_metric', 'loss')).strip().lower(),
             metrics=metrics,
             patience=int(evaluator.patience),
-            alignment_weight=float(alignment.weight),
+            alignment_weight=float(getattr(trainer, 'alignment', 0)),
             sid_beam_width=int(getattr(trainer, 'sid_beam_width', 20)),
             sid_collision_loss_weight=float(getattr(trainer, 'sid_collision_loss_weight', 0.1)),
             model_dtype=str(model.dtype).lower(),

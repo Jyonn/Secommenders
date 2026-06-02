@@ -35,8 +35,7 @@ trainer:
   freeze_backbone: ${freeze_backbone:auto}$
   sid_beam_width: ${sid_beam_width:20}$
   sid_collision_loss_weight: ${sid_collision_loss_weight:0.1}$
-  alignment:
-    weight: ${alignment_weight:0}$
+  alignment: ${alignment:0}$
 
 evaluator:
   main_metric: ${main_metric:loss}$
