@@ -1,5 +1,5 @@
 quantizer:
-  name: ${quantizer_name:rqvae}$
+  name: ${quantizer_name:rqvae}
   config:
     latent_dim: ${latent_dim:32}$
     reconstruction_loss: mse
@@ -12,6 +12,7 @@ quantizer:
     dead_code_reset: false
     dead_code_threshold: 0
     num_quantizers: ${num_quantizers:3}$
+    num_codebooks: ${num_codebooks:3}$
     assignment_strategy: sinkhorn
     sinkhorn_epsilon: [0.0, 0.0, 0.003]
     sinkhorn_iters: 50
