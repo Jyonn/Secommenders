@@ -286,7 +286,7 @@ class Compiler:
         if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.repr_best:
             raise ValueError('repr.best is required when repr.type or task.type uses sid')
         if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.quantizer_name:
-            raise ValueError('data.quantizer_name is required when repr.type or task.type uses sid')
+            raise ValueError('data.repr_quantizer is required when repr.type or task.type uses sid')
 
     def run(self):
         self.validate()

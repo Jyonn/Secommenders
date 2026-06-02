@@ -13,7 +13,7 @@ class TrainConfig:
     repr_type: str
     repr_model: Optional[str]
     repr_best: Optional[str]
-    quantizer_name: Optional[str]
+    repr_quantizer: Optional[str]
     repr_combine: str
     task_type: str
     maxitems: int
@@ -71,7 +71,7 @@ class TrainConfig:
             repr_type=normalized_repr_type,
             repr_model=normalize_model_name(data_config.repr_model),
             repr_best=data_config.repr_best.lower() if data_config.repr_best else None,
-            quantizer_name=str(getattr(data_config, 'quantizer_name', '')).strip().lower() or None,
+            repr_quantizer=str(getattr(data_config, 'repr_quantizer', '')).strip().lower() or None,
             repr_combine=data_config.repr_combine.lower(),
             task_type=raw_task_type,
             maxitems=int(data_config.maxitems),
@@ -113,7 +113,7 @@ class TrainConfig:
             repr_type=self.repr_type,
             repr_model=self.repr_model,
             repr_best=self.repr_best,
-            quantizer_name=self.quantizer_name,
+            quantizer_name=self.repr_quantizer,
             task_type=self.task_type,
             maxitems=self.maxitems,
             model_max_length=self.model_max_length,
