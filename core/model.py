@@ -457,7 +457,9 @@ class SequentialRecModel(nn.Module):
 
         batch_size = pooled.shape[0]
         item_codes = self.sid_item_codes.to(device=self.device)
-        scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
+        semantic_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
+        collision_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
+        base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
 
         for slot_index in range(int(item_codes.shape[1])):
             logits = self._sid_logits(pooled)
@@ -466,11 +468,36 @@ class SequentialRecModel(nn.Module):
             log_probs = F.log_softmax(masked_logits.float(), dim=-1)
             slot_codes = item_codes[:, slot_index]
             slot_scores = log_probs.index_select(dim=1, index=slot_codes)
-            weight = float(self._sid_loss_weights(slot_tensor[:1]).item())
-            scores = scores + weight * slot_scores
+            if slot_index < base_num_quantizers:
+                semantic_scores = semantic_scores + slot_scores
+            else:
+                collision_scores = collision_scores + slot_scores
 
-        target_uids = torch.tensor([int(sample['target_uid']) for sample in batch], dtype=torch.long, device=self.device)
-        return self._compute_ranking_metrics_from_logits(scores, target_uids)
+        ks = self.ranking_ks()
+        totals = {f'hr@{k}': 0.0 for k in ks}
+        totals.update({f'ndcg@{k}': 0.0 for k in ks})
+        totals['mrr'] = 0.0
+
+        semantic_scores_cpu = semantic_scores.detach().cpu()
+        collision_scores_cpu = collision_scores.detach().cpu()
+        for batch_index, sample in enumerate(batch):
+            ranked_uids = sorted(
+                range(item_codes.shape[0]),
+                key=lambda uid: (
+                    float(semantic_scores_cpu[batch_index, uid].item()),
+                    float(collision_scores_cpu[batch_index, uid].item()),
+                ),
+                reverse=True,
+            )
+            target_uid = int(sample['target_uid'])
+            rank = ranked_uids.index(target_uid) + 1
+            totals['mrr'] += 1.0 / rank
+            for k in ks:
+                if rank <= k:
+                    totals[f'hr@{k}'] += 1.0
+                    totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+
+        return {key: value / max(batch_size, 1) for key, value in totals.items()}
 
     def _compute_ranking_metrics_from_logits(self, logits: torch.Tensor, target_indices: torch.Tensor):
         ks = self.ranking_ks()
