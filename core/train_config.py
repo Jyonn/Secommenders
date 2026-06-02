@@ -139,6 +139,8 @@ class TrainConfig:
             parts.append(f'lo-{self.use_lora}')
         if self.alignment_weight > 0:
             parts.append(f'al{compact_float(self.alignment_weight)}')
+        if self.task_type == 'sid' and self.sid_decoding != 'auto':
+            parts.append(f'sd-{self.sid_decoding}')
         if self.task_type == 'sid' and self.sid_beam_width != 20:
             parts.append(f'bm{self.sid_beam_width}')
         if self.task_type == 'sid' and self.sid_collision_loss_weight != 0.1:

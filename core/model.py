@@ -83,6 +83,15 @@ class SequentialRecModel(nn.Module):
 
         self.compute_dtype = getattr(self.encoder, 'compute_dtype', torch.float32)
         self.sid_collision_loss_weight = float(getattr(config, 'sid_collision_loss_weight', 0.1))
+        sid_item_codes = compiled.item_views.get('sid') or []
+        if sid_item_codes:
+            sid_item_codes_tensor = torch.tensor(
+                [[int(code) for code in function.to_list(codes)] for codes in sid_item_codes],
+                dtype=torch.long,
+            )
+        else:
+            sid_item_codes_tensor = torch.empty((0, 0), dtype=torch.long)
+        self.register_buffer('sid_item_codes', sid_item_codes_tensor, persistent=False)
         self.type_marker_embedding.to(dtype=self.compute_dtype)
         self.uid_embedding.to(dtype=self.compute_dtype)
         self.sid_embedding.to(dtype=self.compute_dtype)
@@ -246,6 +255,14 @@ class SequentialRecModel(nn.Module):
             weights[collision_mask] = self.sid_collision_loss_weight
         return weights
 
+    def _sid_decoding_mode(self):
+        mode = str(getattr(self.config, 'sid_decoding', 'auto')).strip().lower()
+        if mode == 'auto':
+            mode = str(getattr(self.compiled, 'sid_recommended_decoding', '') or 'sequential').strip().lower()
+        if mode not in {'sequential', 'parallel'}:
+            raise ValueError(f'Unsupported sid_decoding: {mode}')
+        return mode
+
     def _build_batch_inputs(self, batch):
         sample_embeddings = []
         for sample in batch:
@@ -400,6 +417,61 @@ class SequentialRecModel(nn.Module):
             'sid_seq_acc': seq_correct / batch_size,
         }
 
+    def _compute_sid_parallel_loss(self, pooled: torch.Tensor, batch):
+        if self.sid_item_codes.numel() == 0:
+            raise ValueError('sid parallel supervision requires compiled sid item codes')
+
+        target_uids = torch.tensor([int(sample['target_uid']) for sample in batch], dtype=torch.long, device=self.device)
+        target_codes = self.sid_item_codes[target_uids]
+        batch_size = target_codes.shape[0]
+        num_slots = target_codes.shape[1]
+
+        total_loss = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+        token_correct = 0.0
+        seq_predictions = []
+        seq_targets = target_codes.tolist()
+
+        for slot_index in range(num_slots):
+            logits = self._sid_logits(pooled)
+            slot_tensor = torch.full((batch_size,), slot_index, dtype=torch.long, device=self.device)
+            masked_logits = self._mask_sid_logits_for_slots(logits, slot_tensor)
+            labels = target_codes[:, slot_index]
+            slot_loss = F.cross_entropy(masked_logits.float(), labels, reduction='none')
+            slot_loss = slot_loss * self._sid_loss_weights(slot_tensor)
+            total_loss = total_loss + slot_loss.mean()
+            predictions = masked_logits.argmax(dim=-1)
+            token_correct += float((predictions == labels).float().sum().item())
+            seq_predictions.append(predictions.tolist())
+
+        predicted_sequences = list(zip(*seq_predictions)) if seq_predictions else []
+        seq_correct = sum(int(list(predicted) == list(target)) for predicted, target in zip(predicted_sequences, seq_targets))
+        token_total = batch_size * max(num_slots, 1)
+        return total_loss / max(num_slots, 1), {
+            'sid_token_acc': token_correct / max(token_total, 1),
+            'sid_seq_acc': seq_correct / max(batch_size, 1),
+        }
+
+    def _compute_sid_parallel_ranking_metrics(self, pooled: torch.Tensor, batch):
+        if self.sid_item_codes.numel() == 0:
+            raise ValueError('sid parallel ranking requires compiled sid item codes')
+
+        batch_size = pooled.shape[0]
+        item_codes = self.sid_item_codes.to(device=self.device)
+        scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
+
+        for slot_index in range(int(item_codes.shape[1])):
+            logits = self._sid_logits(pooled)
+            slot_tensor = torch.full((batch_size,), slot_index, dtype=torch.long, device=self.device)
+            masked_logits = self._mask_sid_logits_for_slots(logits, slot_tensor)
+            log_probs = F.log_softmax(masked_logits.float(), dim=-1)
+            slot_codes = item_codes[:, slot_index]
+            slot_scores = log_probs.index_select(dim=1, index=slot_codes)
+            weight = float(self._sid_loss_weights(slot_tensor[:1]).item())
+            scores = scores + weight * slot_scores
+
+        target_uids = torch.tensor([int(sample['target_uid']) for sample in batch], dtype=torch.long, device=self.device)
+        return self._compute_ranking_metrics_from_logits(scores, target_uids)
+
     def _compute_ranking_metrics_from_logits(self, logits: torch.Tensor, target_indices: torch.Tensor):
         ks = self.ranking_ks()
         totals = {f'hr@{k}': 0.0 for k in ks}
@@ -455,12 +527,18 @@ class SequentialRecModel(nn.Module):
             return []
         if repr_type == 'embedding':
             return [{'kind': 'embedding', 'position': int(marker_position), 'label': int(labels[0]), 'group': group, 'slot': -1}]
-        anchor_positions = [int(marker_position)] + [int(position) for position in payload_positions[:-1]]
         if repr_type == 'sid':
+            if self._sid_decoding_mode() == 'parallel':
+                return [
+                    {'kind': repr_type, 'position': int(marker_position), 'label': int(label), 'group': group, 'slot': slot_index}
+                    for slot_index, label in enumerate(labels)
+                ]
+            anchor_positions = [int(marker_position)] + [int(position) for position in payload_positions[:-1]]
             return [
                 {'kind': repr_type, 'position': anchor_position, 'label': int(label), 'group': group, 'slot': slot_index}
                 for slot_index, (anchor_position, label) in enumerate(zip(anchor_positions, labels))
             ]
+        anchor_positions = [int(marker_position)] + [int(position) for position in payload_positions[:-1]]
         return [
             {'kind': repr_type, 'position': anchor_position, 'label': int(label), 'group': group, 'slot': -1}
             for anchor_position, label in zip(anchor_positions, labels)
@@ -675,8 +753,12 @@ class SequentialRecModel(nn.Module):
             metrics.update(self._compute_ranking_metrics_from_logits(logits, labels))
             return loss, metrics
         if self.config.task_type == 'sid':
-            loss, metrics = self._compute_sid_loss(batch)
-            metrics.update(self._compute_sid_ranking_metrics(batch))
+            if self._sid_decoding_mode() == 'parallel':
+                loss, metrics = self._compute_sid_parallel_loss(pooled, batch)
+                metrics.update(self._compute_sid_parallel_ranking_metrics(pooled, batch))
+            else:
+                loss, metrics = self._compute_sid_loss(batch)
+                metrics.update(self._compute_sid_ranking_metrics(batch))
             return loss, metrics
         loss, metrics = self._compute_embedding_loss(pooled, batch)
         target_indices = torch.tensor(

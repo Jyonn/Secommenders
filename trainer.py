@@ -114,9 +114,14 @@ class Trainer:
             f'world_size={self.world_size} order=length-sorted'
         )
         if self.config.task_type == 'sid':
+            sid_decoding = self.model_core._sid_decoding_mode()
             self._pnt(
-                f'sid test uses constrained beam search beam_width={self.config.sid_beam_width} '
-                f'ks={self.model_core.sid_ranking_ks()}'
+                f'sid decoding={sid_decoding} '
+                + (
+                    f'beam_width={self.config.sid_beam_width} ks={self.model_core.sid_ranking_ks()}'
+                    if sid_decoding == 'sequential'
+                    else f'item_scoring ks={self.model_core.sid_ranking_ks()}'
+                )
             )
         if self.config.alignment_weight > 0:
             self._pnt(
