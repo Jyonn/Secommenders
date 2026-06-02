@@ -43,6 +43,7 @@ class Compiler:
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
+    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae')
 
     def __init__(self, config: CompileConfig):
         self.config = config
@@ -511,19 +512,42 @@ class Compiler:
 
     def _load_quantized_export(self):
         model_name = normalize_model_name(self.config.repr_model)
-        export_dir = self.store.quantized_dir(model_name) / 'exports' / self.config.repr_best
+        candidate_exports = [
+            self.store.quantized_dir(model_name, quantizer_name) / 'exports' / self.config.repr_best
+            for quantizer_name in self.SUPPORTED_QUANTIZERS
+        ]
+
+        def _resolve_export_dir():
+            for candidate in candidate_exports:
+                meta_path = candidate / 'meta.json'
+                codes_path = candidate / 'codebook_indices.npy'
+                item_ids_path = candidate / 'item_ids.parquet'
+                if meta_path.exists() and codes_path.exists() and item_ids_path.exists():
+                    return candidate
+            return None
+
+        export_dir = _resolve_export_dir()
+        if export_dir is None:
+            ensure_quantized(self.config.data, model_name)
+            export_dir = _resolve_export_dir()
+        if export_dir is None:
+            searched = ', '.join(str(path) for path in candidate_exports)
+            raise FileNotFoundError(
+                'Quantized export not found after auto preparation. '
+                f'Searched: {searched}'
+            )
+
         meta_path = export_dir / 'meta.json'
         codes_path = export_dir / 'codebook_indices.npy'
         item_ids_path = export_dir / 'item_ids.parquet'
-        if not meta_path.exists() or not codes_path.exists() or not item_ids_path.exists():
-            ensure_quantized(self.config.data, model_name)
-        if not meta_path.exists() or not codes_path.exists() or not item_ids_path.exists():
-            raise FileNotFoundError(f'Quantized export not found after auto preparation: {export_dir}')
         pnt(f'loading quantized export from {export_dir}')
         meta = json.loads(meta_path.read_text())
         codes = np.load(codes_path)
         item_ids = pd.read_parquet(item_ids_path)[self.processor.IID_COL].tolist()
-        pnt(f'loaded quantized export rows={len(item_ids)} shape={list(codes.shape)}')
+        pnt(
+            f'loaded quantized export rows={len(item_ids)} shape={list(codes.shape)} '
+            f'quantizer={meta.get("quantizer_model", "unknown")}'
+        )
         return export_dir, meta, item_ids, codes
 
     def load_sid_view(self, build_only_meta=False):

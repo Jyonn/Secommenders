@@ -88,7 +88,13 @@ class Quantizer:
         if not self.embedding_path.exists():
             raise FileNotFoundError(f'Embedding file not found after auto preparation: {self.embedding_path}')
 
-        self.output_dir = Path(getattr(self.config.trainer, 'output_dir', artifacts.quantized_dir(self.embedding_model)))
+        self.output_dir = Path(
+            getattr(
+                self.config.trainer,
+                'output_dir',
+                artifacts.quantized_dir(self.embedding_model, self.quantizer_name),
+            )
+        )
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.embedding_matrix = None
