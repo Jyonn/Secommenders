@@ -1,7 +1,11 @@
 import os
 import json
+import shlex
 import socket
 from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+import sys
 
 import torch
 import torch.distributed as dist
@@ -17,7 +21,7 @@ from utils import function
 from utils.artifact import ArtifactStore
 from utils.config_init import ConfigInit
 from utils.gpu import GPU
-from utils.logging import setup_logging
+from utils.logging import attach_run_log, setup_logging
 
 
 class Trainer:
@@ -28,8 +32,8 @@ class Trainer:
         self.world_size = int(os.environ.get('WORLD_SIZE', '1'))
         self.distributed = self.world_size > 1
         self._init_distributed()
-        self.compiled = CompiledArtifacts(config).load()
         self.run_dir = ArtifactStore(config.data).trained_dir(config.run_id)
+        self.compiled = CompiledArtifacts(config).load()
         self.device = self._resolve_device()
         self.model_core = SequentialRecModel(self.compiled, config).to(self.device)
         if self.distributed:
@@ -48,6 +52,9 @@ class Trainer:
         self.test_loader = None
         self.train_sampler = None
         self.test_sampler = None
+        self.meta_path = self.run_dir / 'meta.json'
+        self.pid_path = self.run_dir / 'pid.json'
+        self.log_path = self.run_dir / 'train.log'
 
     @property
     def is_main_process(self):
@@ -237,7 +244,8 @@ class Trainer:
     def _save_meta(self, best_epoch: int, best_valid_metric: float, test_metrics: dict):
         if not self.is_main_process:
             return
-        meta = {
+        meta = self._load_meta_stub()
+        meta.update({
             'config': asdict(self.config),
             'compiled_dir': str(self.compiled.compile_dir),
             'run_dir': str(self.run_dir),
@@ -249,10 +257,19 @@ class Trainer:
             'declared_test_metrics': self.config.metrics,
             'test_metrics': test_metrics,
             'world_size': self.world_size,
-        }
-        path = self.run_dir / 'meta.json'
-        path.write_text(json.dumps(meta, indent=2) + '\n')
-        self._pnt(f'wrote trainer meta to {path}')
+            'status': 'finished',
+            'finished_at': _utc_now_iso(),
+        })
+        self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+        self._pnt(f'wrote trainer meta to {self.meta_path}')
+
+    def _load_meta_stub(self):
+        if self.meta_path.exists():
+            try:
+                return json.loads(self.meta_path.read_text())
+            except json.JSONDecodeError:
+                return {}
+        return {}
 
     def _evaluate_eval_set(self, loader, desc: str):
         if self.distributed:
@@ -369,9 +386,92 @@ def _distributed_env_present():
     return 'LOCAL_RANK' in os.environ or 'RANK' in os.environ or 'WORLD_SIZE' in os.environ
 
 
+def _utc_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _command_string():
+    parts = [sys.executable, *sys.argv]
+    return ' '.join(shlex.quote(part) for part in parts)
+
+
+def _run_dir_for_config(config: TrainConfig):
+    return ArtifactStore(config.data).trained_dir(config.run_id)
+
+
+def _write_pid_record(run_dir: Path, config: TrainConfig):
+    rank = int(os.environ.get('RANK', '0'))
+    world_size = int(os.environ.get('WORLD_SIZE', '1'))
+    if rank != 0:
+        return
+    payload = {
+        'pid': os.getpid(),
+        'hostname': socket.gethostname(),
+        'command': _command_string(),
+        'run_dir': str(run_dir),
+        'compile_dir': str(ArtifactStore(config.data).compiled_dir(config.compile_config.prepare_id)),
+        'rank': rank,
+        'world_size': world_size,
+        'created_at': _utc_now_iso(),
+    }
+    (run_dir / 'pid.json').write_text(json.dumps(payload, indent=2) + '\n')
+
+
+def _write_initial_meta(run_dir: Path, config: TrainConfig):
+    rank = int(os.environ.get('RANK', '0'))
+    world_size = int(os.environ.get('WORLD_SIZE', '1'))
+    if rank != 0:
+        return
+    meta = {
+        'config': asdict(config),
+        'run_dir': str(run_dir),
+        'compiled_dir': str(ArtifactStore(config.data).compiled_dir(config.compile_config.prepare_id)),
+        'command': _command_string(),
+        'pid': os.getpid(),
+        'hostname': socket.gethostname(),
+        'world_size': world_size,
+        'status': 'running',
+        'started_at': _utc_now_iso(),
+        'log_path': str(run_dir / 'train.log'),
+    }
+    (run_dir / 'meta.json').write_text(json.dumps(meta, indent=2) + '\n')
+
+
+def _setup_run_artifacts(config: TrainConfig):
+    run_dir = _run_dir_for_config(config)
+    rank = int(os.environ.get('RANK', '0'))
+    if rank == 0:
+        attach_run_log(run_dir / 'train.log')
+        _write_pid_record(run_dir, config)
+        _write_initial_meta(run_dir, config)
+    return run_dir
+
+
 def _run_trainer(config: TrainConfig):
-    trainer = Trainer(config)
-    trainer.train()
+    _setup_run_artifacts(config)
+    try:
+        trainer = Trainer(config)
+        trainer.train()
+    except Exception as exc:
+        rank = int(os.environ.get('RANK', '0'))
+        if rank == 0:
+            run_dir = _run_dir_for_config(config)
+            meta_path = run_dir / 'meta.json'
+            meta = {}
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                except json.JSONDecodeError:
+                    meta = {}
+            meta.update(
+                {
+                    'status': 'failed',
+                    'error': repr(exc),
+                    'failed_at': _utc_now_iso(),
+                }
+            )
+            meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+        raise
 
 
 def _spawn_worker(local_rank: int, world_size: int, config: TrainConfig):
