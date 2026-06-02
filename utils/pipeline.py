@@ -43,9 +43,10 @@ def ensure_embedded(data: str, model: str, device=None, batch_size=32, normalize
     return embedder
 
 
-def ensure_quantized(data: str, model: str):
+def ensure_quantized(data: str, model: str, quantizer_name: str | None = None):
     setup_logging()
-    pnt(f'auto preparing quantized artifacts for {data}/{model}')
+    suffix = f'/{quantizer_name}' if quantizer_name else ''
+    pnt(f'auto preparing quantized artifacts for {data}/{model}{suffix}')
     from quantizer import Quantizer
 
     configurations = ConfigInit(
@@ -58,6 +59,7 @@ def ensure_quantized(data: str, model: str):
         {
             'data': data,
             'model': model,
+            'quantizer_name': quantizer_name,
             'config': 'config/quantizer.yaml',
         }
     )

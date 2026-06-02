@@ -32,6 +32,9 @@ class CompiledArtifacts:
         self.sid_codebook_size = None
         self.sid_collision_vocab_size = None
         self.sid_collision_token_offset = None
+        self.sid_quantizer_name = None
+        self.sid_quantizer_scheme = None
+        self.sid_recommended_decoding = None
         self.sid_prefix_to_next = {}
         self.sid_sequence_to_items = {}
 
@@ -111,6 +114,9 @@ class CompiledArtifacts:
             self.sid_codebook_size = int(sid_vocab['codebook_size'])
             self.sid_collision_vocab_size = int(sid_vocab.get('collision_vocab_size', 0))
             self.sid_collision_token_offset = int(sid_vocab.get('collision_token_offset', 0))
+            self.sid_quantizer_name = sid_vocab.get('quantizer_name')
+            self.sid_quantizer_scheme = sid_vocab.get('quantizer_scheme')
+            self.sid_recommended_decoding = sid_vocab.get('recommended_decoding')
             self._build_sid_indices()
 
         self.embedding_matrix = self._load_embedding_matrix()

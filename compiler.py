@@ -39,7 +39,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v2.5'
+    VER = 'v2.6'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -285,6 +285,8 @@ class Compiler:
             raise ValueError('repr.model is required when repr.type or task.type uses sid/embedding')
         if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.repr_best:
             raise ValueError('repr.best is required when repr.type or task.type uses sid')
+        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.quantizer_name:
+            raise ValueError('data.quantizer_name is required when repr.type or task.type uses sid')
 
     def run(self):
         self.validate()
@@ -411,6 +413,10 @@ class Compiler:
                     'collision_group_count': sid_meta['collision_group_count'],
                     'collided_item_count': sid_meta['collided_item_count'],
                     'max_collision_size': sid_meta['max_collision_size'],
+                    'quantizer_name': sid_meta.get('quantizer_name'),
+                    'quantizer_scheme': sid_meta.get('quantizer_scheme'),
+                    'recommended_decoding': sid_meta.get('recommended_decoding'),
+                    'quantized_export_dir': sid_meta.get('quantized_export_dir'),
                 },
             )
             self.registry.register(
@@ -422,6 +428,9 @@ class Compiler:
                 base_num_quantizers=sid_meta['num_quantizers'],
                 codebook_size=sid_meta['codebook_size'],
                 collision_vocab_size=sid_meta['collision_vocab_size'],
+                quantizer_name=sid_meta.get('quantizer_name'),
+                quantizer_scheme=sid_meta.get('quantizer_scheme'),
+                recommended_decoding=sid_meta.get('recommended_decoding'),
             )
             pnt(
                 f"registered sid vocab size={len(tokens)} "
@@ -512,29 +521,32 @@ class Compiler:
 
     def _load_quantized_export(self):
         model_name = normalize_model_name(self.config.repr_model)
-        candidate_exports = [
-            self.store.quantized_dir(model_name, quantizer_name) / 'exports' / self.config.repr_best
-            for quantizer_name in self.SUPPORTED_QUANTIZERS
-        ]
+        quantizer_name = (self.config.quantizer_name or '').strip().lower()
+        if not quantizer_name:
+            raise ValueError('quantizer_name is required when compile config uses sid views')
+        if quantizer_name not in self.SUPPORTED_QUANTIZERS:
+            supported = ', '.join(self.SUPPORTED_QUANTIZERS)
+            raise ValueError(
+                f'Unsupported quantizer "{quantizer_name}". '
+                f'Only {supported} are supported.'
+            )
 
-        def _resolve_export_dir():
-            for candidate in candidate_exports:
-                meta_path = candidate / 'meta.json'
-                codes_path = candidate / 'codebook_indices.npy'
-                item_ids_path = candidate / 'item_ids.parquet'
-                if meta_path.exists() and codes_path.exists() and item_ids_path.exists():
-                    return candidate
-            return None
+        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / self.config.repr_best
 
-        export_dir = _resolve_export_dir()
-        if export_dir is None:
-            ensure_quantized(self.config.data, model_name)
-            export_dir = _resolve_export_dir()
-        if export_dir is None:
-            searched = ', '.join(str(path) for path in candidate_exports)
+        def _export_ready(path: Path):
+            meta_path = path / 'meta.json'
+            codes_path = path / 'codebook_indices.npy'
+            item_ids_path = path / 'item_ids.parquet'
+            return meta_path.exists() and codes_path.exists() and item_ids_path.exists()
+
+        export_ready = _export_ready(export_dir)
+        if not export_ready:
+            ensure_quantized(self.config.data, model_name, quantizer_name)
+            export_ready = _export_ready(export_dir)
+        if not export_ready:
             raise FileNotFoundError(
                 'Quantized export not found after auto preparation. '
-                f'Searched: {searched}'
+                f'Searched: {export_dir}'
             )
 
         meta_path = export_dir / 'meta.json'
@@ -551,7 +563,7 @@ class Compiler:
         return export_dir, meta, item_ids, codes
 
     def load_sid_view(self, build_only_meta=False):
-        _, meta, item_ids, codes = self._load_quantized_export()
+        export_dir, meta, item_ids, codes = self._load_quantized_export()
         num_quantizers = int(codes.shape[1]) if codes.ndim > 1 else 1
         codebook_size = int(meta['quantizer_config']['codebook_size'])
         collision_token_offset = num_quantizers * codebook_size
@@ -577,6 +589,10 @@ class Compiler:
             'collision_group_count': collision_group_count,
             'collided_item_count': collided_item_count,
             'max_collision_size': max_collision_size,
+            'quantizer_name': meta.get('quantizer_model'),
+            'quantizer_scheme': meta.get('quantizer_scheme'),
+            'recommended_decoding': meta.get('recommended_decoding'),
+            'quantized_export_dir': str(export_dir),
         }
 
         if build_only_meta:
@@ -589,6 +605,10 @@ class Compiler:
                 'collision_group_count': collision_group_count,
                 'collided_item_count': collided_item_count,
                 'max_collision_size': max_collision_size,
+                'quantizer_name': meta.get('quantizer_model'),
+                'quantizer_scheme': meta.get('quantizer_scheme'),
+                'recommended_decoding': meta.get('recommended_decoding'),
+                'quantized_export_dir': str(export_dir),
             }
 
         sid_map = {}
@@ -898,6 +918,9 @@ class Compiler:
                 'model_kind': self.backbone.kind,
                 'model_max_length': int(self.backbone.max_length),
                 'processed_dir': str(self.store.processed_dir()),
+                'sid_quantizer_name': self.sid_stats.get('quantizer_name'),
+                'sid_quantizer_scheme': self.sid_stats.get('quantizer_scheme'),
+                'sid_recommended_decoding': self.sid_stats.get('recommended_decoding'),
             },
         )
         pnt(f'meta saved to {self.meta_path}')
@@ -949,6 +972,7 @@ if __name__ == '__main__':
     parser.add_argument('--repr.type', dest='repr_type', default=None, help='Representation types, such as uid, text, or uid+text. Defaults to task.type.')
     parser.add_argument('--repr.model', dest='repr_model', default=None, help='External representation model, such as bertbase.')
     parser.add_argument('--repr.best', dest='repr_best', default=None, help='Best checkpoint metric for quantized codes, such as coll.')
+    parser.add_argument('--quantizer.name', dest='quantizer_name', default=None, help='Quantizer algorithm name for SID exports, such as rqvae or pqvae.')
     parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
     parser.add_argument('--model.maxlen', dest='model_max_length', type=int, default=0, help='Optional override for backbone max length, e.g. 2048.')
     parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'embedding'])
@@ -962,6 +986,7 @@ if __name__ == '__main__':
         repr_type=args.repr_type.lower(),
         repr_model=normalize_model_name(args.repr_model),
         repr_best=args.repr_best.lower() if args.repr_best else None,
+        quantizer_name=args.quantizer_name.lower() if args.quantizer_name else None,
         repr_combine=args.repr_combine.lower(),
         task_type=args.task_type.lower(),
         maxitems=int(args.maxitems),

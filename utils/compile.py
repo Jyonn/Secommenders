@@ -46,6 +46,7 @@ class CompileConfig:
     repr_type: Optional[str]
     repr_model: Optional[str]
     repr_best: Optional[str]
+    quantizer_name: Optional[str]
     task_type: str
     maxitems: int
     model_max_length: Optional[int] = None
@@ -60,6 +61,7 @@ class CompileConfig:
         self.repr_combine = str(self.repr_combine).lower()
         self.repr_model = normalize_model_name(self.repr_model)
         self.repr_best = self.repr_best.lower() if self.repr_best else None
+        self.quantizer_name = str(self.quantizer_name).strip().lower() if self.quantizer_name else None
 
     @property
     def repr_types(self):
@@ -86,6 +88,8 @@ class CompileConfig:
             parts.append(f'rm-{self.repr_model}')
         if self.repr_best and uses_sid:
             parts.append(f'rb-{self.repr_best}')
+        if self.quantizer_name and uses_sid:
+            parts.append(f'q-{self.quantizer_name}')
         return parts
 
     @property

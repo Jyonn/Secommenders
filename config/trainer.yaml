@@ -3,6 +3,7 @@ data:
   repr_type: ${repr_type:null}$
   repr_model: ${repr_model:null}$
   repr_best: ${repr_best:coll}$
+  quantizer_name: ${quantizer_name:null}$
   repr_combine: ${repr_combine:concat}$
   task_type: ${task_type}$
   maxitems: ${maxitems:0}$
