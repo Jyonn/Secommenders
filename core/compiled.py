@@ -19,7 +19,6 @@ class CompiledArtifacts:
         self.compile_dir = self.store.compiled_dir(config.compile_config.prepare_id)
         self.meta = None
         self.prompt_main = None
-        self.prompt_align = None
         self.vocab_meta = None
         self.special_vocab = None
         self.uid_raw_items = None
@@ -86,7 +85,6 @@ class CompiledArtifacts:
             self.compile_dir / 'vocab' / 'special.json',
             self.compile_dir / 'vocab' / 'meta.json',
             self.compile_dir / 'prompts' / 'main.json',
-            self.compile_dir / 'prompts' / 'alignment.json',
             self.compile_dir / 'item_views' / 'uid.parquet',
         ]
         self._ensure_required_paths(required_paths)
@@ -95,7 +93,6 @@ class CompiledArtifacts:
         self.vocab_meta = self._read_json(self.compile_dir / 'vocab' / 'meta.json')
         self.special_vocab = self._read_json(self.compile_dir / 'vocab' / 'special.json')
         self.prompt_main = self._read_json(self.compile_dir / 'prompts' / 'main.json')
-        self.prompt_align = self._read_json(self.compile_dir / 'prompts' / 'alignment.json')
         self.uid_raw_items = self._read_json(self.compile_dir / 'vocab' / 'uid.json')['raw_item_ids']
         self.finetune = pd.read_parquet(self.compile_dir / 'samples' / 'finetune.parquet')
         self.valid = pd.read_parquet(self.compile_dir / 'samples' / 'valid.parquet')

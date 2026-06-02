@@ -52,7 +52,3 @@ class BaseBackbone(ABC):
     @abstractmethod
     def estimate_main_length(self, history_values: list, target_value, task_type: str):
         raise NotImplementedError
-
-    @abstractmethod
-    def build_alignment_spec(self):
-        raise NotImplementedError

@@ -1,6 +1,5 @@
 import argparse
 import json
-from itertools import combinations
 from pathlib import Path
 from typing import Optional
 
@@ -40,7 +39,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v2.4'
+    VER = 'v2.5'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -67,8 +66,7 @@ class Compiler:
         self.prompts_dir = self.output_dir / 'prompts'
         self.item_views_dir = self.output_dir / 'item_views'
         self.samples_dir = self.output_dir / 'samples'
-        self.alignment_dir = self.output_dir / 'alignment'
-        for path in [self.vocab_dir, self.prompts_dir, self.item_views_dir, self.samples_dir, self.alignment_dir]:
+        for path in [self.vocab_dir, self.prompts_dir, self.item_views_dir, self.samples_dir]:
             path.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -245,12 +243,10 @@ class Compiler:
             self.vocab_dir / 'special.json',
             self.vocab_dir / 'meta.json',
             self.prompts_dir / 'main.json',
-            self.prompts_dir / 'alignment.json',
             self.item_views_dir / 'meta.json',
             self.samples_dir / 'finetune.parquet',
             self.samples_dir / 'valid.parquet',
             self.samples_dir / 'test.parquet',
-            self.alignment_dir / 'meta.json',
         ] + required_item_view_paths
         return all(path.exists() for path in required_paths)
 
@@ -310,7 +306,6 @@ class Compiler:
         self.build_samples('finetune', self.processor.finetune_set)
         self.build_samples('valid', self.processor.valid_set)
         self.build_samples('test', self.processor.test_set)
-        self.build_alignment_meta()
         self.save_meta()
         self.save_stats()
         self.log_sample_visuals()
@@ -438,9 +433,7 @@ class Compiler:
 
         self._save_json(self.vocab_dir / 'meta.json', self.registry.to_dict())
         main_prompt = self.backbone.build_prompt_spec()
-        alignment_prompt = self.backbone.build_alignment_spec()
         self._save_json(self.prompts_dir / 'main.json', main_prompt)
-        self._save_json(self.prompts_dir / 'alignment.json', alignment_prompt)
         pnt(
             f'vocab ready namespaces={len(self.registry.entries)} '
             f'main_prompt=(history_prefix={len(main_prompt["history_prefix_ids"])}, '
@@ -867,23 +860,6 @@ class Compiler:
             f'invalid={invalid_target_count} dropped_short_seq={dropped_short_sequence_count} '
             f'{avg_item_label}={avg_item_count:.2f} avg_input_length={avg_input_length:.2f} '
             f'resolved_maxitems={resolved_maxitems} saved={output_path}'
-        )
-
-    def build_alignment_meta(self):
-        views = set(self.config.repr_types + [self.config.task_type])
-        available_views = sorted(view for view in views if view in self.item_views)
-        pairs = [list(pair) for pair in combinations(available_views, 2)]
-        self._save_json(
-            self.alignment_dir / 'meta.json',
-            {
-                'enabled': True,
-                'views': available_views,
-                'pairs': pairs,
-            },
-        )
-        pnt(
-            f'alignment meta saved enabled=True '
-            f'views={available_views} pairs={pairs}'
         )
 
     def save_meta(self):

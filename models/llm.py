@@ -8,9 +8,6 @@ class LLMBackbone(BaseBackbone):
     ITEM_SEPARATOR = ','
     QUERY_PREFIX = 'Next item:'
 
-    ALIGN_PREFIX = 'An item featured'
-    ALIGN_BRIDGE = 'can be mapped to'
-
     def __init__(self, model_name: str, model_key: str, max_length_override: int | None = None):
         super().__init__(model_name, max_length_override=max_length_override)
         self.model_key = model_key
@@ -79,13 +76,6 @@ class LLMBackbone(BaseBackbone):
             'kind': self.kind,
         }
         return self.prompt_spec
-
-    def build_alignment_spec(self):
-        return {
-            'align_prefix_ids': self._encode(self.ALIGN_PREFIX),
-            'align_bridge_ids': self._encode(self.ALIGN_BRIDGE),
-            'kind': self.kind,
-        }
 
     @staticmethod
     def _value_length(value, task_type):

@@ -11,8 +11,6 @@ class ScratchTokenizer:
     HISTORY_TOKEN = '<history>'
     SEP_TOKEN = '<sep>'
     NEXT_TOKEN = '<next>'
-    ALIGN_TOKEN = '<align>'
-    TO_TOKEN = '<to>'
 
     def __init__(self, texts: list[str]):
         base_tokens = [
@@ -21,8 +19,6 @@ class ScratchTokenizer:
             self.HISTORY_TOKEN,
             self.SEP_TOKEN,
             self.NEXT_TOKEN,
-            self.ALIGN_TOKEN,
-            self.TO_TOKEN,
         ]
         vocab = {}
         tokens = []
@@ -81,13 +77,6 @@ class ScratchTransformerBackbone(BaseBackbone):
             'kind': self.kind,
         }
         return self.prompt_spec
-
-    def build_alignment_spec(self):
-        return {
-            'align_prefix_ids': [self.tokenizer.vocab[ScratchTokenizer.ALIGN_TOKEN]],
-            'align_bridge_ids': [self.tokenizer.vocab[ScratchTokenizer.TO_TOKEN]],
-            'kind': self.kind,
-        }
 
     def estimate_main_length(self, history_values: list, target_value, task_type: str):
         prompt = self.build_prompt_spec()
