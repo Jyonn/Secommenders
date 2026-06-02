@@ -26,6 +26,7 @@ class TrainConfig:
     device: Optional[str]
     num_gpus: int
     freeze_backbone: str
+    sid_decoding: str
     main_metric: str
     metrics: list[str]
     patience: int
@@ -82,6 +83,7 @@ class TrainConfig:
             device=trainer.device,
             num_gpus=int(getattr(trainer, 'num_gpus', 1)),
             freeze_backbone=str(trainer.freeze_backbone).lower(),
+            sid_decoding=str(getattr(trainer, 'sid_decoding', 'auto')).strip().lower(),
             main_metric=str(getattr(evaluator, 'main_metric', 'loss')).strip().lower(),
             metrics=metrics,
             patience=int(evaluator.patience),

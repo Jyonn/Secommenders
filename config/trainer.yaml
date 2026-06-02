@@ -33,6 +33,7 @@ trainer:
   device: ${device:null}$
   num_gpus: ${num_gpus:1}$
   freeze_backbone: ${freeze_backbone:auto}$
+  sid_decoding: ${sid_decoding:auto}$
   sid_beam_width: ${sid_beam_width:20}$
   sid_collision_loss_weight: ${sid_collision_loss_weight:0.1}$
   alignment: ${alignment:0}$

@@ -64,12 +64,16 @@ def _print_pipeline_trace(model):
     print()
 
 class Quantizer:
+    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae')
+
     def __init__(self, data, model, config):
         self.config = config
 
         self.data = data
         self.embedding_model = model.replace('.', '').lower()
         self.quantizer_name = self.config.quantizer.name
+        self.quantizer_scheme = self._infer_quantizer_scheme(self.quantizer_name)
+        self.recommended_decoding = self._recommended_decoding(self.quantizer_scheme)
 
         self.processor = load_processor(self.data, data_dir=get_data_dir(self.data))
         self.processor.load()
@@ -92,6 +96,29 @@ class Quantizer:
         self.dataset = None
         self.trainer_args = None
         self.model = None
+
+    @classmethod
+    def _infer_quantizer_scheme(cls, quantizer_name: str) -> str:
+        normalized_name = str(quantizer_name).strip().lower()
+        if normalized_name not in cls.SUPPORTED_QUANTIZERS:
+            supported = ', '.join(cls.SUPPORTED_QUANTIZERS)
+            raise ValueError(
+                f'Unsupported quantizer "{quantizer_name}". '
+                f'Only {supported} are supported.'
+            )
+        if normalized_name == 'rqvae':
+            return 'rq'
+        if normalized_name == 'pqvae':
+            return 'pq'
+        raise ValueError(f'Unsupported quantizer "{quantizer_name}"')
+
+    @staticmethod
+    def _recommended_decoding(scheme: str) -> str:
+        if scheme == 'rq':
+            return 'sequential'
+        if scheme == 'pq':
+            return 'parallel'
+        raise ValueError(f'Unsupported quantizer scheme "{scheme}"')
 
     def _resolve_device(self):
         device = getattr(self.config.trainer, 'device', None)
@@ -297,6 +324,8 @@ class Quantizer:
             'embedding_path': str(self.embedding_path),
             'embedding_meta_path': str(self.embedding_meta_path),
             'quantizer_model': self.quantizer_name,
+            'quantizer_scheme': self.quantizer_scheme,
+            'recommended_decoding': self.recommended_decoding,
             'processed_items_path': str(Path(self.processor.store_dir) / 'items.parquet'),
             'checkpoint_metric': metric_name,
             'checkpoint_dir': str(checkpoint_dir),
@@ -307,6 +336,7 @@ class Quantizer:
             'codebook_indices_path': str(codes_path),
             'quantized_latents_path': str(quantized_path),
             'item_ids_path': str(item_ids_path),
+            'code_shape': list(codebook_indices.shape),
             'trainer_args': self.trainer_args.to_dict(),
             'quantizer_config': self.config.quantizer.config(),
         }
