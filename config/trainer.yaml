@@ -36,8 +36,7 @@ trainer:
   sid_beam_width: ${sid_beam_width:20}$
   sid_collision_loss_weight: ${sid_collision_loss_weight:0.1}$
   alignment:
-    enable: ${alignment_enable:false}$
-    weight: ${alignment_weight:0.1}$
+    weight: ${alignment_weight:0}$
 
 evaluator:
   main_metric: ${main_metric:loss}$

@@ -507,7 +507,7 @@ class SequentialRecModel(nn.Module):
                             group='primary',
                         )
                     )
-                elif repr_type != self.config.task_type and self.config.alignment_enable and include_alignment_repr:
+                elif repr_type != self.config.task_type and self.config.alignment_weight > 0 and include_alignment_repr:
                     supervision.extend(
                         self._build_repr_supervision(
                             repr_type=repr_type,

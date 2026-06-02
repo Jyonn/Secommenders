@@ -111,7 +111,7 @@ class Trainer:
                 f'sid test uses constrained beam search beam_width={self.config.sid_beam_width} '
                 f'ks={self.model_core.sid_ranking_ks()}'
             )
-        if self.config.alignment_enable:
+        if self.config.alignment_weight > 0:
             self._pnt(
                 f'alignment enabled weight={self.config.alignment_weight:g} '
                 f'mode=integrated-mixed-view'

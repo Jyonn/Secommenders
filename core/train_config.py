@@ -29,7 +29,6 @@ class TrainConfig:
     main_metric: str
     metrics: list[str]
     patience: int
-    alignment_enable: bool
     alignment_weight: float
     sid_beam_width: int
     sid_collision_loss_weight: float
@@ -60,7 +59,6 @@ class TrainConfig:
             raw_repr_type = None
         raw_task_type = str(data_config.task_type).lower()
         normalized_repr_type = canonicalize_repr_type(raw_task_type, raw_repr_type)
-        alignment_enable = alignment.enable if isinstance(alignment.enable, bool) else str(alignment.enable).lower() == 'true'
         raw_metrics = getattr(evaluator, 'metrics', [])
         if isinstance(raw_metrics, str):
             metrics = [metric.strip().lower() for metric in raw_metrics.split(',') if metric.strip()]
@@ -88,7 +86,6 @@ class TrainConfig:
             main_metric=str(getattr(evaluator, 'main_metric', 'loss')).strip().lower(),
             metrics=metrics,
             patience=int(evaluator.patience),
-            alignment_enable=alignment_enable,
             alignment_weight=float(alignment.weight),
             sid_beam_width=int(getattr(trainer, 'sid_beam_width', 20)),
             sid_collision_loss_weight=float(getattr(trainer, 'sid_collision_loss_weight', 0.1)),
@@ -136,7 +133,7 @@ class TrainConfig:
             parts.append(f'fr-{self.freeze_backbone}')
         if self.use_lora != 'auto':
             parts.append(f'lo-{self.use_lora}')
-        if self.alignment_enable:
+        if self.alignment_weight > 0:
             parts.append(f'al{compact_float(self.alignment_weight)}')
         if self.task_type == 'sid' and self.sid_beam_width != 20:
             parts.append(f'bm{self.sid_beam_width}')
