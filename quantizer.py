@@ -64,7 +64,7 @@ def _print_pipeline_trace(model):
     print()
 
 class Quantizer:
-    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae')
+    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae', 'opqvae')
 
     def __init__(self, data, model, config):
         self.config = config
@@ -114,7 +114,7 @@ class Quantizer:
             )
         if normalized_name == 'rqvae':
             return 'rq'
-        if normalized_name == 'pqvae':
+        if normalized_name in {'pqvae', 'opqvae'}:
             return 'pq'
         raise ValueError(f'Unsupported quantizer "{quantizer_name}"')
 

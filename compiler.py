@@ -43,7 +43,7 @@ class Compiler:
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
-    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae')
+    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae', 'opqvae')
 
     def __init__(self, config: CompileConfig):
         self.config = config
@@ -972,7 +972,7 @@ if __name__ == '__main__':
     parser.add_argument('--repr.type', dest='repr_type', default=None, help='Representation types, such as uid, text, or uid+text. Defaults to task.type.')
     parser.add_argument('--repr.model', dest='repr_model', default=None, help='External representation model, such as bertbase.')
     parser.add_argument('--repr.best', dest='repr_best', default=None, help='Best checkpoint metric for quantized codes, such as coll.')
-    parser.add_argument('--quantizer.name', dest='quantizer_name', default=None, help='Quantizer algorithm name for SID exports, such as rqvae or pqvae.')
+    parser.add_argument('--quantizer.name', dest='quantizer_name', default=None, help='Quantizer algorithm name for SID exports, such as rqvae, pqvae, or opqvae.')
     parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
     parser.add_argument('--model.maxlen', dest='model_max_length', type=int, default=0, help='Optional override for backbone max length, e.g. 2048.')
     parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'embedding'])
