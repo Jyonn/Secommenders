@@ -22,6 +22,8 @@ class LLMSequenceEncoder(nn.Module):
     ):
         super().__init__()
         torch_dtype = function.resolve_torch_dtype(model_dtype)
+        if torch_dtype is None and str(model_dtype).lower() == 'auto':
+            torch_dtype = torch.bfloat16
         base_model = AutoModel.from_pretrained(
             model_key,
             trust_remote_code=True,

@@ -12,7 +12,7 @@ data:
 model:
   name: ${model}$
   max_length: ${model_max_length:0}$
-  dtype: ${model_dtype:bfloat16}$
+  dtype: ${model_dtype:auto}$
   lora:
     use: ${use_lora:auto}$
     rank: ${lora_rank:8}$
