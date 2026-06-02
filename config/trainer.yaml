@@ -6,8 +6,8 @@ data:
   quantizer_name: ${quantizer_name:null}$
   repr_combine: ${repr_combine:concat}$
   task_type: ${task_type}$
-  maxitems: ${maxitems:0}$
-  item_text_max_tokens: ${item_text_max_tokens:50}$
+  maxitems: ${maxitems:20}$
+  item_text_max_tokens: ${item_text_max_tokens:20}$
 
 model:
   name: ${model}$
