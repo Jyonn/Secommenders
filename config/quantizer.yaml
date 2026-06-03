@@ -49,4 +49,4 @@ trainer:
     usage: false
     book: false
   save_best_by: [ loss, coll, codes, recon ]
-  log_memory: true
+  log_memory: false
