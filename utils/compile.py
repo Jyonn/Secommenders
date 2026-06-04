@@ -70,11 +70,14 @@ class CompileConfig:
         return [part.strip().lower() for part in self.repr_type.split('+') if part.strip()]
 
     @property
+    def used_views(self):
+        return set(self.repr_types + [self.task_type])
+
+    @property
     def sign_parts(self):
-        used_views = set(self.repr_types + [self.task_type])
-        uses_sid = 'sid' in used_views
-        uses_hash = 'hash' in used_views
-        uses_embedding = 'embedding' in used_views
+        uses_sid = 'sid' in self.used_views
+        uses_hash = 'hash' in self.used_views
+        uses_embedding = 'embedding' in self.used_views
         parts = [
             self.model,
             f'{self.repr_type}2{self.task_type}',
@@ -104,4 +107,12 @@ class CompileConfig:
 
     @property
     def config_dict(self):
-        return asdict(self)
+        payload = asdict(self)
+        if not any(view in {'sid', 'hash', 'embedding'} for view in self.used_views):
+            payload.pop('repr_source_model', None)
+        if 'sid' not in self.used_views:
+            payload.pop('sid_export', None)
+            payload.pop('sid_coder', None)
+        if 'hash' not in self.used_views:
+            payload.pop('hash_coder', None)
+        return payload

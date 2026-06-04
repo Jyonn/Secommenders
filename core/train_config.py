@@ -158,5 +158,25 @@ class TrainConfig:
             )
             if self.lora_layers:
                 parts.append(f'ly{self.lora_layers}')
-        parts.append(f'h{short_config_hash(self.__dict__)}')
+        parts.append(f'h{short_config_hash(self.sign_payload)}')
         return '__'.join(parts)
+
+    @property
+    def sign_payload(self):
+        payload = asdict(self)
+        used_views = self.compile_config.used_views
+        if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
+            payload.pop('repr_source_model', None)
+        if 'sid' not in used_views:
+            payload.pop('sid_export', None)
+            payload.pop('sid_coder', None)
+        if 'hash' not in used_views:
+            payload.pop('hash_coder', None)
+        if self.task_type != 'sid':
+            payload.pop('code_decoding', None)
+            payload.pop('code_beam_width', None)
+        if not any(view in {'sid', 'hash'} for view in used_views):
+            payload.pop('code_collision_loss_weight', None)
+        if len(self.compile_config.repr_types) <= 1:
+            payload.pop('alignment_weight', None)
+        return payload
