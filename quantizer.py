@@ -9,6 +9,7 @@ from pigmento import pnt
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from autoindexers.loading import load_indexer
 from autoencoders.data.base import TensorSpec, create_dataloaders, split_dataset
 from autoencoders.data.embeddings import EmbeddingMatrix, EmbeddingTensorDataset
 from autoencoders.function import resolve_device, set_seed
@@ -65,7 +66,9 @@ def _print_pipeline_trace(model):
     print()
 
 class Quantizer:
-    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae', 'opqvae')
+    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae', 'opqvae', 'lsh', 'simhash', 'pcahash', 'itq')
+    HASH_INDEXERS = ('lsh', 'simhash', 'pcahash', 'itq')
+    VQ_QUANTIZERS = ('rqvae', 'pqvae', 'opqvae')
 
     def __init__(self, data, model, config):
         self.config = config
@@ -120,15 +123,25 @@ class Quantizer:
             return 'rq'
         if normalized_name in {'pqvae', 'opqvae'}:
             return 'pq'
+        if normalized_name in cls.HASH_INDEXERS:
+            return 'hash'
         raise ValueError(f'Unsupported quantizer "{quantizer_name}"')
 
     @staticmethod
     def _recommended_decoding(scheme: str) -> str:
         if scheme == 'rq':
             return 'sequential'
-        if scheme == 'pq':
+        if scheme in {'pq', 'hash'}:
             return 'parallel'
         raise ValueError(f'Unsupported quantizer scheme "{scheme}"')
+
+    @property
+    def is_hash_indexer(self):
+        return self.quantizer_name in self.HASH_INDEXERS
+
+    @property
+    def is_vq_quantizer(self):
+        return self.quantizer_name in self.VQ_QUANTIZERS
 
     def _resolve_device(self):
         device = getattr(self.config.trainer, 'device', None)
@@ -165,6 +178,15 @@ class Quantizer:
 
         self.resolved_quantizer_config = quantizer_config
         return quantizer_config
+
+    def _resolve_hash_config(self):
+        if not getattr(self.config, 'hash', None):
+            raise ValueError(
+                f'{self.quantizer_name} requires a hash config section in config/quantizer.yaml.'
+            )
+        hash_config = dict(self.config.hash.config())
+        hash_config.setdefault('seed', int(self.config.trainer.seed))
+        return hash_config
 
     def _load_item_ids(self, expected_size):
         if self.embedding_item_ids_path.exists():
@@ -220,6 +242,16 @@ class Quantizer:
 
     def build_model(self):
         sample_spec = TensorSpec(shape=(self.embedding_matrix.embedding_dim,))
+        if self.is_hash_indexer:
+            hash_config = self._resolve_hash_config()
+            self.resolved_quantizer_config = hash_config
+            self.model = load_indexer(
+                self.quantizer_name,
+                sample_spec=sample_spec,
+                **hash_config,
+            )
+            return self.model
+
         decoder_name = None
         decoder_config = None
         if getattr(self.config, 'decoder', None):
@@ -245,6 +277,11 @@ class Quantizer:
         return VQTrainer(model=self.model, args=self.trainer_args)
 
     def train(self):
+        if self.is_hash_indexer:
+            raise RuntimeError(
+                f'{self.quantizer_name} is a hash indexer and does not use the VQ trainer. '
+                'Call run() to build and export hash codes directly.'
+            )
         set_seed(int(self.config.trainer.seed))
         self.load_embedding_matrix()
         dataloaders = self.build_dataloaders()
@@ -403,7 +440,85 @@ class Quantizer:
             exports[metric_name] = self.export_checkpoint(metric_name)
         return exports
 
+    def _hash_export_dir(self):
+        return self.output_dir / 'exports' / 'hash'
+
+    def _extract_binary_bits(self, indexer):
+        if hasattr(indexer, 'binary_codes') and isinstance(indexer.binary_codes, torch.Tensor):
+            bits = indexer.binary_codes.detach().cpu().to(torch.uint8)
+            return bits, list(bits.shape), {'bit_source': 'binary_codes'}
+        if hasattr(indexer, 'hash_codes') and isinstance(indexer.hash_codes, torch.Tensor):
+            hash_codes = indexer.hash_codes.detach().cpu().to(torch.uint8)
+            flattened = hash_codes.reshape(hash_codes.shape[0], -1).contiguous()
+            extras = {
+                'bit_source': 'hash_codes',
+                'hash_code_shape': list(hash_codes.shape),
+            }
+            return flattened, list(flattened.shape), extras
+        raise ValueError(
+            f'Unsupported hash indexer export for {self.quantizer_name}: '
+            'expected binary_codes or hash_codes tensor.'
+        )
+
+    def export_hash_indexer(self):
+        if self.embedding_matrix is None:
+            self.load_embedding_matrix()
+        if self.model is None:
+            self.build_model()
+
+        export_dir = self._hash_export_dir()
+        export_dir.mkdir(parents=True, exist_ok=True)
+        indexer_dir = export_dir / 'indexer'
+        bits_path = export_dir / 'binary_bits.npy'
+        item_ids_path = export_dir / 'item_ids.parquet'
+        meta_path = export_dir / 'meta.json'
+
+        pnt(f'building hash indexer {self.quantizer_name} for {self.data}/{self.embedding_model}')
+        self.model.build(self.embedding_matrix.matrix, item_ids=self.item_ids)
+        self.model.save_pretrained(indexer_dir)
+
+        binary_bits, binary_shape, extras = self._extract_binary_bits(self.model)
+        np.save(bits_path, binary_bits.numpy().astype(np.uint8))
+        pd.DataFrame({self.processor.IID_COL: self.item_ids}).to_parquet(item_ids_path, index=False)
+
+        total_bits = int(binary_bits.shape[1]) if binary_bits.ndim == 2 else int(binary_bits.numel())
+        meta = {
+            'dataset': self.data,
+            'embedding_model': self.embedding_model,
+            'embedding_path': str(self.embedding_path),
+            'embedding_meta_path': str(self.embedding_meta_path),
+            'representation_family': 'hash',
+            'hash_model': self.quantizer_name,
+            'quantizer_model': self.quantizer_name,
+            'quantizer_scheme': self.quantizer_scheme,
+            'recommended_decoding': self.recommended_decoding,
+            'processed_items_path': str(Path(self.processor.store_dir) / 'items.parquet'),
+            'item_count': int(self.embedding_matrix.num_embeddings),
+            'embedding_dim': int(self.embedding_matrix.embedding_dim),
+            'trainer_output_dir': str(self.output_dir),
+            'export_dir': str(export_dir),
+            'indexer_dir': str(indexer_dir),
+            'binary_bits_path': str(bits_path),
+            'item_ids_path': str(item_ids_path),
+            'binary_bits_shape': binary_shape,
+            'num_bits_total': total_bits,
+            'recommended_token_count': 4,
+            'bit_packing': 'grouped-msb-first',
+            'hash_config': self.resolved_quantizer_config or {},
+        }
+        meta.update(extras)
+        meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+
+        pnt(f'binary hash bits saved to {bits_path}')
+        return meta
+
     def run(self):
+        if self.is_hash_indexer:
+            set_seed(int(self.config.trainer.seed))
+            self.load_embedding_matrix()
+            self.build_model()
+            self.export_hash_indexer()
+            return
         self.train()
         self.export_all_checkpoints()
 

@@ -19,6 +19,16 @@ quantizer:
     kmeans_init: true
     kmeans_iters: 100
 
+hash:
+  config:
+    num_bits: ${num_bits:32}$
+    num_tables: ${num_tables:4}$
+    projection_distribution: ${projection_distribution:gaussian}$
+    use_median_thresholds: ${use_median_thresholds:true}$
+    num_iterations: ${num_iterations:50}$
+    normalize_inputs: ${normalize_inputs:true}$
+    seed: ${hash_seed:42}$
+
 encoder:
   name: mlp
   config:
