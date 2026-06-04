@@ -45,8 +45,9 @@ class CompileConfig:
     model: str
     repr_type: Optional[str]
     repr_source_model: Optional[str]
-    repr_export: Optional[str]
-    repr_coder: Optional[str]
+    sid_export: Optional[str]
+    sid_coder: Optional[str]
+    hash_coder: Optional[str]
     task_type: str
     maxitems: int
     model_max_length: Optional[int] = None
@@ -60,8 +61,9 @@ class CompileConfig:
         self.repr_type = canonicalize_repr_type(self.task_type, self.repr_type)
         self.repr_combine = str(self.repr_combine).lower()
         self.repr_source_model = normalize_model_name(self.repr_source_model)
-        self.repr_export = self.repr_export.lower() if self.repr_export else None
-        self.repr_coder = str(self.repr_coder).strip().lower() if self.repr_coder else None
+        self.sid_export = self.sid_export.lower() if self.sid_export else None
+        self.sid_coder = str(self.sid_coder).strip().lower() if self.sid_coder else None
+        self.hash_coder = str(self.hash_coder).strip().lower() if self.hash_coder else None
 
     @property
     def repr_types(self):
@@ -87,10 +89,12 @@ class CompileConfig:
             parts.append(f'ml{self.model_max_length}')
         if self.repr_source_model and (uses_sid or uses_hash or uses_embedding):
             parts.append(f'rsm-{self.repr_source_model}')
-        if self.repr_export and uses_sid:
-            parts.append(f're-{self.repr_export}')
-        if self.repr_coder and (uses_sid or uses_hash):
-            parts.append(f'rc-{self.repr_coder}')
+        if self.sid_export and uses_sid:
+            parts.append(f'se-{self.sid_export}')
+        if self.sid_coder and uses_sid:
+            parts.append(f'sc-{self.sid_coder}')
+        if self.hash_coder and uses_hash:
+            parts.append(f'hc-{self.hash_coder}')
         return parts
 
     @property

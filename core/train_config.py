@@ -12,8 +12,9 @@ class TrainConfig:
     model: str
     repr_type: str
     repr_source_model: Optional[str]
-    repr_export: Optional[str]
-    repr_coder: Optional[str]
+    sid_export: Optional[str]
+    sid_coder: Optional[str]
+    hash_coder: Optional[str]
     repr_combine: str
     task_type: str
     maxitems: int
@@ -70,8 +71,9 @@ class TrainConfig:
             model=model.name.lower(),
             repr_type=normalized_repr_type,
             repr_source_model=normalize_model_name(data_config.repr_source_model),
-            repr_export=data_config.repr_export.lower() if data_config.repr_export else None,
-            repr_coder=str(getattr(data_config, 'repr_coder', '')).strip().lower() or None,
+            sid_export=data_config.sid_export.lower() if data_config.sid_export else None,
+            sid_coder=str(getattr(data_config, 'sid_coder', '')).strip().lower() or None,
+            hash_coder=str(getattr(data_config, 'hash_coder', '')).strip().lower() or None,
             repr_combine=data_config.repr_combine.lower(),
             task_type=raw_task_type,
             maxitems=int(data_config.maxitems),
@@ -112,8 +114,9 @@ class TrainConfig:
             model=self.model,
             repr_type=self.repr_type,
             repr_source_model=self.repr_source_model,
-            repr_export=self.repr_export,
-            repr_coder=self.repr_coder,
+            sid_export=self.sid_export,
+            sid_coder=self.sid_coder,
+            hash_coder=self.hash_coder,
             task_type=self.task_type,
             maxitems=self.maxitems,
             model_max_length=self.model_max_length,

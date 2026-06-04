@@ -292,10 +292,12 @@ class Compiler:
         external_view_required = any(view in {'sid', 'hash', 'embedding'} for view in repr_types + [self.config.task_type])
         if external_view_required and not self.config.repr_source_model:
             raise ValueError('data.repr_source_model is required when repr.type or task.type uses sid/hash/embedding')
-        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.repr_export:
-            raise ValueError('data.repr_export is required when repr.type or task.type uses sid')
-        if any(view in {'sid', 'hash'} for view in set(repr_types + [self.config.task_type])) and not self.config.repr_coder:
-            raise ValueError('data.repr_coder is required when repr.type or task.type uses sid/hash')
+        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.sid_export:
+            raise ValueError('data.sid_export is required when repr.type or task.type uses sid')
+        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.sid_coder:
+            raise ValueError('data.sid_coder is required when repr.type or task.type uses sid')
+        if 'hash' in set(repr_types + [self.config.task_type]) and not self.config.hash_coder:
+            raise ValueError('data.hash_coder is required when repr.type or task.type uses hash')
 
     def run(self):
         self.validate()
@@ -552,7 +554,7 @@ class Compiler:
         if self.requires_view('sid'):
             pnt(
                 f'loading sid view from model={self.config.repr_source_model} '
-                f'export={self.config.repr_export}'
+                f'export={self.config.sid_export}'
             )
             sid_values = self.load_sid_view()
             self._write_view('sid', sid_values)
@@ -565,7 +567,7 @@ class Compiler:
         if self.requires_view('hash'):
             pnt(
                 f'loading hash view from model={self.config.repr_source_model} '
-                f'coder={self.config.repr_coder}'
+                f'coder={self.config.hash_coder}'
             )
             hash_values = self.load_hash_view()
             self._write_view('hash', hash_values)
@@ -595,7 +597,7 @@ class Compiler:
 
     def _load_quantized_export(self):
         model_name = normalize_model_name(self.config.repr_source_model)
-        quantizer_name = (self.config.repr_coder or '').strip().lower()
+        quantizer_name = (self.config.sid_coder or '').strip().lower()
         if not quantizer_name:
             raise ValueError('quantizer_name is required when compile config uses sid views')
         if quantizer_name not in self.SUPPORTED_QUANTIZERS:
@@ -605,7 +607,7 @@ class Compiler:
                 f'Only {supported} are supported.'
             )
 
-        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / self.config.repr_export
+        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / self.config.sid_export
 
         def _export_ready(path: Path):
             meta_path = path / 'meta.json'
@@ -638,7 +640,7 @@ class Compiler:
 
     def _load_hash_export(self):
         model_name = normalize_model_name(self.config.repr_source_model)
-        quantizer_name = (self.config.repr_coder or '').strip().lower()
+        quantizer_name = (self.config.hash_coder or '').strip().lower()
         if not quantizer_name:
             raise ValueError('quantizer_name is required when compile config uses hash views')
         if quantizer_name not in self.SUPPORTED_QUANTIZERS:
@@ -1192,8 +1194,9 @@ if __name__ == '__main__':
     parser.add_argument('--model', required=True, help='Backbone model name, such as llama3 or transformer.')
     parser.add_argument('--repr.type', dest='repr_type', default=None, help='Representation types, such as uid, text, or uid+text. Defaults to task.type.')
     parser.add_argument('--repr.source-model', dest='repr_source_model', default=None, help='External representation source model, such as bertbase.')
-    parser.add_argument('--repr.export', dest='repr_export', default=None, help='Export tag for discrete codes, such as coll.')
-    parser.add_argument('--repr.coder', dest='repr_coder', default=None, help='Representation coder/indexer name for SID/hash exports, such as rqvae, pqvae, opqvae, or lsh.')
+    parser.add_argument('--sid.export', dest='sid_export', default=None, help='Export tag for SID codes, such as coll.')
+    parser.add_argument('--sid.coder', dest='sid_coder', default=None, help='Coder name for SID exports, such as rqvae, pqvae, or opqvae.')
+    parser.add_argument('--hash.coder', dest='hash_coder', default=None, help='Coder/indexer name for hash exports, such as lsh, simhash, pcahash, or itq.')
     parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
     parser.add_argument('--model.maxlen', dest='model_max_length', type=int, default=0, help='Optional override for backbone max length, e.g. 2048.')
     parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'hash', 'embedding'])
@@ -1206,8 +1209,9 @@ if __name__ == '__main__':
         model=args.model.lower(),
         repr_type=args.repr_type.lower() if args.repr_type else None,
         repr_source_model=normalize_model_name(args.repr_source_model),
-        repr_export=args.repr_export.lower() if args.repr_export else None,
-        repr_coder=args.repr_coder.lower() if args.repr_coder else None,
+        sid_export=args.sid_export.lower() if args.sid_export else None,
+        sid_coder=args.sid_coder.lower() if args.sid_coder else None,
+        hash_coder=args.hash_coder.lower() if args.hash_coder else None,
         repr_combine=args.repr_combine.lower(),
         task_type=args.task_type.lower(),
         maxitems=int(args.maxitems),

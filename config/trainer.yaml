@@ -2,8 +2,9 @@ data:
   name: ${data}$
   repr_type: ${repr_type:null}$
   repr_source_model: ${repr_source_model:null}$
-  repr_export: ${repr_export:coll}$
-  repr_coder: ${repr_coder:null}$
+  sid_export: ${sid_export:coll}$
+  sid_coder: ${sid_coder:null}$
+  hash_coder: ${hash_coder:null}$
   repr_combine: ${repr_combine:concat}$
   task_type: ${task_type}$
   maxitems: ${maxitems:20}$
