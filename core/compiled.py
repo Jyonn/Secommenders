@@ -40,6 +40,8 @@ class CompiledArtifacts:
         self.hash_num_tokens = None
         self.hash_base_num_tokens = None
         self.hash_codebook_size = None
+        self.hash_slot_sizes = None
+        self.hash_slot_offsets = None
         self.hash_collision_vocab_size = None
         self.hash_collision_token_offset = None
         self.hash_quantizer_name = None
@@ -134,6 +136,8 @@ class CompiledArtifacts:
             self.hash_num_tokens = int(hash_vocab['num_tokens'])
             self.hash_base_num_tokens = int(hash_vocab.get('base_num_tokens', self.hash_num_tokens))
             self.hash_codebook_size = int(hash_vocab['codebook_size'])
+            self.hash_slot_sizes = [int(size) for size in hash_vocab.get('slot_sizes', [])]
+            self.hash_slot_offsets = [int(offset) for offset in hash_vocab.get('slot_offsets', [])]
             self.hash_collision_vocab_size = int(hash_vocab.get('collision_vocab_size', 0))
             self.hash_collision_token_offset = int(hash_vocab.get('collision_token_offset', 0))
             self.hash_quantizer_name = hash_vocab.get('quantizer_name')

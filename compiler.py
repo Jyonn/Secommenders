@@ -456,8 +456,8 @@ class Compiler:
             hash_vocab_path = self.vocab_dir / 'hash.json'
             tokens = [
                 f'h{token_index}_c{code}'
-                for token_index in range(hash_meta['num_tokens'])
-                for code in range(hash_meta['codebook_size'])
+                for token_index, slot_size in enumerate(hash_meta['slot_sizes'])
+                for code in range(slot_size)
             ] + [
                 f'collision_{index}'
                 for index in range(hash_meta['collision_vocab_size'])
@@ -468,7 +468,9 @@ class Compiler:
                     'tokens': tokens,
                     'num_tokens': hash_meta['final_num_tokens'],
                     'base_num_tokens': hash_meta['num_tokens'],
-                    'codebook_size': hash_meta['codebook_size'],
+                    'slot_sizes': hash_meta['slot_sizes'],
+                    'slot_offsets': hash_meta['slot_offsets'],
+                    'codebook_size': max(hash_meta['slot_sizes']) if hash_meta['slot_sizes'] else 0,
                     'collision_vocab_size': hash_meta['collision_vocab_size'],
                     'collision_token_offset': hash_meta['collision_token_offset'],
                     'collision_group_count': hash_meta['collision_group_count'],
@@ -489,7 +491,9 @@ class Compiler:
                 path=hash_vocab_path,
                 num_tokens=hash_meta['final_num_tokens'],
                 base_num_tokens=hash_meta['num_tokens'],
-                codebook_size=hash_meta['codebook_size'],
+                slot_sizes=hash_meta['slot_sizes'],
+                slot_offsets=hash_meta['slot_offsets'],
+                codebook_size=max(hash_meta['slot_sizes']) if hash_meta['slot_sizes'] else 0,
                 collision_vocab_size=hash_meta['collision_vocab_size'],
                 quantizer_name=hash_meta.get('quantizer_name'),
                 quantizer_scheme=hash_meta.get('quantizer_scheme'),
@@ -499,7 +503,7 @@ class Compiler:
                 f"registered hash vocab size={len(tokens)} "
                 f"base_num_tokens={hash_meta['num_tokens']} "
                 f"final_num_tokens={hash_meta['final_num_tokens']} "
-                f"codebook_size={hash_meta['codebook_size']} "
+                f"slot_sizes={hash_meta['slot_sizes']} "
                 f"collision_vocab_size={hash_meta['collision_vocab_size']} "
                 f"max_collision_size={hash_meta['max_collision_size']}"
             )
@@ -773,13 +777,34 @@ class Compiler:
         num_bits_total = int(binary_bits.shape[1])
         num_tokens = 3
         bits_per_token = int(np.ceil(num_bits_total / max(num_tokens, 1)))
-        codebook_size = 2 ** bits_per_token
-        collision_token_offset = num_tokens * codebook_size
+        raw_slot_values = [[] for _ in range(num_tokens)]
+        packed_rows = []
+        for row in tqdm(binary_bits, total=len(binary_bits), desc='hash pack', leave=False):
+            packed = self._pack_bit_groups(np.asarray(row).astype(np.uint8).tolist(), bits_per_token, num_tokens)
+            packed_rows.append(packed)
+            for token_index, packed_value in enumerate(packed):
+                raw_slot_values[token_index].append(int(packed_value))
+
+        slot_value_maps = []
+        slot_sizes = []
+        slot_offsets = []
+        offset = 0
+        for token_index in range(num_tokens):
+            unique_values = sorted(set(raw_slot_values[token_index]))
+            value_map = {value: index for index, value in enumerate(unique_values)}
+            slot_value_maps.append(value_map)
+            slot_sizes.append(len(unique_values))
+            slot_offsets.append(offset)
+            offset += len(unique_values)
+
+        collision_token_offset = offset
 
         base_hash_groups = {}
-        for item_id, row in zip(item_ids, binary_bits):
-            packed = self._pack_bit_groups(np.asarray(row).astype(np.uint8).tolist(), bits_per_token, num_tokens)
-            base_hash = tuple(token_index * codebook_size + int(code) for token_index, code in enumerate(packed))
+        for item_id, packed in tqdm(zip(item_ids, packed_rows), total=len(item_ids), desc='hash group', leave=False):
+            base_hash = tuple(
+                slot_offsets[token_index] + slot_value_maps[token_index][int(code)]
+                for token_index, code in enumerate(packed)
+            )
             base_hash_groups.setdefault(base_hash, []).append(item_id)
 
         max_collision_size = max((len(group) for group in base_hash_groups.values()), default=1)
@@ -791,7 +816,8 @@ class Compiler:
         self.hash_stats = {
             'base_num_tokens': num_tokens,
             'final_num_tokens': final_num_tokens,
-            'codebook_size': codebook_size,
+            'slot_sizes': slot_sizes,
+            'slot_offsets': slot_offsets,
             'collision_vocab_size': collision_vocab_size,
             'collision_token_offset': collision_token_offset,
             'collision_group_count': collision_group_count,
@@ -809,7 +835,8 @@ class Compiler:
             return {
                 'num_tokens': num_tokens,
                 'final_num_tokens': final_num_tokens,
-                'codebook_size': codebook_size,
+                'slot_sizes': slot_sizes,
+                'slot_offsets': slot_offsets,
                 'collision_vocab_size': collision_vocab_size,
                 'collision_token_offset': collision_token_offset,
                 'collision_group_count': collision_group_count,

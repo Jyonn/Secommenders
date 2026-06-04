@@ -290,15 +290,19 @@ class SequentialRecModel(nn.Module):
 
     def _hash_slot_allowed_codes(self, slot_index: int):
         base_num_tokens = int(self.compiled.hash_base_num_tokens or 0)
-        codebook_size = int(self.compiled.hash_codebook_size or 0)
+        slot_sizes = list(self.compiled.hash_slot_sizes or [])
+        slot_offsets = list(self.compiled.hash_slot_offsets or [])
         collision_offset = int(self.compiled.hash_collision_token_offset or 0)
         collision_vocab_size = int(self.compiled.hash_collision_vocab_size or 0)
 
         if slot_index < 0:
             raise ValueError(f'Invalid hash slot index: {slot_index}')
         if slot_index < base_num_tokens:
-            start = slot_index * codebook_size
-            return list(range(start, start + codebook_size))
+            if slot_index >= len(slot_sizes) or slot_index >= len(slot_offsets):
+                raise ValueError(f'Missing hash slot metadata for slot {slot_index}')
+            start = slot_offsets[slot_index]
+            size = slot_sizes[slot_index]
+            return list(range(start, start + size))
         if slot_index == base_num_tokens:
             return list(range(collision_offset, collision_offset + collision_vocab_size))
         raise ValueError(
