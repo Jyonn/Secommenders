@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 TYPE_MARKER_TOKENS = {
     'uid': '<uid>',
     'sid': '<sid>',
+    'hash': '<hash>',
     'text': '<text>',
     'embedding': '<embedding>',
     'uid+embedding': '<uid+embedding>',

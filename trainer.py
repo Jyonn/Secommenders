@@ -123,6 +123,8 @@ class Trainer:
                     else f'item_scoring ks={self.model_core.sid_ranking_ks()}'
                 )
             )
+        elif self.config.task_type == 'hash':
+            self._pnt(f'hash decoding=parallel item_scoring ks={self.model_core.ranking_ks()}')
         if self.config.alignment_weight > 0:
             self._pnt(
                 f'alignment enabled weight={self.config.alignment_weight:g} '
@@ -134,6 +136,8 @@ class Trainer:
             return 'uid_acc'
         if self.config.task_type == 'sid':
             return 'sid_token_acc'
+        if self.config.task_type == 'hash':
+            return 'hash_token_acc'
         return 'embedding_cosine'
 
     def _default_ranking_metric(self):

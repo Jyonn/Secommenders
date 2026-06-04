@@ -39,11 +39,11 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v2.6'
-    SUPPORTED_REPR_TYPES = {'uid', 'sid', 'text', 'embedding'}
-    SUPPORTED_TASK_TYPES = {'uid', 'sid', 'embedding'}
+    VER = 'v2.7'
+    SUPPORTED_REPR_TYPES = {'uid', 'sid', 'hash', 'text', 'embedding'}
+    SUPPORTED_TASK_TYPES = {'uid', 'sid', 'hash', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
-    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae', 'opqvae')
+    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae', 'opqvae', 'lsh', 'simhash', 'pcahash', 'itq')
 
     def __init__(self, config: CompileConfig):
         self.config = config
@@ -59,6 +59,7 @@ class Compiler:
         self.samples_stats = {}
         self.sample_visuals = {}
         self.sid_stats = {}
+        self.hash_stats = {}
 
         self._init_dirs()
 
@@ -132,6 +133,12 @@ class Compiler:
             if len(codes) > 6:
                 preview += ',...'
             return f'sid[{len(codes)}]=[{preview}]'
+        if view_name == 'hash':
+            codes = self._as_token_list(self.item_views['hash'][uid])
+            preview = ','.join(str(code) for code in codes[:6])
+            if len(codes) > 6:
+                preview += ',...'
+            return f'hash[{len(codes)}]=[{preview}]'
         if view_name == 'embedding':
             return f'emb#{self.item_views["embedding"][uid]}'
         return str(self.item_views[view_name][uid])
@@ -237,6 +244,8 @@ class Compiler:
             required_item_view_paths.append(self.item_views_dir / 'text.parquet')
         if self.requires_view('sid'):
             required_item_view_paths.append(self.item_views_dir / 'sid.parquet')
+        if self.requires_view('hash'):
+            required_item_view_paths.append(self.item_views_dir / 'hash.parquet')
         if self.requires_view('embedding'):
             required_item_view_paths.append(self.item_views_dir / 'embedding.parquet')
         required_paths = [
@@ -280,13 +289,13 @@ class Compiler:
         if is_scratch_model and 'text' in repr_types:
             raise ValueError('scratch backbone currently does not support repr.type containing text')
 
-        external_view_required = any(view in {'sid', 'embedding'} for view in repr_types + [self.config.task_type])
+        external_view_required = any(view in {'sid', 'hash', 'embedding'} for view in repr_types + [self.config.task_type])
         if external_view_required and not self.config.repr_model:
-            raise ValueError('repr.model is required when repr.type or task.type uses sid/embedding')
+            raise ValueError('repr.model is required when repr.type or task.type uses sid/hash/embedding')
         if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.repr_best:
             raise ValueError('repr.best is required when repr.type or task.type uses sid')
-        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.quantizer_name:
-            raise ValueError('data.repr_quantizer is required when repr.type or task.type uses sid')
+        if any(view in {'sid', 'hash'} for view in set(repr_types + [self.config.task_type])) and not self.config.quantizer_name:
+            raise ValueError('data.repr_quantizer is required when repr.type or task.type uses sid/hash')
 
     def run(self):
         self.validate()
@@ -440,6 +449,58 @@ class Compiler:
                 f"collision_vocab_size={sid_meta['collision_vocab_size']} "
                 f"max_collision_size={sid_meta['max_collision_size']}"
             )
+        if self.requires_view('hash'):
+            hash_meta = self.load_hash_view(build_only_meta=True)
+            hash_vocab_path = self.vocab_dir / 'hash.json'
+            tokens = [
+                f'h{token_index}_c{code}'
+                for token_index in range(hash_meta['num_tokens'])
+                for code in range(hash_meta['codebook_size'])
+            ] + [
+                f'collision_{index}'
+                for index in range(hash_meta['collision_vocab_size'])
+            ]
+            self._save_json(
+                hash_vocab_path,
+                {
+                    'tokens': tokens,
+                    'num_tokens': hash_meta['final_num_tokens'],
+                    'base_num_tokens': hash_meta['num_tokens'],
+                    'codebook_size': hash_meta['codebook_size'],
+                    'collision_vocab_size': hash_meta['collision_vocab_size'],
+                    'collision_token_offset': hash_meta['collision_token_offset'],
+                    'collision_group_count': hash_meta['collision_group_count'],
+                    'collided_item_count': hash_meta['collided_item_count'],
+                    'max_collision_size': hash_meta['max_collision_size'],
+                    'num_bits_total': hash_meta['num_bits_total'],
+                    'bits_per_token': hash_meta['bits_per_token'],
+                    'quantizer_name': hash_meta.get('quantizer_name'),
+                    'quantizer_scheme': hash_meta.get('quantizer_scheme'),
+                    'recommended_decoding': hash_meta.get('recommended_decoding'),
+                    'quantized_export_dir': hash_meta.get('quantized_export_dir'),
+                },
+            )
+            self.registry.register(
+                'hash',
+                kind='hash',
+                size=len(tokens),
+                path=hash_vocab_path,
+                num_tokens=hash_meta['final_num_tokens'],
+                base_num_tokens=hash_meta['num_tokens'],
+                codebook_size=hash_meta['codebook_size'],
+                collision_vocab_size=hash_meta['collision_vocab_size'],
+                quantizer_name=hash_meta.get('quantizer_name'),
+                quantizer_scheme=hash_meta.get('quantizer_scheme'),
+                recommended_decoding=hash_meta.get('recommended_decoding'),
+            )
+            pnt(
+                f"registered hash vocab size={len(tokens)} "
+                f"base_num_tokens={hash_meta['num_tokens']} "
+                f"final_num_tokens={hash_meta['final_num_tokens']} "
+                f"codebook_size={hash_meta['codebook_size']} "
+                f"collision_vocab_size={hash_meta['collision_vocab_size']} "
+                f"max_collision_size={hash_meta['max_collision_size']}"
+            )
 
         self._save_json(self.vocab_dir / 'meta.json', self.registry.to_dict())
         main_prompt = self.backbone.build_prompt_spec()
@@ -456,7 +517,7 @@ class Compiler:
         return view_name in views
 
     def build_item_views(self):
-        required_views = [view for view in ['uid', 'text', 'sid', 'embedding'] if self.requires_view(view)]
+        required_views = [view for view in ['uid', 'text', 'sid', 'hash', 'embedding'] if self.requires_view(view)]
         pnt(f'building item views {required_views} for {len(self.uid_raw_items)} items')
         self._write_view('uid', list(range(len(self.uid_raw_items))))
         pnt('uid view ready')
@@ -499,6 +560,19 @@ class Compiler:
             pnt(
                 f'sid view ready avg_codes={np.mean(sid_lengths):.2f} '
                 f'max_codes={max(sid_lengths) if sid_lengths else 0}'
+            )
+
+        if self.requires_view('hash'):
+            pnt(
+                f'loading hash view from model={self.config.repr_model} '
+                f'indexer={self.config.quantizer_name}'
+            )
+            hash_values = self.load_hash_view()
+            self._write_view('hash', hash_values)
+            hash_lengths = [len(value) for value in hash_values]
+            pnt(
+                f'hash view ready avg_codes={np.mean(hash_lengths):.2f} '
+                f'max_codes={max(hash_lengths) if hash_lengths else 0}'
             )
 
         if self.requires_view('embedding'):
@@ -561,6 +635,49 @@ class Compiler:
             f'quantizer={meta.get("quantizer_model", "unknown")}'
         )
         return export_dir, meta, item_ids, codes
+
+    def _load_hash_export(self):
+        model_name = normalize_model_name(self.config.repr_model)
+        quantizer_name = (self.config.quantizer_name or '').strip().lower()
+        if not quantizer_name:
+            raise ValueError('quantizer_name is required when compile config uses hash views')
+        if quantizer_name not in self.SUPPORTED_QUANTIZERS:
+            supported = ', '.join(self.SUPPORTED_QUANTIZERS)
+            raise ValueError(
+                f'Unsupported quantizer "{quantizer_name}". '
+                f'Only {supported} are supported.'
+            )
+
+        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / 'hash'
+
+        def _export_ready(path: Path):
+            meta_path = path / 'meta.json'
+            bits_path = path / 'binary_bits.npy'
+            item_ids_path = path / 'item_ids.parquet'
+            return meta_path.exists() and bits_path.exists() and item_ids_path.exists()
+
+        export_ready = _export_ready(export_dir)
+        if not export_ready:
+            ensure_quantized(self.config.data, model_name, quantizer_name)
+            export_ready = _export_ready(export_dir)
+        if not export_ready:
+            raise FileNotFoundError(
+                'Hash export not found after auto preparation. '
+                f'Searched: {export_dir}'
+            )
+
+        meta_path = export_dir / 'meta.json'
+        bits_path = export_dir / 'binary_bits.npy'
+        item_ids_path = export_dir / 'item_ids.parquet'
+        pnt(f'loading hash export from {export_dir}')
+        meta = json.loads(meta_path.read_text())
+        bits = np.load(bits_path)
+        item_ids = pd.read_parquet(item_ids_path)[self.processor.IID_COL].tolist()
+        pnt(
+            f'loaded hash export rows={len(item_ids)} shape={list(bits.shape)} '
+            f'hash_model={meta.get("hash_model", meta.get("quantizer_model", "unknown"))}'
+        )
+        return export_dir, meta, item_ids, bits
 
     def load_sid_view(self, build_only_meta=False):
         export_dir, meta, item_ids, codes = self._load_quantized_export()
@@ -626,6 +743,99 @@ class Compiler:
             ordered_values.append(sid_map[item_id])
         if missing:
             raise ValueError(f'{len(missing)} items missing sid codes, first missing item: {missing[0]}')
+
+        return ordered_values
+
+    @staticmethod
+    def _pack_bit_groups(bit_values: list[int], bits_per_token: int, num_tokens: int):
+        padded = list(bit_values)
+        total_required = bits_per_token * num_tokens
+        if len(padded) < total_required:
+            padded.extend([0] * (total_required - len(padded)))
+
+        packed = []
+        for token_index in range(num_tokens):
+            start = token_index * bits_per_token
+            end = start + bits_per_token
+            bucket_id = 0
+            for bit in padded[start:end]:
+                bucket_id = (bucket_id << 1) | int(bit)
+            packed.append(bucket_id)
+        return packed
+
+    def load_hash_view(self, build_only_meta=False):
+        export_dir, meta, item_ids, binary_bits = self._load_hash_export()
+        if binary_bits.ndim != 2:
+            raise ValueError(f'Expected 2D binary hash array, got shape {binary_bits.shape}')
+
+        num_bits_total = int(binary_bits.shape[1])
+        num_tokens = 3
+        bits_per_token = int(np.ceil(num_bits_total / max(num_tokens, 1)))
+        codebook_size = 2 ** bits_per_token
+        collision_token_offset = num_tokens * codebook_size
+
+        base_hash_groups = {}
+        for item_id, row in zip(item_ids, binary_bits):
+            packed = self._pack_bit_groups(np.asarray(row).astype(np.uint8).tolist(), bits_per_token, num_tokens)
+            base_hash = tuple(token_index * codebook_size + int(code) for token_index, code in enumerate(packed))
+            base_hash_groups.setdefault(base_hash, []).append(item_id)
+
+        max_collision_size = max((len(group) for group in base_hash_groups.values()), default=1)
+        collision_vocab_size = max_collision_size
+        final_num_tokens = num_tokens + 1
+        collision_group_count = sum(1 for group in base_hash_groups.values() if len(group) > 1)
+        collided_item_count = sum(len(group) for group in base_hash_groups.values() if len(group) > 1)
+
+        self.hash_stats = {
+            'base_num_tokens': num_tokens,
+            'final_num_tokens': final_num_tokens,
+            'codebook_size': codebook_size,
+            'collision_vocab_size': collision_vocab_size,
+            'collision_token_offset': collision_token_offset,
+            'collision_group_count': collision_group_count,
+            'collided_item_count': collided_item_count,
+            'max_collision_size': max_collision_size,
+            'num_bits_total': num_bits_total,
+            'bits_per_token': bits_per_token,
+            'quantizer_name': meta.get('hash_model', meta.get('quantizer_model')),
+            'quantizer_scheme': meta.get('quantizer_scheme'),
+            'recommended_decoding': meta.get('recommended_decoding', 'parallel'),
+            'quantized_export_dir': str(export_dir),
+        }
+
+        if build_only_meta:
+            return {
+                'num_tokens': num_tokens,
+                'final_num_tokens': final_num_tokens,
+                'codebook_size': codebook_size,
+                'collision_vocab_size': collision_vocab_size,
+                'collision_token_offset': collision_token_offset,
+                'collision_group_count': collision_group_count,
+                'collided_item_count': collided_item_count,
+                'max_collision_size': max_collision_size,
+                'num_bits_total': num_bits_total,
+                'bits_per_token': bits_per_token,
+                'quantizer_name': meta.get('hash_model', meta.get('quantizer_model')),
+                'quantizer_scheme': meta.get('quantizer_scheme'),
+                'recommended_decoding': meta.get('recommended_decoding', 'parallel'),
+                'quantized_export_dir': str(export_dir),
+            }
+
+        hash_map = {}
+        for base_hash, grouped_item_ids in tqdm(base_hash_groups.items(), total=len(base_hash_groups), desc='hash map', leave=False):
+            ordered_item_ids = sorted(grouped_item_ids, key=lambda value: str(value))
+            for collision_index, item_id in enumerate(ordered_item_ids):
+                hash_map[item_id] = list(base_hash) + [collision_token_offset + collision_index]
+
+        missing = []
+        ordered_values = []
+        for item_id in tqdm(self.uid_raw_items, desc='hash align', leave=False):
+            if item_id not in hash_map:
+                missing.append(item_id)
+                continue
+            ordered_values.append(hash_map[item_id])
+        if missing:
+            raise ValueError(f'{len(missing)} items missing hash codes, first missing item: {missing[0]}')
 
         return ordered_values
 
@@ -921,6 +1131,9 @@ class Compiler:
                 'sid_quantizer_name': self.sid_stats.get('quantizer_name'),
                 'sid_quantizer_scheme': self.sid_stats.get('quantizer_scheme'),
                 'sid_recommended_decoding': self.sid_stats.get('recommended_decoding'),
+                'hash_quantizer_name': self.hash_stats.get('quantizer_name'),
+                'hash_quantizer_scheme': self.hash_stats.get('quantizer_scheme'),
+                'hash_recommended_decoding': self.hash_stats.get('recommended_decoding'),
             },
         )
         pnt(f'meta saved to {self.meta_path}')
@@ -945,6 +1158,12 @@ class Compiler:
             'sid_collision_group_count': self.sid_stats.get('collision_group_count', 0),
             'sid_collided_item_count': self.sid_stats.get('collided_item_count', 0),
             'sid_max_collision_size': self.sid_stats.get('max_collision_size', 0),
+            'hash_base_num_tokens': self.hash_stats.get('base_num_tokens', 0),
+            'hash_final_num_tokens': self.hash_stats.get('final_num_tokens', 0),
+            'hash_collision_vocab_size': self.hash_stats.get('collision_vocab_size', 0),
+            'hash_collision_group_count': self.hash_stats.get('collision_group_count', 0),
+            'hash_collided_item_count': self.hash_stats.get('collided_item_count', 0),
+            'hash_max_collision_size': self.hash_stats.get('max_collision_size', 0),
         }
         stats_path = self.output_dir / 'stats.json'
         self._save_json(stats_path, stats)
@@ -953,7 +1172,9 @@ class Compiler:
             f"finetune_samples={stats['finetune_sample_count']} test_samples={stats['test_sample_count']} "
             f"resolved_maxitems={stats['resolved_maxitems']} "
             f"sid_final_num_quantizers={stats['sid_final_num_quantizers']} "
-            f"sid_max_collision_size={stats['sid_max_collision_size']}"
+            f"sid_max_collision_size={stats['sid_max_collision_size']} "
+            f"hash_final_num_tokens={stats['hash_final_num_tokens']} "
+            f"hash_max_collision_size={stats['hash_max_collision_size']}"
         )
 
     def log_sample_visuals(self):
@@ -972,10 +1193,10 @@ if __name__ == '__main__':
     parser.add_argument('--repr.type', dest='repr_type', default=None, help='Representation types, such as uid, text, or uid+text. Defaults to task.type.')
     parser.add_argument('--repr.model', dest='repr_model', default=None, help='External representation model, such as bertbase.')
     parser.add_argument('--repr.best', dest='repr_best', default=None, help='Best checkpoint metric for quantized codes, such as coll.')
-    parser.add_argument('--quantizer.name', dest='quantizer_name', default=None, help='Quantizer algorithm name for SID exports, such as rqvae, pqvae, or opqvae.')
+    parser.add_argument('--quantizer.name', dest='quantizer_name', default=None, help='Quantizer/indexer algorithm name for SID/hash exports, such as rqvae, pqvae, opqvae, or lsh.')
     parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
     parser.add_argument('--model.maxlen', dest='model_max_length', type=int, default=0, help='Optional override for backbone max length, e.g. 2048.')
-    parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'embedding'])
+    parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'hash', 'embedding'])
     parser.add_argument('--maxitems', type=int, default=0, help='Maximum history items, 0 means auto by model max length.')
     parser.add_argument('--item-text-max-tokens', type=int, default=50, help='Maximum tokenized length per item text.')
     args = parser.parse_args()
@@ -983,7 +1204,7 @@ if __name__ == '__main__':
     config = CompileConfig(
         data=args.data.lower(),
         model=args.model.lower(),
-        repr_type=args.repr_type.lower(),
+        repr_type=args.repr_type.lower() if args.repr_type else None,
         repr_model=normalize_model_name(args.repr_model),
         repr_best=args.repr_best.lower() if args.repr_best else None,
         quantizer_name=args.quantizer_name.lower() if args.quantizer_name else None,

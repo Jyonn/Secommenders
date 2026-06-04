@@ -71,6 +71,7 @@ class CompileConfig:
     def sign_parts(self):
         used_views = set(self.repr_types + [self.task_type])
         uses_sid = 'sid' in used_views
+        uses_hash = 'hash' in used_views
         uses_embedding = 'embedding' in used_views
         parts = [
             self.model,
@@ -84,11 +85,11 @@ class CompileConfig:
             parts.append(f'tl{self.item_text_max_tokens}')
         if self.model_max_length:
             parts.append(f'ml{self.model_max_length}')
-        if self.repr_model and (uses_sid or uses_embedding):
+        if self.repr_model and (uses_sid or uses_hash or uses_embedding):
             parts.append(f'rm-{self.repr_model}')
         if self.repr_best and uses_sid:
             parts.append(f'rb-{self.repr_best}')
-        if self.quantizer_name and uses_sid:
+        if self.quantizer_name and (uses_sid or uses_hash):
             parts.append(f'q-{self.quantizer_name}')
         return parts
 

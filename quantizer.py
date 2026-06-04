@@ -502,7 +502,7 @@ class Quantizer:
             'item_ids_path': str(item_ids_path),
             'binary_bits_shape': binary_shape,
             'num_bits_total': total_bits,
-            'recommended_token_count': 4,
+            'recommended_token_count': 3,
             'bit_packing': 'grouped-msb-first',
             'hash_config': self.resolved_quantizer_config or {},
         }

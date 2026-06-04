@@ -143,7 +143,7 @@ class TrainConfig:
             parts.append(f'sd-{self.sid_decoding}')
         if self.task_type == 'sid' and self.sid_beam_width != 20:
             parts.append(f'bm{self.sid_beam_width}')
-        if self.task_type == 'sid' and self.sid_collision_loss_weight != 0.1:
+        if self.task_type in {'sid', 'hash'} and self.sid_collision_loss_weight != 0.1:
             parts.append(f'scw{compact_float(self.sid_collision_loss_weight)}')
         if is_llm:
             parts.extend(

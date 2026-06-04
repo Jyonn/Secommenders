@@ -53,10 +53,12 @@ class SequentialRecModel(nn.Module):
         self.type_marker_embedding = nn.Embedding(len(self.compiled.special_vocab['tokens']), input_embed_dim)
         self.uid_embedding = nn.Embedding(compiled.num_items, input_embed_dim)
         self.sid_embedding = nn.Embedding(max(compiled.sid_vocab_size, 1), input_embed_dim)
+        self.hash_embedding = nn.Embedding(max(compiled.hash_vocab_size, 1), input_embed_dim)
         self.embedding_projection = None
         self.embedding_head = None
         self.uid_head = None
         self.sid_head = None
+        self.hash_head = None
         self.model_token_head = None
 
         if compiled.embedding_matrix is not None:
@@ -72,13 +74,17 @@ class SequentialRecModel(nn.Module):
             if not compiled.sid_vocab_size or not compiled.sid_num_quantizers:
                 raise ValueError('sid task requires sid vocab metadata in compiled artifacts')
             self.sid_head = nn.Linear(hidden_size, compiled.sid_vocab_size)
+        if 'hash' in supervised_repr_types or config.task_type == 'hash':
+            if not compiled.hash_vocab_size or not compiled.hash_num_tokens:
+                raise ValueError('hash task requires hash vocab metadata in compiled artifacts')
+            self.hash_head = nn.Linear(hidden_size, compiled.hash_vocab_size)
         if 'text' in supervised_repr_types:
             self.model_token_head = nn.Linear(hidden_size, input_embed_dim, bias=False)
         if 'embedding' in supervised_repr_types or config.task_type == 'embedding':
             if compiled.embedding_matrix is None:
                 raise ValueError('embedding supervision requires compiled embedding view and source matrix')
             self.embedding_head = nn.Linear(hidden_size, compiled.embedding_matrix.shape[1], bias=False)
-        if config.task_type not in {'uid', 'sid', 'embedding'}:
+        if config.task_type not in {'uid', 'sid', 'hash', 'embedding'}:
             raise ValueError(f'Unsupported task type: {config.task_type}')
 
         self.compute_dtype = getattr(self.encoder, 'compute_dtype', torch.float32)
@@ -92,9 +98,19 @@ class SequentialRecModel(nn.Module):
         else:
             sid_item_codes_tensor = torch.empty((0, 0), dtype=torch.long)
         self.register_buffer('sid_item_codes', sid_item_codes_tensor, persistent=False)
+        hash_item_codes = compiled.item_views.get('hash') or []
+        if hash_item_codes:
+            hash_item_codes_tensor = torch.tensor(
+                [[int(code) for code in function.to_list(codes)] for codes in hash_item_codes],
+                dtype=torch.long,
+            )
+        else:
+            hash_item_codes_tensor = torch.empty((0, 0), dtype=torch.long)
+        self.register_buffer('hash_item_codes', hash_item_codes_tensor, persistent=False)
         self.type_marker_embedding.to(dtype=self.compute_dtype)
         self.uid_embedding.to(dtype=self.compute_dtype)
         self.sid_embedding.to(dtype=self.compute_dtype)
+        self.hash_embedding.to(dtype=self.compute_dtype)
         if self.embedding_projection is not None:
             self.embedding_projection.to(dtype=self.compute_dtype)
         if self.embedding_head is not None:
@@ -103,6 +119,8 @@ class SequentialRecModel(nn.Module):
             self.uid_head.to(dtype=self.compute_dtype)
         if self.sid_head is not None:
             self.sid_head.to(dtype=self.compute_dtype)
+        if self.hash_head is not None:
+            self.hash_head.to(dtype=self.compute_dtype)
         if self.model_token_head is not None:
             self.model_token_head.to(dtype=self.compute_dtype)
 
@@ -141,6 +159,10 @@ class SequentialRecModel(nn.Module):
                 specs.append(('type_marker', 'sid'))
                 sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
                 specs.append(('sid', sid_ids))
+            elif repr_type == 'hash':
+                specs.append(('type_marker', 'hash'))
+                hash_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['hash'][uid])]
+                specs.append(('hash', hash_ids))
             elif repr_type == 'embedding':
                 specs.append(('type_marker', 'embedding'))
                 emb_index = int(self.compiled.item_views['embedding'][uid])
@@ -158,6 +180,9 @@ class SequentialRecModel(nn.Module):
         if view_name == 'sid':
             sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
             return [('type_marker', 'sid'), ('sid', sid_ids)]
+        if view_name == 'hash':
+            hash_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['hash'][uid])]
+            return [('type_marker', 'hash'), ('hash', hash_ids)]
         if view_name == 'embedding':
             emb_index = int(self.compiled.item_views['embedding'][uid])
             return [('type_marker', 'embedding'), ('embedding', emb_index)]
@@ -187,6 +212,9 @@ class SequentialRecModel(nn.Module):
         if kind == 'sid':
             token_ids = torch.tensor(value, dtype=torch.long, device=self.device)
             return self.sid_embedding(token_ids)
+        if kind == 'hash':
+            token_ids = torch.tensor(value, dtype=torch.long, device=self.device)
+            return self.hash_embedding(token_ids)
         if kind == 'embedding':
             emb_index = torch.tensor([int(value)], dtype=torch.long, device=self.device)
             projected = self.embedding_projection(self.embedding_matrix[emb_index].to(dtype=self.compute_dtype))
@@ -216,6 +244,11 @@ class SequentialRecModel(nn.Module):
         if self.sid_head is None:
             raise ValueError('sid supervision requested but sid_head is not initialized')
         return self.sid_head(hidden_states)
+
+    def _hash_logits(self, hidden_states: torch.Tensor):
+        if self.hash_head is None:
+            raise ValueError('hash supervision requested but hash_head is not initialized')
+        return self.hash_head(hidden_states)
 
     def _sid_slot_allowed_codes(self, slot_index: int):
         base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
@@ -251,6 +284,44 @@ class SequentialRecModel(nn.Module):
         base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
         weights = torch.ones(slot_indices.shape[0], dtype=torch.float32, device=slot_indices.device)
         collision_mask = slot_indices >= base_num_quantizers
+        if collision_mask.any():
+            weights[collision_mask] = self.sid_collision_loss_weight
+        return weights
+
+    def _hash_slot_allowed_codes(self, slot_index: int):
+        base_num_tokens = int(self.compiled.hash_base_num_tokens or 0)
+        codebook_size = int(self.compiled.hash_codebook_size or 0)
+        collision_offset = int(self.compiled.hash_collision_token_offset or 0)
+        collision_vocab_size = int(self.compiled.hash_collision_vocab_size or 0)
+
+        if slot_index < 0:
+            raise ValueError(f'Invalid hash slot index: {slot_index}')
+        if slot_index < base_num_tokens:
+            start = slot_index * codebook_size
+            return list(range(start, start + codebook_size))
+        if slot_index == base_num_tokens:
+            return list(range(collision_offset, collision_offset + collision_vocab_size))
+        raise ValueError(
+            f'Hash slot index {slot_index} exceeds configured slots '
+            f'(base={base_num_tokens}, final={self.compiled.hash_num_tokens})'
+        )
+
+    def _mask_hash_logits_for_slots(self, logits: torch.Tensor, slot_indices: torch.Tensor):
+        masked_logits = torch.full_like(logits, fill_value=torch.finfo(logits.dtype).min)
+        unique_slots = sorted({int(slot) for slot in slot_indices.tolist()})
+        for slot_index in unique_slots:
+            row_indices = (slot_indices == slot_index).nonzero(as_tuple=False).view(-1)
+            if row_indices.numel() == 0:
+                continue
+            allowed_codes = self._hash_slot_allowed_codes(slot_index)
+            allowed_tensor = torch.tensor(allowed_codes, dtype=torch.long, device=logits.device)
+            masked_logits[row_indices[:, None], allowed_tensor[None, :]] = logits[row_indices[:, None], allowed_tensor[None, :]]
+        return masked_logits
+
+    def _hash_loss_weights(self, slot_indices: torch.Tensor):
+        base_num_tokens = int(self.compiled.hash_base_num_tokens or 0)
+        weights = torch.ones(slot_indices.shape[0], dtype=torch.float32, device=slot_indices.device)
+        collision_mask = slot_indices >= base_num_tokens
         if collision_mask.any():
             weights[collision_mask] = self.sid_collision_loss_weight
         return weights
@@ -525,6 +596,8 @@ class SequentialRecModel(nn.Module):
             raise ValueError('embedding task uses query-anchor supervision instead of target tokens')
         if self.config.task_type == 'uid':
             return [int(self.compiled.item_views['uid'][target_uid])]
+        if self.config.task_type == 'hash':
+            return [int(token_id) for token_id in function.to_list(self.compiled.item_views['hash'][target_uid])]
         sid_values = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][target_uid])]
         expected = int(self.compiled.sid_num_quantizers)
         if expected and len(sid_values) != expected:
@@ -542,6 +615,8 @@ class SequentialRecModel(nn.Module):
             return [int(self.compiled.item_views['uid'][uid])]
         if repr_type == 'sid':
             return [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
+        if repr_type == 'hash':
+            return [int(token_id) for token_id in function.to_list(self.compiled.item_views['hash'][uid])]
         if repr_type == 'text':
             return [int(token_id) for token_id in function.to_list(self.compiled.item_views['text'][uid])]
         if repr_type == 'embedding':
@@ -564,6 +639,11 @@ class SequentialRecModel(nn.Module):
             return [
                 {'kind': repr_type, 'position': anchor_position, 'label': int(label), 'group': group, 'slot': slot_index}
                 for slot_index, (anchor_position, label) in enumerate(zip(anchor_positions, labels))
+            ]
+        if repr_type == 'hash':
+            return [
+                {'kind': repr_type, 'position': int(marker_position), 'label': int(label), 'group': group, 'slot': slot_index}
+                for slot_index, label in enumerate(labels)
             ]
         anchor_positions = [int(marker_position)] + [int(position) for position in payload_positions[:-1]]
         return [
@@ -697,6 +777,88 @@ class SequentialRecModel(nn.Module):
             'embedding_acc': accuracy.item(),
         }
 
+    def _compute_hash_parallel_loss(self, pooled: torch.Tensor, batch):
+        if self.hash_item_codes.numel() == 0:
+            raise ValueError('hash supervision requires compiled hash item codes')
+
+        target_uids = torch.tensor([int(sample['target_uid']) for sample in batch], dtype=torch.long, device=self.device)
+        target_codes = self.hash_item_codes[target_uids]
+        batch_size = target_codes.shape[0]
+        num_slots = target_codes.shape[1]
+
+        total_loss = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+        token_correct = 0.0
+        seq_predictions = []
+        seq_targets = target_codes.tolist()
+
+        for slot_index in range(num_slots):
+            logits = self._hash_logits(pooled)
+            slot_tensor = torch.full((batch_size,), slot_index, dtype=torch.long, device=self.device)
+            masked_logits = self._mask_hash_logits_for_slots(logits, slot_tensor)
+            labels = target_codes[:, slot_index]
+            slot_loss = F.cross_entropy(masked_logits.float(), labels, reduction='none')
+            slot_loss = slot_loss * self._hash_loss_weights(slot_tensor)
+            total_loss = total_loss + slot_loss.mean()
+            predictions = masked_logits.argmax(dim=-1)
+            token_correct += float((predictions == labels).float().sum().item())
+            seq_predictions.append(predictions.tolist())
+
+        predicted_sequences = list(zip(*seq_predictions)) if seq_predictions else []
+        seq_correct = sum(int(list(predicted) == list(target)) for predicted, target in zip(predicted_sequences, seq_targets))
+        token_total = batch_size * max(num_slots, 1)
+        return total_loss / max(num_slots, 1), {
+            'hash_token_acc': token_correct / max(token_total, 1),
+            'hash_seq_acc': seq_correct / max(batch_size, 1),
+        }
+
+    def _compute_hash_parallel_ranking_metrics(self, pooled: torch.Tensor, batch):
+        if self.hash_item_codes.numel() == 0:
+            raise ValueError('hash parallel ranking requires compiled hash item codes')
+
+        batch_size = pooled.shape[0]
+        item_codes = self.hash_item_codes.to(device=self.device)
+        semantic_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
+        collision_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
+        base_num_tokens = int(self.compiled.hash_base_num_tokens or 0)
+
+        for slot_index in range(int(item_codes.shape[1])):
+            logits = self._hash_logits(pooled)
+            slot_tensor = torch.full((batch_size,), slot_index, dtype=torch.long, device=self.device)
+            masked_logits = self._mask_hash_logits_for_slots(logits, slot_tensor)
+            log_probs = F.log_softmax(masked_logits.float(), dim=-1)
+            slot_codes = item_codes[:, slot_index]
+            slot_scores = log_probs.index_select(dim=1, index=slot_codes)
+            if slot_index < base_num_tokens:
+                semantic_scores = semantic_scores + slot_scores
+            else:
+                collision_scores = collision_scores + slot_scores
+
+        ks = self.ranking_ks()
+        totals = {f'hr@{k}': 0.0 for k in ks}
+        totals.update({f'ndcg@{k}': 0.0 for k in ks})
+        totals['mrr'] = 0.0
+
+        semantic_scores_cpu = semantic_scores.detach().cpu()
+        collision_scores_cpu = collision_scores.detach().cpu()
+        for batch_index, sample in enumerate(batch):
+            ranked_uids = sorted(
+                range(item_codes.shape[0]),
+                key=lambda uid: (
+                    float(semantic_scores_cpu[batch_index, uid].item()),
+                    float(collision_scores_cpu[batch_index, uid].item()),
+                ),
+                reverse=True,
+            )
+            target_uid = int(sample['target_uid'])
+            rank = ranked_uids.index(target_uid) + 1
+            totals['mrr'] += 1.0 / rank
+            for k in ks:
+                if rank <= k:
+                    totals[f'hr@{k}'] += 1.0
+                    totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+
+        return {key: value / max(batch_size, 1) for key, value in totals.items()}
+
     def _compute_mixed_supervision_loss(self, selected_hidden: torch.Tensor, supervision: dict):
         kinds = supervision['kinds']
         labels = supervision['labels']
@@ -706,7 +868,7 @@ class SequentialRecModel(nn.Module):
         alignment_losses = []
         metrics = {}
 
-        for kind in ['uid', 'sid', 'text', 'embedding']:
+        for kind in ['uid', 'sid', 'hash', 'text', 'embedding']:
             mask_indices = [index for index, entry_kind in enumerate(kinds) if entry_kind == kind]
             if not mask_indices:
                 continue
@@ -730,6 +892,14 @@ class SequentialRecModel(nn.Module):
                 predictions = masked_logits.argmax(dim=-1)
                 accuracy = (predictions == kind_labels).float().mean().item()
                 metrics['sid_token_acc'] = accuracy
+            elif kind == 'hash':
+                logits = self._hash_logits(kind_hidden)
+                masked_logits = self._mask_hash_logits_for_slots(logits, kind_slots)
+                losses = F.cross_entropy(masked_logits.float(), kind_labels, reduction='none')
+                losses = losses * self._hash_loss_weights(kind_slots)
+                predictions = masked_logits.argmax(dim=-1)
+                accuracy = (predictions == kind_labels).float().mean().item()
+                metrics['hash_token_acc'] = accuracy
             elif kind == 'text':
                 logits = self._text_logits(kind_hidden)
                 losses = F.cross_entropy(logits, kind_labels, reduction='none')
@@ -786,6 +956,10 @@ class SequentialRecModel(nn.Module):
             else:
                 loss, metrics = self._compute_sid_loss(batch)
                 metrics.update(self._compute_sid_ranking_metrics(batch))
+            return loss, metrics
+        if self.config.task_type == 'hash':
+            loss, metrics = self._compute_hash_parallel_loss(pooled, batch)
+            metrics.update(self._compute_hash_parallel_ranking_metrics(pooled, batch))
             return loss, metrics
         loss, metrics = self._compute_embedding_loss(pooled, batch)
         target_indices = torch.tensor(

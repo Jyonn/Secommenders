@@ -37,6 +37,15 @@ class CompiledArtifacts:
         self.sid_recommended_decoding = None
         self.sid_prefix_to_next = {}
         self.sid_sequence_to_items = {}
+        self.hash_num_tokens = None
+        self.hash_base_num_tokens = None
+        self.hash_codebook_size = None
+        self.hash_collision_vocab_size = None
+        self.hash_collision_token_offset = None
+        self.hash_quantizer_name = None
+        self.hash_quantizer_scheme = None
+        self.hash_recommended_decoding = None
+        self.hash_sequence_to_items = {}
 
     def _read_json(self, path: Path):
         return json.loads(path.read_text())
@@ -101,7 +110,7 @@ class CompiledArtifacts:
         self.valid = pd.read_parquet(self.compile_dir / 'samples' / 'valid.parquet')
         self.test = pd.read_parquet(self.compile_dir / 'samples' / 'test.parquet')
 
-        for view_name in ['uid', 'text', 'sid', 'embedding']:
+        for view_name in ['uid', 'text', 'sid', 'hash', 'embedding']:
             values = self._load_view(view_name)
             if values is not None:
                 self.item_views[view_name] = values
@@ -118,6 +127,19 @@ class CompiledArtifacts:
             self.sid_quantizer_scheme = sid_vocab.get('quantizer_scheme')
             self.sid_recommended_decoding = sid_vocab.get('recommended_decoding')
             self._build_sid_indices()
+
+        hash_vocab_path = self.compile_dir / 'vocab' / 'hash.json'
+        if hash_vocab_path.exists():
+            hash_vocab = self._read_json(hash_vocab_path)
+            self.hash_num_tokens = int(hash_vocab['num_tokens'])
+            self.hash_base_num_tokens = int(hash_vocab.get('base_num_tokens', self.hash_num_tokens))
+            self.hash_codebook_size = int(hash_vocab['codebook_size'])
+            self.hash_collision_vocab_size = int(hash_vocab.get('collision_vocab_size', 0))
+            self.hash_collision_token_offset = int(hash_vocab.get('collision_token_offset', 0))
+            self.hash_quantizer_name = hash_vocab.get('quantizer_name')
+            self.hash_quantizer_scheme = hash_vocab.get('quantizer_scheme')
+            self.hash_recommended_decoding = hash_vocab.get('recommended_decoding')
+            self._build_hash_indices()
 
         self.embedding_matrix = self._load_embedding_matrix()
         return self
@@ -146,6 +168,20 @@ class CompiledArtifacts:
         }
         self.sid_sequence_to_items = sequence_to_items
 
+    def _build_hash_indices(self):
+        hash_view = self.item_views.get('hash')
+        if hash_view is None:
+            self.hash_sequence_to_items = {}
+            return
+
+        sequence_to_items = {}
+        for uid, codes in enumerate(hash_view):
+            sequence = tuple(int(code) for code in function.to_list(codes))
+            if not sequence:
+                continue
+            sequence_to_items.setdefault(sequence, []).append(uid)
+        self.hash_sequence_to_items = sequence_to_items
+
     @property
     def num_items(self):
         return len(self.uid_raw_items)
@@ -159,6 +195,11 @@ class CompiledArtifacts:
     def sid_vocab_size(self):
         sid_entries = [entry for entry in self.vocab_meta['namespaces'] if entry['kind'] == 'sid']
         return int(sid_entries[0]['size']) if sid_entries else 0
+
+    @property
+    def hash_vocab_size(self):
+        hash_entries = [entry for entry in self.vocab_meta['namespaces'] if entry['kind'] == 'hash']
+        return int(hash_entries[0]['size']) if hash_entries else 0
 
     @property
     def model_kind(self):
