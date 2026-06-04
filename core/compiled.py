@@ -60,9 +60,9 @@ class CompiledArtifacts:
     def _load_embedding_matrix(self):
         if 'embedding' not in self.item_views:
             return None
-        if not self.config.repr_model:
-            raise ValueError('repr.model is required when compiled data uses embedding views')
-        embedding_dir = self.store.embedded_dir(self.config.repr_model)
+        if not self.config.repr_source_model:
+            raise ValueError('data.repr_source_model is required when compiled data uses embedding views')
+        embedding_dir = self.store.embedded_dir(self.config.repr_source_model)
         embedding_path = embedding_dir / 'embeddings.npy'
         if not embedding_path.exists():
             raise FileNotFoundError(f'Embedding matrix not found: {embedding_path}')

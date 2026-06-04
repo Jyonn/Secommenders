@@ -11,9 +11,9 @@ class TrainConfig:
     data: str
     model: str
     repr_type: str
-    repr_model: Optional[str]
-    repr_best: Optional[str]
-    repr_quantizer: Optional[str]
+    repr_source_model: Optional[str]
+    repr_export: Optional[str]
+    repr_coder: Optional[str]
     repr_combine: str
     task_type: str
     maxitems: int
@@ -27,13 +27,13 @@ class TrainConfig:
     device: Optional[str]
     num_gpus: int
     freeze_backbone: str
-    sid_decoding: str
+    code_decoding: str
     main_metric: str
     metrics: list[str]
     patience: int
     alignment_weight: float
-    sid_beam_width: int
-    sid_collision_loss_weight: float
+    code_beam_width: int
+    code_collision_loss_weight: float
     model_dtype: str
     use_lora: str
     lora_rank: int
@@ -69,9 +69,9 @@ class TrainConfig:
             data=data_config.name.lower(),
             model=model.name.lower(),
             repr_type=normalized_repr_type,
-            repr_model=normalize_model_name(data_config.repr_model),
-            repr_best=data_config.repr_best.lower() if data_config.repr_best else None,
-            repr_quantizer=str(getattr(data_config, 'repr_quantizer', '')).strip().lower() or None,
+            repr_source_model=normalize_model_name(data_config.repr_source_model),
+            repr_export=data_config.repr_export.lower() if data_config.repr_export else None,
+            repr_coder=str(getattr(data_config, 'repr_coder', '')).strip().lower() or None,
             repr_combine=data_config.repr_combine.lower(),
             task_type=raw_task_type,
             maxitems=int(data_config.maxitems),
@@ -85,13 +85,13 @@ class TrainConfig:
             device=trainer.device,
             num_gpus=int(getattr(trainer, 'num_gpus', 1)),
             freeze_backbone=str(trainer.freeze_backbone).lower(),
-            sid_decoding=str(getattr(trainer, 'sid_decoding', 'auto')).strip().lower(),
+            code_decoding=str(getattr(trainer, 'code_decoding', 'auto')).strip().lower(),
             main_metric=str(getattr(evaluator, 'main_metric', 'loss')).strip().lower(),
             metrics=metrics,
             patience=int(evaluator.patience),
             alignment_weight=float(getattr(trainer, 'alignment', 0)),
-            sid_beam_width=int(getattr(trainer, 'sid_beam_width', 20)),
-            sid_collision_loss_weight=float(getattr(trainer, 'sid_collision_loss_weight', 0.1)),
+            code_beam_width=int(getattr(trainer, 'code_beam_width', 20)),
+            code_collision_loss_weight=float(getattr(trainer, 'code_collision_loss_weight', 0.1)),
             model_dtype=str(model.dtype).lower(),
             use_lora=str(lora.use).lower(),
             lora_rank=int(lora.rank),
@@ -111,9 +111,9 @@ class TrainConfig:
             data=self.data,
             model=self.model,
             repr_type=self.repr_type,
-            repr_model=self.repr_model,
-            repr_best=self.repr_best,
-            quantizer_name=self.repr_quantizer,
+            repr_source_model=self.repr_source_model,
+            repr_export=self.repr_export,
+            repr_coder=self.repr_coder,
             task_type=self.task_type,
             maxitems=self.maxitems,
             model_max_length=self.model_max_length,
@@ -139,12 +139,12 @@ class TrainConfig:
             parts.append(f'lo-{self.use_lora}')
         if self.alignment_weight > 0:
             parts.append(f'al{compact_float(self.alignment_weight)}')
-        if self.task_type == 'sid' and self.sid_decoding != 'auto':
-            parts.append(f'sd-{self.sid_decoding}')
-        if self.task_type == 'sid' and self.sid_beam_width != 20:
-            parts.append(f'bm{self.sid_beam_width}')
-        if self.task_type in {'sid', 'hash'} and self.sid_collision_loss_weight != 0.1:
-            parts.append(f'scw{compact_float(self.sid_collision_loss_weight)}')
+        if self.task_type == 'sid' and self.code_decoding != 'auto':
+            parts.append(f'cd-{self.code_decoding}')
+        if self.task_type == 'sid' and self.code_beam_width != 20:
+            parts.append(f'cb{self.code_beam_width}')
+        if self.task_type in {'sid', 'hash'} and self.code_collision_loss_weight != 0.1:
+            parts.append(f'ccw{compact_float(self.code_collision_loss_weight)}')
         if is_llm:
             parts.extend(
                 [

@@ -290,12 +290,12 @@ class Compiler:
             raise ValueError('scratch backbone currently does not support repr.type containing text')
 
         external_view_required = any(view in {'sid', 'hash', 'embedding'} for view in repr_types + [self.config.task_type])
-        if external_view_required and not self.config.repr_model:
-            raise ValueError('repr.model is required when repr.type or task.type uses sid/hash/embedding')
-        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.repr_best:
-            raise ValueError('repr.best is required when repr.type or task.type uses sid')
-        if any(view in {'sid', 'hash'} for view in set(repr_types + [self.config.task_type])) and not self.config.quantizer_name:
-            raise ValueError('data.repr_quantizer is required when repr.type or task.type uses sid/hash')
+        if external_view_required and not self.config.repr_source_model:
+            raise ValueError('data.repr_source_model is required when repr.type or task.type uses sid/hash/embedding')
+        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.repr_export:
+            raise ValueError('data.repr_export is required when repr.type or task.type uses sid')
+        if any(view in {'sid', 'hash'} for view in set(repr_types + [self.config.task_type])) and not self.config.repr_coder:
+            raise ValueError('data.repr_coder is required when repr.type or task.type uses sid/hash')
 
     def run(self):
         self.validate()
@@ -551,8 +551,8 @@ class Compiler:
 
         if self.requires_view('sid'):
             pnt(
-                f'loading sid view from model={self.config.repr_model} '
-                f'checkpoint={self.config.repr_best}'
+                f'loading sid view from model={self.config.repr_source_model} '
+                f'export={self.config.repr_export}'
             )
             sid_values = self.load_sid_view()
             self._write_view('sid', sid_values)
@@ -564,8 +564,8 @@ class Compiler:
 
         if self.requires_view('hash'):
             pnt(
-                f'loading hash view from model={self.config.repr_model} '
-                f'indexer={self.config.quantizer_name}'
+                f'loading hash view from model={self.config.repr_source_model} '
+                f'coder={self.config.repr_coder}'
             )
             hash_values = self.load_hash_view()
             self._write_view('hash', hash_values)
@@ -576,7 +576,7 @@ class Compiler:
             )
 
         if self.requires_view('embedding'):
-            pnt(f'loading embedding view from model={self.config.repr_model}')
+            pnt(f'loading embedding view from model={self.config.repr_source_model}')
             embedding_values = self.load_embedding_view()
             self._write_view('embedding', embedding_values)
             pnt(
@@ -594,8 +594,8 @@ class Compiler:
         pnt(f'item view manifest saved: {sorted(self.item_views)}')
 
     def _load_quantized_export(self):
-        model_name = normalize_model_name(self.config.repr_model)
-        quantizer_name = (self.config.quantizer_name or '').strip().lower()
+        model_name = normalize_model_name(self.config.repr_source_model)
+        quantizer_name = (self.config.repr_coder or '').strip().lower()
         if not quantizer_name:
             raise ValueError('quantizer_name is required when compile config uses sid views')
         if quantizer_name not in self.SUPPORTED_QUANTIZERS:
@@ -605,7 +605,7 @@ class Compiler:
                 f'Only {supported} are supported.'
             )
 
-        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / self.config.repr_best
+        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / self.config.repr_export
 
         def _export_ready(path: Path):
             meta_path = path / 'meta.json'
@@ -637,8 +637,8 @@ class Compiler:
         return export_dir, meta, item_ids, codes
 
     def _load_hash_export(self):
-        model_name = normalize_model_name(self.config.repr_model)
-        quantizer_name = (self.config.quantizer_name or '').strip().lower()
+        model_name = normalize_model_name(self.config.repr_source_model)
+        quantizer_name = (self.config.repr_coder or '').strip().lower()
         if not quantizer_name:
             raise ValueError('quantizer_name is required when compile config uses hash views')
         if quantizer_name not in self.SUPPORTED_QUANTIZERS:
@@ -840,7 +840,7 @@ class Compiler:
         return ordered_values
 
     def load_embedding_view(self):
-        model_name = normalize_model_name(self.config.repr_model)
+        model_name = normalize_model_name(self.config.repr_source_model)
         embedding_dir = self.store.embedded_dir(model_name)
         item_ids_path = embedding_dir / 'item_ids.parquet'
         if not item_ids_path.exists():
@@ -1191,9 +1191,9 @@ if __name__ == '__main__':
     parser.add_argument('--data', required=True, help='Dataset name, such as mind or movielens.')
     parser.add_argument('--model', required=True, help='Backbone model name, such as llama3 or transformer.')
     parser.add_argument('--repr.type', dest='repr_type', default=None, help='Representation types, such as uid, text, or uid+text. Defaults to task.type.')
-    parser.add_argument('--repr.model', dest='repr_model', default=None, help='External representation model, such as bertbase.')
-    parser.add_argument('--repr.best', dest='repr_best', default=None, help='Best checkpoint metric for quantized codes, such as coll.')
-    parser.add_argument('--quantizer.name', dest='quantizer_name', default=None, help='Quantizer/indexer algorithm name for SID/hash exports, such as rqvae, pqvae, opqvae, or lsh.')
+    parser.add_argument('--repr.source-model', dest='repr_source_model', default=None, help='External representation source model, such as bertbase.')
+    parser.add_argument('--repr.export', dest='repr_export', default=None, help='Export tag for discrete codes, such as coll.')
+    parser.add_argument('--repr.coder', dest='repr_coder', default=None, help='Representation coder/indexer name for SID/hash exports, such as rqvae, pqvae, opqvae, or lsh.')
     parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
     parser.add_argument('--model.maxlen', dest='model_max_length', type=int, default=0, help='Optional override for backbone max length, e.g. 2048.')
     parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'hash', 'embedding'])
@@ -1205,9 +1205,9 @@ if __name__ == '__main__':
         data=args.data.lower(),
         model=args.model.lower(),
         repr_type=args.repr_type.lower() if args.repr_type else None,
-        repr_model=normalize_model_name(args.repr_model),
-        repr_best=args.repr_best.lower() if args.repr_best else None,
-        quantizer_name=args.quantizer_name.lower() if args.quantizer_name else None,
+        repr_source_model=normalize_model_name(args.repr_source_model),
+        repr_export=args.repr_export.lower() if args.repr_export else None,
+        repr_coder=args.repr_coder.lower() if args.repr_coder else None,
         repr_combine=args.repr_combine.lower(),
         task_type=args.task_type.lower(),
         maxitems=int(args.maxitems),

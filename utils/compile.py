@@ -44,9 +44,9 @@ class CompileConfig:
     data: str
     model: str
     repr_type: Optional[str]
-    repr_model: Optional[str]
-    repr_best: Optional[str]
-    quantizer_name: Optional[str]
+    repr_source_model: Optional[str]
+    repr_export: Optional[str]
+    repr_coder: Optional[str]
     task_type: str
     maxitems: int
     model_max_length: Optional[int] = None
@@ -59,9 +59,9 @@ class CompileConfig:
         self.task_type = str(self.task_type).lower()
         self.repr_type = canonicalize_repr_type(self.task_type, self.repr_type)
         self.repr_combine = str(self.repr_combine).lower()
-        self.repr_model = normalize_model_name(self.repr_model)
-        self.repr_best = self.repr_best.lower() if self.repr_best else None
-        self.quantizer_name = str(self.quantizer_name).strip().lower() if self.quantizer_name else None
+        self.repr_source_model = normalize_model_name(self.repr_source_model)
+        self.repr_export = self.repr_export.lower() if self.repr_export else None
+        self.repr_coder = str(self.repr_coder).strip().lower() if self.repr_coder else None
 
     @property
     def repr_types(self):
@@ -85,12 +85,12 @@ class CompileConfig:
             parts.append(f'tl{self.item_text_max_tokens}')
         if self.model_max_length:
             parts.append(f'ml{self.model_max_length}')
-        if self.repr_model and (uses_sid or uses_hash or uses_embedding):
-            parts.append(f'rm-{self.repr_model}')
-        if self.repr_best and uses_sid:
-            parts.append(f'rb-{self.repr_best}')
-        if self.quantizer_name and (uses_sid or uses_hash):
-            parts.append(f'q-{self.quantizer_name}')
+        if self.repr_source_model and (uses_sid or uses_hash or uses_embedding):
+            parts.append(f'rsm-{self.repr_source_model}')
+        if self.repr_export and uses_sid:
+            parts.append(f're-{self.repr_export}')
+        if self.repr_coder and (uses_sid or uses_hash):
+            parts.append(f'rc-{self.repr_coder}')
         return parts
 
     @property

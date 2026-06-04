@@ -1,9 +1,9 @@
 data:
   name: ${data}$
   repr_type: ${repr_type:null}$
-  repr_model: ${repr_model:null}$
-  repr_best: ${repr_best:coll}$
-  repr_quantizer: ${repr_quantizer:null}$
+  repr_source_model: ${repr_source_model:null}$
+  repr_export: ${repr_export:coll}$
+  repr_coder: ${repr_coder:null}$
   repr_combine: ${repr_combine:concat}$
   task_type: ${task_type}$
   maxitems: ${maxitems:20}$
@@ -34,9 +34,9 @@ trainer:
   device: ${device:null}$
   num_gpus: ${num_gpus:1}$
   freeze_backbone: ${freeze_backbone:auto}$
-  sid_decoding: ${sid_decoding:auto}$
-  sid_beam_width: ${sid_beam_width:20}$
-  sid_collision_loss_weight: ${sid_collision_loss_weight:0.1}$
+  code_decoding: ${code_decoding:auto}$
+  code_beam_width: ${code_beam_width:20}$
+  code_collision_loss_weight: ${code_collision_loss_weight:0.1}$
   alignment: ${alignment:0}$
 
 evaluator:

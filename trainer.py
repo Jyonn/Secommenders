@@ -118,7 +118,7 @@ class Trainer:
             self._pnt(
                 f'sid decoding={sid_decoding} '
                 + (
-                    f'beam_width={self.config.sid_beam_width} ks={self.model_core.sid_ranking_ks()}'
+                    f'beam_width={self.config.code_beam_width} ks={self.model_core.sid_ranking_ks()}'
                     if sid_decoding == 'sequential'
                     else f'item_scoring ks={self.model_core.sid_ranking_ks()}'
                 )

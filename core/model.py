@@ -88,7 +88,7 @@ class SequentialRecModel(nn.Module):
             raise ValueError(f'Unsupported task type: {config.task_type}')
 
         self.compute_dtype = getattr(self.encoder, 'compute_dtype', torch.float32)
-        self.sid_collision_loss_weight = float(getattr(config, 'sid_collision_loss_weight', 0.1))
+        self.code_collision_loss_weight = float(getattr(config, 'code_collision_loss_weight', 0.1))
         sid_item_codes = compiled.item_views.get('sid') or []
         if sid_item_codes:
             sid_item_codes_tensor = torch.tensor(
@@ -285,7 +285,7 @@ class SequentialRecModel(nn.Module):
         weights = torch.ones(slot_indices.shape[0], dtype=torch.float32, device=slot_indices.device)
         collision_mask = slot_indices >= base_num_quantizers
         if collision_mask.any():
-            weights[collision_mask] = self.sid_collision_loss_weight
+            weights[collision_mask] = self.code_collision_loss_weight
         return weights
 
     def _hash_slot_allowed_codes(self, slot_index: int):
@@ -323,15 +323,15 @@ class SequentialRecModel(nn.Module):
         weights = torch.ones(slot_indices.shape[0], dtype=torch.float32, device=slot_indices.device)
         collision_mask = slot_indices >= base_num_tokens
         if collision_mask.any():
-            weights[collision_mask] = self.sid_collision_loss_weight
+            weights[collision_mask] = self.code_collision_loss_weight
         return weights
 
     def _sid_decoding_mode(self):
-        mode = str(getattr(self.config, 'sid_decoding', 'auto')).strip().lower()
+        mode = str(getattr(self.config, 'code_decoding', 'auto')).strip().lower()
         if mode == 'auto':
             mode = str(getattr(self.compiled, 'sid_recommended_decoding', '') or 'sequential').strip().lower()
         if mode not in {'sequential', 'parallel'}:
-            raise ValueError(f'Unsupported sid_decoding: {mode}')
+            raise ValueError(f'Unsupported code_decoding: {mode}')
         return mode
 
     def _build_batch_inputs(self, batch):
@@ -348,7 +348,7 @@ class SequentialRecModel(nn.Module):
         return padded, attention_mask.long(), lengths
 
     def ranking_ks(self):
-        max_k = max(1, int(self.config.sid_beam_width))
+        max_k = max(1, int(self.config.code_beam_width))
         ks = [k for k in (5, 10, 20) if k <= max_k]
         if max_k not in ks:
             ks.append(max_k)
@@ -390,7 +390,7 @@ class SequentialRecModel(nn.Module):
         return int(candidates[int(digest[:8], 16) % len(candidates)])
 
     def _beam_search_sid_items(self, sample):
-        beam_width = max(1, int(self.config.sid_beam_width))
+        beam_width = max(1, int(self.config.code_beam_width))
         beams: list[tuple[tuple[int, ...], float]] = [(tuple(), 0.0)]
 
         for slot_index in range(int(self.compiled.sid_num_quantizers)):
