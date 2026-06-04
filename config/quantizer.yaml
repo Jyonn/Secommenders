@@ -21,8 +21,8 @@ quantizer:
 
 hash:
   config:
-    num_bits: ${num_bits:32}$
-    num_tables: ${num_tables:4}$
+    num_bits: ${num_bits:24}$
+    num_tables: ${num_tables:1}$
     projection_distribution: ${projection_distribution:gaussian}$
     use_median_thresholds: ${use_median_thresholds:true}$
     num_iterations: ${num_iterations:50}$
