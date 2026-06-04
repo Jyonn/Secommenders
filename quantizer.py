@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -74,6 +75,9 @@ class Quantizer:
         self.quantizer_name = self.config.quantizer.name
         self.quantizer_scheme = self._infer_quantizer_scheme(self.quantizer_name)
         self.recommended_decoding = self._recommended_decoding(self.quantizer_scheme)
+        self.requested_latent_dim = None
+        self.resolved_latent_dim = None
+        self.resolved_quantizer_config = None
 
         self.processor = load_processor(self.data, data_dir=get_data_dir(self.data))
         self.processor.load()
@@ -131,6 +135,36 @@ class Quantizer:
         if device is not None and device != 'auto':
             return device
         return GPU.auto_choose(torch_format=True)
+
+    def _resolve_quantizer_config(self):
+        quantizer_config = dict(self.config.quantizer.config())
+        requested_latent_dim = quantizer_config.get('latent_dim')
+        self.requested_latent_dim = int(requested_latent_dim) if requested_latent_dim is not None else None
+
+        if self.quantizer_scheme == 'pq':
+            num_codebooks = int(quantizer_config.get('num_codebooks', 0))
+            if num_codebooks <= 0:
+                raise ValueError(
+                    f'{self.quantizer_name} requires a positive num_codebooks, got {num_codebooks}.'
+                )
+            if self.requested_latent_dim is None:
+                raise ValueError(
+                    f'{self.quantizer_name} requires latent_dim to be configured when auto-resolving PQ slots.'
+                )
+            resolved_latent_dim = int(math.ceil(self.requested_latent_dim / num_codebooks) * num_codebooks)
+            if resolved_latent_dim != self.requested_latent_dim:
+                pnt(
+                    f'adjusting latent_dim for {self.quantizer_name}: '
+                    f'{self.requested_latent_dim} -> {resolved_latent_dim} '
+                    f'to make it divisible by num_codebooks={num_codebooks}'
+                )
+            quantizer_config['latent_dim'] = resolved_latent_dim
+            self.resolved_latent_dim = resolved_latent_dim
+        else:
+            self.resolved_latent_dim = self.requested_latent_dim
+
+        self.resolved_quantizer_config = quantizer_config
+        return quantizer_config
 
     def _load_item_ids(self, expected_size):
         if self.embedding_item_ids_path.exists():
@@ -191,6 +225,7 @@ class Quantizer:
         if getattr(self.config, 'decoder', None):
             decoder_name = self.config.decoder.name or None
             decoder_config = self.config.decoder.config() if self.config.decoder.config else None
+        quantizer_config = self._resolve_quantizer_config()
 
         self.model = load_model(
             self.config.quantizer.name,
@@ -199,7 +234,7 @@ class Quantizer:
             encoder_config=self.config.encoder.config() if self.config.encoder.config else None,
             decoder=decoder_name,
             decoder_config=decoder_config,
-            **self.config.quantizer.config(),
+            **quantizer_config,
         )
         return self.model
 
@@ -217,6 +252,11 @@ class Quantizer:
         trainer = self.build_trainer()
 
         pnt(f'training {self.quantizer_name} on {self.data}/{self.embedding_model}')
+        if self.requested_latent_dim is not None:
+            pnt(
+                f'quantizer latent_dim requested={self.requested_latent_dim} '
+                f'resolved={self.resolved_latent_dim}'
+            )
         metrics = trainer.fit(
             dataloaders,
             metadata={
@@ -344,7 +384,9 @@ class Quantizer:
             'item_ids_path': str(item_ids_path),
             'code_shape': list(codebook_indices.shape),
             'trainer_args': self.trainer_args.to_dict(),
-            'quantizer_config': self.config.quantizer.config(),
+            'requested_latent_dim': self.requested_latent_dim,
+            'resolved_latent_dim': self.resolved_latent_dim,
+            'quantizer_config': self.resolved_quantizer_config or self.config.quantizer.config(),
         }
         if codebooks is not None:
             meta['codebooks_path'] = str(codebooks_path)
