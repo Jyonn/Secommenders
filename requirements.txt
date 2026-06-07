@@ -4,7 +4,7 @@
 # If you need a specific CUDA wheel, install your desired torch build first,
 # then run the command above again.
 
-autoencoders[text,torch] @ git+https://github.com/Jyonn/autoencoders.git@6c93fed10a904bfc06dd8f8157c1e3e4e9d811c6
+autoencoders[text,torch]
 
 pandas>=2.0,<3
 transformers>=4.40,<5
