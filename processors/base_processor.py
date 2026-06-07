@@ -212,11 +212,17 @@ class Processor:
         processed_meta = self._load_meta(paths['meta'])
         formatted_meta_path = self._formatted_paths()['meta']
         if not formatted_meta_path.exists():
-            return False
+            return (
+                processed_meta.get('version') == self.VER
+                and int(processed_meta.get('num_test', -1)) == int(self.num_test)
+                and int(processed_meta.get('num_finetune', -1)) == int(self.num_finetune)
+                and float(processed_meta.get('valid_ratio', -1)) == float(self.VALID_RATIO)
+            )
         formatted_meta = self._load_meta(formatted_meta_path)
 
         return (
-            processed_meta.get('formatted_version') == formatted_meta.get('version')
+            processed_meta.get('version') == self.VER
+            and processed_meta.get('formatted_version') == formatted_meta.get('version')
             and int(processed_meta.get('num_test', -1)) == int(self.num_test)
             and int(processed_meta.get('num_finetune', -1)) == int(self.num_finetune)
             and float(processed_meta.get('valid_ratio', -1)) == float(self.VALID_RATIO)
