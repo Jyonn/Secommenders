@@ -2,6 +2,7 @@ import os
 import json
 import shlex
 import socket
+from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,9 +109,11 @@ class Trainer:
         if not self.is_main_process:
             self.valid_loader = None
             self.test_loader = None
+        effective_batch_size = self.config.batch_size * self.config.accumulate_batch * self.world_size
         self._pnt(
             f'built dataloaders finetune={len(self.train_loader.dataset)} '
             f'valid={len(valid_dataset)} test={len(test_dataset)} batch_size={self.config.batch_size} '
+            f'accumulate_batch={self.config.accumulate_batch} effective_batch_size={effective_batch_size} '
             f'world_size={self.world_size} order=length-sorted'
         )
         if self.config.task_type == 'sid':
@@ -186,30 +189,40 @@ class Trainer:
         total_loss = 0.0
         total_batches = 0
         metric_sums = {}
+        accumulate_batch = max(1, self.config.accumulate_batch)
 
         iterator = tqdm(loader, desc=desc, leave=False, disable=not self.is_main_process)
         model_runner = self.model if is_train or not self.distributed else self.model_core
-        for batch in iterator:
+        if is_train:
+            optimizer.zero_grad()
+        for batch_index, batch in enumerate(iterator):
+            is_last_micro_batch = batch_index == (len(loader) - 1)
+            should_step = ((batch_index + 1) % accumulate_batch == 0) or is_last_micro_batch
             if is_train:
-                optimizer.zero_grad()
-            if is_train:
-                rec_loss, metrics = model_runner(batch, mode='finetune')
-                loss = rec_loss
+                sync_context = nullcontext()
+                if self.distributed and not should_step and hasattr(self.model, 'no_sync'):
+                    sync_context = self.model.no_sync()
+                with sync_context:
+                    rec_loss, metrics = model_runner(batch, mode='finetune')
+                    loss = rec_loss / accumulate_batch
             else:
                 with torch.no_grad():
-                    loss, metrics = model_runner(batch, mode='test')
+                    rec_loss, metrics = model_runner(batch, mode='test')
             if is_train:
                 loss.backward()
-                optimizer.step()
+                if should_step:
+                    optimizer.step()
+                    optimizer.zero_grad()
 
-            total_loss += float(loss.item())
+            raw_loss = float(rec_loss.item())
+            total_loss += raw_loss
             total_batches += 1
             for key, value in metrics.items():
                 if isinstance(value, str):
                     continue
                 metric_sums[key] = metric_sums.get(key, 0.0) + float(value)
 
-            postfix = {'loss': f'{loss.item():.4f}'}
+            postfix = {'loss': f'{raw_loss:.4f}'}
             for key, value in metrics.items():
                 if isinstance(value, str):
                     postfix[key] = value
@@ -309,6 +322,8 @@ class Trainer:
                 f'start training on {self.config.data} with {self.config.model} '
                 f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
                 f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
+                f'batch_size={self.config.batch_size} accumulate_batch={self.config.accumulate_batch} '
+                f'effective_batch_size={self.config.batch_size * self.config.accumulate_batch * self.world_size} '
                 f'epochs={"until-early-stop" if unlimited_epochs else self.config.epochs} '
                 f'valid_main_metric={main_metric_name} valid_eval=every-epoch test_eval=final-only'
             )

@@ -21,6 +21,7 @@ class TrainConfig:
     model_max_length: Optional[int]
     item_text_max_tokens: int
     batch_size: int
+    accumulate_batch: int
     epochs: int
     learning_rate: float
     weight_decay: float
@@ -80,6 +81,7 @@ class TrainConfig:
             model_max_length=int(model.max_length) or None,
             item_text_max_tokens=int(data_config.item_text_max_tokens),
             batch_size=int(trainer.batch_size),
+            accumulate_batch=max(1, int(getattr(trainer, 'accumulate_batch', 1))),
             epochs=int(trainer.epochs),
             learning_rate=float(trainer.learning_rate),
             weight_decay=float(trainer.weight_decay),
@@ -131,9 +133,11 @@ class TrainConfig:
             self.model,
             f'{self.repr_type}2{self.task_type}',
             f'bs{self.batch_size}',
+            f'acc{self.accumulate_batch}' if self.accumulate_batch != 1 else None,
             f'lr{compact_float(self.learning_rate)}',
             f'wd{compact_float(self.weight_decay)}',
         ]
+        parts = [part for part in parts if part]
         if self.repr_combine != 'concat':
             parts.append(self.repr_combine)
         if self.freeze_backbone != 'auto':

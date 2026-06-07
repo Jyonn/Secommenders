@@ -28,6 +28,7 @@ model:
 
 trainer:
   batch_size: ${batch_size:64}$
+  accumulate_batch: ${accumulate_batch:1}$
   epochs: ${epochs:0}$
   learning_rate: ${learning_rate:0.0001}$
   weight_decay: ${weight_decay:0.01}$
