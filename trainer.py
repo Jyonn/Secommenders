@@ -287,6 +287,10 @@ class Trainer:
         if self.is_main_process:
             metrics = self._run_loader(loader, optimizer=None, desc=desc)
         if self.distributed:
+            payload = [metrics]
+            dist.broadcast_object_list(payload, src=0)
+            metrics = payload[0]
+        if self.distributed:
             dist.barrier()
         return metrics
 
