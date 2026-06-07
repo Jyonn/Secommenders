@@ -180,7 +180,7 @@ class Trainer:
             weight_decay=self.config.weight_decay,
         )
 
-    def _run_loader(self, loader, optimizer=None, desc='train'):
+    def _run_loader(self, loader, optimizer=None, desc='train', distributed_reduce=True):
         is_train = optimizer is not None
         self.model.train(is_train)
         total_loss = 0.0
@@ -217,7 +217,7 @@ class Trainer:
                 postfix[key] = f'{value:.4f}'
             iterator.set_postfix(postfix)
 
-        if self.distributed:
+        if self.distributed and distributed_reduce:
             totals = torch.tensor([total_loss, float(total_batches)], dtype=torch.float64, device=self.device)
             dist.all_reduce(totals, op=dist.ReduceOp.SUM)
             total_loss = float(totals[0].item())
@@ -285,7 +285,7 @@ class Trainer:
             dist.barrier()
         metrics = None
         if self.is_main_process:
-            metrics = self._run_loader(loader, optimizer=None, desc=desc)
+            metrics = self._run_loader(loader, optimizer=None, desc=desc, distributed_reduce=False)
         if self.distributed:
             payload = [metrics]
             dist.broadcast_object_list(payload, src=0)
