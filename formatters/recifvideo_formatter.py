@@ -23,9 +23,9 @@ class RecIFVideoFormatter(BaseFormatter):
     REQUIRE_STRINGIFY = False
 
     FILTER_ROUNDS = 3
-    DEFAULT_N_CORE = 5
-    DEFAULT_MIN_LENGTH = 5
-    DEFAULT_MAX_LENGTH = 200
+    DEFAULT_N_CORE = 20
+    DEFAULT_MIN_LENGTH = 10
+    DEFAULT_MAX_LENGTH = 50
 
     def __init__(self, data_dir=None):
         super().__init__(data_dir=data_dir)

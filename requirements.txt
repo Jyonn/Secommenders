@@ -7,9 +7,9 @@
 autoencoders[text,torch]
 
 pandas>=2.0,<3
-transformers>=4.40,<5
-peft>=0.10,<1
-tqdm>=4.66,<5
-pigmento>=0.2.3,<1
-refconfig>=0.1.2,<1
-oba>=0.3.2,<1
+transformers
+peft
+tqdm
+pigmento
+refconfig
+oba
