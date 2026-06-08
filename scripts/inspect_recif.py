@@ -2,10 +2,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
 def trim_value(value: Any, max_chars: int = 120):
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
     if isinstance(value, list):
         preview = value[:5]
         if len(value) > 5:
@@ -47,6 +52,52 @@ def list_like_columns(df: pd.DataFrame):
             avg_len = sum(lengths) / len(lengths)
         candidates.append((column, avg_len))
     return candidates
+
+
+def non_empty_mask(series: pd.Series):
+    return series.apply(
+        lambda value: (
+            isinstance(value, (list, np.ndarray)) and len(value) > 0
+        ) or (
+            isinstance(value, str) and len(value.strip()) > 0
+        )
+    )
+
+
+def summarize_sequence_columns(df: pd.DataFrame, columns: list[str]):
+    print('sequence_stats=')
+    for column in columns:
+        if column not in df.columns:
+            continue
+        mask = non_empty_mask(df[column])
+        present = int(mask.sum())
+        lengths = df.loc[mask, column].apply(lambda value: len(value))
+        avg_len = float(lengths.mean()) if present else 0.0
+        max_len = int(lengths.max()) if present else 0
+        print(f'  {column}: present={present}/{len(df)} avg_len={avg_len:.2f} max_len={max_len}')
+
+
+def summarize_text_columns(df: pd.DataFrame, columns: list[str]):
+    print('text_stats=')
+    for column in columns:
+        if column not in df.columns:
+            continue
+        mask = non_empty_mask(df[column])
+        present = int(mask.sum())
+        lengths = df.loc[mask, column].apply(lambda value: len(value))
+        avg_len = float(lengths.mean()) if present else 0.0
+        max_len = int(lengths.max()) if present else 0
+        print(f'  {column}: present={present}/{len(df)} avg_chars={avg_len:.2f} max_chars={max_len}')
+
+
+def unique_ids_from_sequence_column(series: pd.Series):
+    values = set()
+    for entry in series:
+        if isinstance(entry, np.ndarray):
+            entry = entry.tolist()
+        if isinstance(entry, list):
+            values.update(int(item) for item in entry)
+    return values
 
 
 def summarize_parquet(path: Path, head_rows: int = 2):
@@ -141,6 +192,64 @@ def main():
             except Exception:
                 nunique = 'n/a'
             print(f'{column}: nunique={nunique}')
+
+        print('\n=== MAIN TABLE SPLIT STATS')
+        if 'split' in df.columns:
+            print('split_counts=', df['split'].value_counts(dropna=False).sort_index().to_dict())
+
+        summarize_sequence_columns(
+            df,
+            [
+                'hist_video_pid',
+                'target_video_pid',
+                'hist_ad_pid',
+                'target_ad_pid',
+                'hist_goods_pid',
+                'target_goods_pid',
+                'hist_longview_video_list',
+            ],
+        )
+        summarize_text_columns(
+            df,
+            [
+                'inter_keyword_to_items',
+                'inter_user_profile_with_pid',
+                'inter_user_profile_with_sid',
+                'reco_gsu_caption',
+                'reco_target_caption',
+                'reco_cot',
+            ],
+        )
+
+        print('\n=== UNIFIED HISTORY COVERAGE')
+        history_columns = ['hist_video_pid', 'hist_ad_pid', 'hist_goods_pid', 'hist_longview_video_list']
+        availability = {}
+        for column in history_columns:
+            if column in df.columns:
+                availability[column] = int(non_empty_mask(df[column]).sum())
+        print('history_presence=', availability)
+
+        if all(column in df.columns for column in ['hist_video_pid', 'hist_ad_pid', 'hist_goods_pid']):
+            any_primary_history = (
+                non_empty_mask(df['hist_video_pid'])
+                | non_empty_mask(df['hist_ad_pid'])
+                | non_empty_mask(df['hist_goods_pid'])
+            )
+            print('users_with_any_primary_history=', int(any_primary_history.sum()))
+
+        print('\n=== ITEM ID SPACE OVERLAP')
+        video_ids = unique_ids_from_sequence_column(df['hist_video_pid']) | unique_ids_from_sequence_column(df['target_video_pid']) if 'hist_video_pid' in df.columns and 'target_video_pid' in df.columns else set()
+        ad_ids = unique_ids_from_sequence_column(df['hist_ad_pid']) | unique_ids_from_sequence_column(df['target_ad_pid']) if 'hist_ad_pid' in df.columns and 'target_ad_pid' in df.columns else set()
+        goods_ids = unique_ids_from_sequence_column(df['hist_goods_pid']) | unique_ids_from_sequence_column(df['target_goods_pid']) if 'hist_goods_pid' in df.columns and 'target_goods_pid' in df.columns else set()
+        print('video_item_count=', len(video_ids))
+        print('ad_item_count=', len(ad_ids))
+        print('goods_item_count=', len(goods_ids))
+        if video_ids and ad_ids:
+            print('video_ad_overlap=', len(video_ids & ad_ids))
+        if video_ids and goods_ids:
+            print('video_goods_overlap=', len(video_ids & goods_ids))
+        if ad_ids and goods_ids:
+            print('ad_goods_overlap=', len(ad_ids & goods_ids))
 
 
 if __name__ == '__main__':
