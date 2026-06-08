@@ -953,7 +953,8 @@ class Compiler:
         if len(sequence_uids) < 2:
             return None
         if self.config.repr_combine == 'add':
-            separator_len = len(self.prompt_main['item_separator_ids']) * max(0, len(sequence_uids) - 1)
+            prompt = self.backbone.build_prompt_spec()
+            separator_len = len(prompt['item_separator_ids']) * max(0, len(sequence_uids) - 1)
             fused_len = 2
             uid_target_len = 2
             total = separator_len + fused_len + uid_target_len
