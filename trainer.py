@@ -128,11 +128,13 @@ class Trainer:
             )
         elif self.config.task_type == 'hash':
             self._pnt(f'hash decoding=parallel item_scoring ks={self.model_core.ranking_ks()}')
-        if self.config.alignment_weight > 0:
+        if self.config.alignment_weight > 0 and self.config.repr_combine != 'add':
             self._pnt(
                 f'alignment enabled weight={self.config.alignment_weight:g} '
                 f'mode=integrated-mixed-view'
             )
+        elif self.config.alignment_weight > 0 and self.config.repr_combine == 'add':
+            self._pnt('alignment disabled for repr.combine=add fused-history protocol')
 
     def _metric_name(self):
         if self.config.task_type == 'uid':

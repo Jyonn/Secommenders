@@ -144,7 +144,7 @@ class TrainConfig:
             parts.append(f'fr-{self.freeze_backbone}')
         if self.use_lora != 'auto':
             parts.append(f'lo-{self.use_lora}')
-        if self.alignment_weight > 0:
+        if self.alignment_weight > 0 and self.repr_combine != 'add':
             parts.append(f'al{compact_float(self.alignment_weight)}')
         if self.task_type == 'sid' and self.code_decoding != 'auto':
             parts.append(f'cd-{self.code_decoding}')
@@ -181,6 +181,6 @@ class TrainConfig:
             payload.pop('code_beam_width', None)
         if not any(view in {'sid', 'hash'} for view in used_views):
             payload.pop('code_collision_loss_weight', None)
-        if len(self.compile_config.repr_types) <= 1:
+        if self.repr_combine == 'add' or len(self.compile_config.repr_types) <= 1:
             payload.pop('alignment_weight', None)
         return payload

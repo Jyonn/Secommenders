@@ -655,7 +655,59 @@ class SequentialRecModel(nn.Module):
             for anchor_position, label in zip(anchor_positions, labels)
         ]
 
+    def _build_finetune_sample_inputs_add(self, sample):
+        if self.config.task_type != 'uid':
+            raise ValueError('repr.combine=add is only supported for uid targets')
+
+        separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
+        sequence_uids = sample['sequence_uids']
+        embeddings = []
+        supervision = []
+
+        def append_embedded(tensor: torch.Tensor):
+            embeddings.append(tensor)
+            return sum(piece.shape[0] for piece in embeddings[:-1]), sum(piece.shape[0] for piece in embeddings) - 1
+
+        for item_index, uid in enumerate(sequence_uids):
+            if item_index > 0 and separator_ids:
+                append_embedded(self._embed_spec('model_tokens', separator_ids))
+
+            if item_index == 0:
+                for kind, value in self._render_history_item(uid):
+                    append_embedded(self._embed_spec(kind, value))
+                continue
+
+            marker_position = None
+            payload_positions = []
+            for kind, value in self._render_single_view_item(uid, 'uid'):
+                start, end = append_embedded(self._embed_spec(kind, value))
+                if kind == 'type_marker':
+                    marker_position = start
+                else:
+                    payload_positions.extend(range(start, end + 1))
+            supervision.extend(
+                self._build_repr_supervision(
+                    repr_type='uid',
+                    uid=uid,
+                    marker_position=marker_position,
+                    payload_positions=payload_positions,
+                    group='primary',
+                )
+            )
+
+            if item_index < len(sequence_uids) - 1:
+                for kind, value in self._render_history_item(uid):
+                    append_embedded(self._embed_spec(kind, value))
+
+        sample_embeddings = torch.cat(embeddings, dim=0)
+        return {
+            'inputs_embeds': sample_embeddings,
+            'supervision': supervision,
+        }
+
     def _build_finetune_sample_inputs(self, sample):
+        if self.config.repr_combine == 'add':
+            return self._build_finetune_sample_inputs_add(sample)
         separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
         sequence_uids = sample['sequence_uids']
         embeddings = []

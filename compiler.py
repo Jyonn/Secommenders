@@ -285,7 +285,10 @@ class Compiler:
         if repr_types[0] != self.config.task_type:
             raise ValueError('task.type must be the first entry in repr.type for causal mixed-view training')
         if self.config.repr_combine == 'add':
-            raise ValueError('repr.combine=add is not supported by the mixed-view causal training protocol')
+            if not (self.config.task_type == 'uid' and repr_types == ['uid', 'embedding']):
+                raise ValueError(
+                    'repr.combine=add is currently only supported for uid+embedding history with uid targets'
+                )
         if is_scratch_model and 'text' in repr_types:
             raise ValueError('scratch backbone currently does not support repr.type containing text')
 
@@ -949,6 +952,14 @@ class Compiler:
     def _estimate_packed_length(self, sequence_uids: list[int]):
         if len(sequence_uids) < 2:
             return None
+        if self.config.repr_combine == 'add':
+            separator_len = len(self.prompt_main['item_separator_ids']) * max(0, len(sequence_uids) - 1)
+            fused_len = 2
+            uid_target_len = 2
+            total = separator_len + fused_len + uid_target_len
+            if len(sequence_uids) > 2:
+                total += (len(sequence_uids) - 2) * (uid_target_len + fused_len)
+            return total
         prompt = self.backbone.build_prompt_spec()
         separator_len = len(prompt['item_separator_ids']) * max(0, len(sequence_uids) - 1)
         total = separator_len
