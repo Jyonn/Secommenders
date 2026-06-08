@@ -161,6 +161,41 @@ class Trainer:
         parts = [f'{key}={metrics.get(key, 0.0):.4f}' for key in selected_keys]
         return ' '.join(parts)
 
+    def _progress_postfix(self, *, is_train: bool, raw_loss: float, metrics: dict):
+        postfix = {'loss': f'{raw_loss:.4f}'}
+        if is_train:
+            for key, value in metrics.items():
+                if isinstance(value, str):
+                    postfix[key] = value
+                    continue
+                postfix[key] = f'{value:.4f}'
+            return postfix
+
+        candidate_keys = []
+        task_metric = self._metric_name()
+        if task_metric in metrics:
+            candidate_keys.append(task_metric)
+        if self.config.task_type == 'sid' and 'sid_seq_acc' in metrics:
+            candidate_keys.append('sid_seq_acc')
+        main_metric = self._main_metric_name()
+        if main_metric != 'loss' and main_metric in metrics:
+            candidate_keys.append(main_metric)
+        ranking_metric = self._default_ranking_metric()
+        if ranking_metric in metrics:
+            candidate_keys.append(ranking_metric)
+
+        seen = set()
+        for key in candidate_keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            value = metrics[key]
+            if isinstance(value, str):
+                postfix[key] = value
+                continue
+            postfix[key] = f'{value:.4f}'
+        return postfix
+
     def build_optimizer(self):
         params = [param for param in self.model_core.parameters() if param.requires_grad]
         total = sum(param.numel() for param in self.model_core.parameters())
@@ -222,13 +257,7 @@ class Trainer:
                     continue
                 metric_sums[key] = metric_sums.get(key, 0.0) + float(value)
 
-            postfix = {'loss': f'{raw_loss:.4f}'}
-            for key, value in metrics.items():
-                if isinstance(value, str):
-                    postfix[key] = value
-                    continue
-                postfix[key] = f'{value:.4f}'
-            iterator.set_postfix(postfix)
+            iterator.set_postfix(self._progress_postfix(is_train=is_train, raw_loss=raw_loss, metrics=metrics))
 
         if self.distributed and distributed_reduce:
             totals = torch.tensor([total_loss, float(total_batches)], dtype=torch.float64, device=self.device)
