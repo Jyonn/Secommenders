@@ -25,3 +25,15 @@ class SentenceBertModel(BaseModel):
 
 class SentenceT5Model(SentenceBertModel):
     KEY = 'sentence-transformers/sentence-t5-base'
+
+
+class Qwen3Embedding06bModel(SentenceBertModel):
+    KEY = 'Qwen/Qwen3-Embedding-0.6B'
+
+
+class Qwen3Embedding4bModel(SentenceBertModel):
+    KEY = 'Qwen/Qwen3-Embedding-4B'
+
+
+class Qwen3Embedding8bModel(SentenceBertModel):
+    KEY = 'Qwen/Qwen3-Embedding-8B'
