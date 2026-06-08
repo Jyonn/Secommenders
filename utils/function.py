@@ -151,6 +151,12 @@ def resolve_hidden_layer_count(config):
         value = getattr(config, attr, None)
         if value is not None:
             return int(value)
+    text_config = getattr(config, 'text_config', None)
+    if text_config is not None:
+        for attr in ('num_hidden_layers', 'n_layer', 'num_layers', 'n_layers'):
+            value = getattr(text_config, attr, None)
+            if value is not None:
+                return int(value)
     decoder = getattr(config, 'decoder', None)
     if decoder is not None:
         for attr in ('num_hidden_layers', 'n_layer', 'num_layers', 'n_layers'):

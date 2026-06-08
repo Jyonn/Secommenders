@@ -6,7 +6,6 @@ from transformers import AutoModel
 
 from utils import function
 
-
 class LLMSequenceEncoder(nn.Module):
     def __init__(
             self,
@@ -34,6 +33,14 @@ class LLMSequenceEncoder(nn.Module):
             hidden_size = getattr(base_model.config, 'hidden_size', None)
         if hidden_size is None:
             hidden_size = getattr(base_model.config, 'd_model', None)
+        if hidden_size is None:
+            text_config = getattr(base_model.config, 'text_config', None)
+            if text_config is not None:
+                hidden_size = getattr(text_config, 'word_embed_proj_dim', None)
+                if hidden_size is None:
+                    hidden_size = getattr(text_config, 'hidden_size', None)
+                if hidden_size is None:
+                    hidden_size = getattr(text_config, 'd_model', None)
         if hidden_size is None:
             raise ValueError(f'Cannot resolve hidden size from model config for {model_key}')
         self.hidden_size = int(hidden_size)
