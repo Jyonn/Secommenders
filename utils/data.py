@@ -20,4 +20,10 @@ DATA_DIRS = _load_data_dirs()
 
 
 def get_data_dir(dataset):
-    return DATA_DIRS.get(dataset)
+    path = DATA_DIRS.get(dataset)
+    if path is not None:
+        return path
+
+    if dataset.startswith('recif') and 'recif' in DATA_DIRS:
+        return DATA_DIRS['recif']
+    return None
