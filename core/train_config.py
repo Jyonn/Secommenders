@@ -35,6 +35,7 @@ class TrainConfig:
     patience: int
     alignment_weight: float
     code_beam_width: int
+    code_beam_chunk_size: int
     code_collision_loss_weight: float
     model_dtype: str
     use_lora: str
@@ -95,6 +96,7 @@ class TrainConfig:
             patience=int(evaluator.patience),
             alignment_weight=float(getattr(trainer, 'alignment', 0)),
             code_beam_width=int(getattr(trainer, 'code_beam_width', 20)),
+            code_beam_chunk_size=int(getattr(trainer, 'code_beam_chunk_size', 0)) or int(trainer.batch_size),
             code_collision_loss_weight=float(getattr(trainer, 'code_collision_loss_weight', 0.1)),
             model_dtype=str(model.dtype).lower(),
             use_lora=str(lora.use).lower(),
@@ -150,6 +152,8 @@ class TrainConfig:
             parts.append(f'cd-{self.code_decoding}')
         if self.task_type == 'sid' and self.code_beam_width != 20:
             parts.append(f'cb{self.code_beam_width}')
+        if self.task_type == 'sid' and self.code_beam_chunk_size != self.batch_size:
+            parts.append(f'cbc{self.code_beam_chunk_size}')
         if self.task_type in {'sid', 'hash'} and self.code_collision_loss_weight != 0.1:
             parts.append(f'ccw{compact_float(self.code_collision_loss_weight)}')
         if is_llm:
@@ -179,6 +183,7 @@ class TrainConfig:
         if self.task_type != 'sid':
             payload.pop('code_decoding', None)
             payload.pop('code_beam_width', None)
+            payload.pop('code_beam_chunk_size', None)
         if not any(view in {'sid', 'hash'} for view in used_views):
             payload.pop('code_collision_loss_weight', None)
         if self.repr_combine == 'add' or len(self.compile_config.repr_types) <= 1:

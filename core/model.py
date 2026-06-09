@@ -394,10 +394,15 @@ class SequentialRecModel(nn.Module):
         return padded, attention_mask.long(), lengths
 
     def _predict_sid_step_logits(self, sample, sid_prefixes: list[list[int]], slot_index: int):
-        inputs_embeds, attention_mask, lengths = self._build_sid_generation_batch_inputs(sample, sid_prefixes)
-        hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
-        pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
-        return self._sid_logits(pooled)
+        chunk_size = max(1, int(getattr(self.config, 'code_beam_chunk_size', self.config.batch_size)))
+        logits_chunks = []
+        for start in range(0, len(sid_prefixes), chunk_size):
+            chunk_prefixes = sid_prefixes[start:start + chunk_size]
+            inputs_embeds, attention_mask, lengths = self._build_sid_generation_batch_inputs(sample, chunk_prefixes)
+            hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
+            pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
+            logits_chunks.append(self._sid_logits(pooled))
+        return torch.cat(logits_chunks, dim=0)
 
     def _pick_sid_item(self, sid_sequence: tuple[int, ...]):
         candidates = self.compiled.sid_sequence_to_items.get(sid_sequence, [])
