@@ -1,3 +1,5 @@
+import inspect
+
 from peft import LoraConfig, TaskType, get_peft_model
 from pigmento import pnt
 import torch
@@ -50,6 +52,7 @@ class LLMSequenceEncoder(nn.Module):
         self.model_dtype = torch_dtype or next(base_model.parameters()).dtype
         self.compute_dtype = self.model_dtype
         self.total_hidden_layers = function.resolve_hidden_layer_count(base_model.config)
+        self.forward_accepts_use_cache = False
 
         if self.use_lora:
             target_modules = 'all-linear' if lora_target_modules == 'all-linear' else [
@@ -106,6 +109,18 @@ class LLMSequenceEncoder(nn.Module):
                     param.requires_grad = False
                 self.model.eval()
             pnt(f'loaded backbone {model_key} with dtype={function.format_torch_dtype(self.model_dtype)}')
+        self.forward_accepts_use_cache = self._accepts_use_cache(self.model)
+
+    @staticmethod
+    def _accepts_use_cache(model) -> bool:
+        try:
+            signature = inspect.signature(model.forward)
+        except (TypeError, ValueError):
+            return False
+        for parameter in signature.parameters.values():
+            if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+                return True
+        return 'use_cache' in signature.parameters
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -121,13 +136,16 @@ class LLMSequenceEncoder(nn.Module):
 
     def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor | None = None):
         use_no_grad = self.freeze_backbone and not self.use_lora
+        model_kwargs = dict(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            return_dict=True,
+        )
+        if self.forward_accepts_use_cache:
+            model_kwargs['use_cache'] = False
         with torch.set_grad_enabled(not use_no_grad):
-            outputs = self.model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                return_dict=True,
-            )
+            outputs = self.model(**model_kwargs)
         return outputs.last_hidden_state
 
 

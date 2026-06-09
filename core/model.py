@@ -50,10 +50,14 @@ class SequentialRecModel(nn.Module):
 
         hidden_size = self.encoder.hidden_size
         input_embed_dim = getattr(self.encoder, 'input_embed_dim', hidden_size)
+        history_repr_types = set(config.compile_config.repr_types)
+        self.uses_uid_path = 'uid' in history_repr_types or config.task_type == 'uid' or config.repr_combine == 'add'
+        self.uses_sid_path = 'sid' in history_repr_types or config.task_type == 'sid'
+        self.uses_hash_path = 'hash' in history_repr_types or config.task_type == 'hash'
         self.type_marker_embedding = nn.Embedding(len(self.compiled.special_vocab['tokens']), input_embed_dim)
-        self.uid_embedding = nn.Embedding(compiled.num_items, input_embed_dim)
-        self.sid_embedding = nn.Embedding(max(compiled.sid_vocab_size, 1), input_embed_dim)
-        self.hash_embedding = nn.Embedding(max(compiled.hash_vocab_size, 1), input_embed_dim)
+        self.uid_embedding = nn.Embedding(compiled.num_items, input_embed_dim) if self.uses_uid_path else None
+        self.sid_embedding = nn.Embedding(max(compiled.sid_vocab_size, 1), input_embed_dim) if self.uses_sid_path else None
+        self.hash_embedding = nn.Embedding(max(compiled.hash_vocab_size, 1), input_embed_dim) if self.uses_hash_path else None
         self.embedding_projection = None
         self.embedding_head = None
         self.uid_head = None
@@ -67,7 +71,7 @@ class SequentialRecModel(nn.Module):
         else:
             self.register_buffer('embedding_matrix', torch.empty(0))
 
-        supervised_repr_types = set(config.compile_config.repr_types)
+        supervised_repr_types = history_repr_types
         if 'uid' in supervised_repr_types or config.task_type == 'uid':
             self.uid_head = nn.Linear(hidden_size, compiled.num_items)
         if 'sid' in supervised_repr_types or config.task_type == 'sid':
@@ -108,9 +112,12 @@ class SequentialRecModel(nn.Module):
             hash_item_codes_tensor = torch.empty((0, 0), dtype=torch.long)
         self.register_buffer('hash_item_codes', hash_item_codes_tensor, persistent=False)
         self.type_marker_embedding.to(dtype=self.compute_dtype)
-        self.uid_embedding.to(dtype=self.compute_dtype)
-        self.sid_embedding.to(dtype=self.compute_dtype)
-        self.hash_embedding.to(dtype=self.compute_dtype)
+        if self.uid_embedding is not None:
+            self.uid_embedding.to(dtype=self.compute_dtype)
+        if self.sid_embedding is not None:
+            self.sid_embedding.to(dtype=self.compute_dtype)
+        if self.hash_embedding is not None:
+            self.hash_embedding.to(dtype=self.compute_dtype)
         if self.embedding_projection is not None:
             self.embedding_projection.to(dtype=self.compute_dtype)
         if self.embedding_head is not None:
@@ -207,12 +214,18 @@ class SequentialRecModel(nn.Module):
             marker_index = torch.tensor([self._type_marker_index(value)], dtype=torch.long, device=self.device)
             return self.type_marker_embedding(marker_index)
         if kind == 'uid':
+            if self.uid_embedding is None:
+                raise ValueError('uid embedding requested but uid path is not initialized')
             token_ids = torch.tensor([int(value)], dtype=torch.long, device=self.device)
             return self.uid_embedding(token_ids)
         if kind == 'sid':
+            if self.sid_embedding is None:
+                raise ValueError('sid embedding requested but sid path is not initialized')
             token_ids = torch.tensor(value, dtype=torch.long, device=self.device)
             return self.sid_embedding(token_ids)
         if kind == 'hash':
+            if self.hash_embedding is None:
+                raise ValueError('hash embedding requested but hash path is not initialized')
             token_ids = torch.tensor(value, dtype=torch.long, device=self.device)
             return self.hash_embedding(token_ids)
         if kind == 'embedding':
@@ -220,6 +233,10 @@ class SequentialRecModel(nn.Module):
             projected = self.embedding_projection(self.embedding_matrix[emb_index].to(dtype=self.compute_dtype))
             return projected
         if kind == 'uid_embedding_add':
+            if self.uid_embedding is None:
+                raise ValueError('uid+embedding fused path requested but uid embedding is not initialized')
+            if self.embedding_projection is None:
+                raise ValueError('uid+embedding fused path requested but embedding projection is not initialized')
             uid, emb_index = value
             uid_tensor = torch.tensor([int(uid)], dtype=torch.long, device=self.device)
             emb_tensor = torch.tensor([int(emb_index)], dtype=torch.long, device=self.device)
