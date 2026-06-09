@@ -474,10 +474,15 @@ class Trainer:
             missing = getattr(load_info, 'missing_keys', [])
             unexpected = getattr(load_info, 'unexpected_keys', [])
             if unexpected:
-                raise RuntimeError(f'unexpected checkpoint keys: {unexpected}')
+                preview = ', '.join(unexpected[:5])
+                suffix = '' if len(unexpected) <= 5 else f' ... (+{len(unexpected) - 5} more)'
+                self._pnt(
+                    'ignoring unexpected checkpoint keys from older/newer model variants: '
+                    f'{preview}{suffix}'
+                )
             self._pnt(
                 f'loaded checkpoint {checkpoint_path} '
-                f'with {len(missing)} missing frozen/base keys'
+                f'with {len(missing)} missing frozen/base keys and {len(unexpected)} ignored unexpected keys'
             )
         return checkpoint
 
