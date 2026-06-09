@@ -23,6 +23,8 @@ class TrainConfig:
     batch_size: int
     accumulate_batch: int
     valid_only: bool
+    test_only: bool
+    load_ckpt: Optional[str]
     epochs: int
     learning_rate: float
     weight_decay: float
@@ -75,6 +77,15 @@ class TrainConfig:
         uid_decoding = str(getattr(trainer, 'uid_decoding', 'flat')).strip().lower()
         uid_cluster_levels = function.normalize_optional_string(getattr(trainer, 'uid_cluster_levels', None))
         uid_cluster_topk = function.normalize_optional_string(getattr(trainer, 'uid_cluster_topk', None))
+        valid_only = bool(getattr(trainer, 'valid_only', False))
+        test_only = bool(getattr(trainer, 'test_only', False))
+        load_ckpt = function.normalize_optional_string(getattr(trainer, 'load_ckpt', None))
+        if valid_only and test_only:
+            raise ValueError('trainer.valid_only and trainer.test_only cannot both be true')
+        if test_only and not load_ckpt:
+            raise ValueError('trainer.load_ckpt is required when trainer.test_only=true')
+        if load_ckpt and not test_only:
+            raise ValueError('trainer.load_ckpt is only supported together with trainer.test_only=true')
         if uid_decoding == 'hierarchical' and raw_task_type != 'uid':
             raise ValueError('trainer.uid_decoding=hierarchical is only supported when task_type=uid')
         if uid_decoding == 'hierarchical' and not uid_cluster_levels:
@@ -96,7 +107,9 @@ class TrainConfig:
             item_text_max_tokens=int(data_config.item_text_max_tokens),
             batch_size=int(trainer.batch_size),
             accumulate_batch=max(1, int(getattr(trainer, 'accumulate_batch', 1))),
-            valid_only=bool(getattr(trainer, 'valid_only', False)),
+            valid_only=valid_only,
+            test_only=test_only,
+            load_ckpt=load_ckpt,
             epochs=int(trainer.epochs),
             learning_rate=float(trainer.learning_rate),
             weight_decay=float(trainer.weight_decay),
@@ -154,6 +167,7 @@ class TrainConfig:
             f'bs{self.batch_size}',
             f'acc{self.accumulate_batch}' if self.accumulate_batch != 1 else None,
             'validonly' if self.valid_only else None,
+            'testonly' if self.test_only else None,
             f'lr{compact_float(self.learning_rate)}',
             f'wd{compact_float(self.weight_decay)}',
         ]
@@ -180,6 +194,8 @@ class TrainConfig:
             parts.append(f'cbc{self.code_beam_chunk_size}')
         if self.task_type in {'sid', 'hash'} and self.code_collision_loss_weight != 0.1:
             parts.append(f'ccw{compact_float(self.code_collision_loss_weight)}')
+        if self.test_only and self.load_ckpt:
+            parts.append(f'ck{short_config_hash({"load_ckpt": self.load_ckpt})}')
         if is_llm:
             parts.extend(
                 [
@@ -219,4 +235,6 @@ class TrainConfig:
             payload.pop('code_collision_loss_weight', None)
         if self.repr_combine == 'add' or len(self.compile_config.repr_types) <= 1:
             payload.pop('alignment_weight', None)
+        if not self.test_only:
+            payload.pop('load_ckpt', None)
         return payload

@@ -13,6 +13,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from pigmento import pnt
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
@@ -150,6 +151,41 @@ class Trainer:
             )
         elif self.config.alignment_weight > 0 and self.config.repr_combine == 'add':
             self._pnt('alignment disabled for repr.combine=add fused-history protocol')
+
+    def build_test_loader_only(self):
+        test_dataset = CompiledTestSampleDataset(self.compiled.test)
+        self.test_loader = DataLoader(
+            test_dataset,
+            batch_size=self.config.batch_size,
+            shuffle=False,
+            collate_fn=lambda batch: batch,
+        )
+        self.train_loader = None
+        self.valid_loader = None
+        self.train_sampler = None
+        self._pnt(
+            f'built test-only dataloader test={len(test_dataset)} batch_size={self.config.batch_size} '
+            f'world_size={self.world_size} order=length-sorted'
+        )
+        if self.config.task_type == 'uid' and self.config.uid_decoding == 'hierarchical':
+            self._pnt(
+                f'uid decoding=hierarchical levels={self.config.uid_cluster_levels} '
+                f'topk={self.config.uid_cluster_topk}'
+            )
+        elif self.config.task_type == 'sid':
+            sid_decoding = self.model_core._sid_decoding_mode()
+            self._pnt(
+                f'sid decoding={sid_decoding} '
+                + (
+                    f'beam_width={self.config.code_beam_width} '
+                    f'beam_chunk_size={self.config.code_beam_chunk_size} '
+                    f'ks={self.model_core.sid_ranking_ks()}'
+                    if sid_decoding == 'sequential'
+                    else f'item_scoring ks={self.model_core.sid_ranking_ks()}'
+                )
+            )
+        elif self.config.task_type == 'hash':
+            self._pnt(f'hash decoding=parallel item_scoring ks={self.model_core.ranking_ks()}')
 
     def _metric_name(self):
         if self.config.task_type == 'uid':
@@ -352,6 +388,31 @@ class Trainer:
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote valid-only meta to {self.meta_path}')
 
+    def _save_test_only_meta(self, checkpoint: dict, test_metrics: dict):
+        if not self.is_main_process:
+            return
+        meta = self._load_meta_stub()
+        meta.update({
+            'config': asdict(self.config),
+            'compiled_dir': str(self.compiled.compile_dir),
+            'run_dir': str(self.run_dir),
+            'main_metric': self._main_metric_name(),
+            'train_metric_name': self._metric_name(),
+            'test_metric_name': self._default_ranking_metric(),
+            'declared_test_metrics': self.config.metrics,
+            'loaded_checkpoint': str(self.config.load_ckpt),
+            'checkpoint_epoch': checkpoint.get('epoch'),
+            'checkpoint_best_valid_metric': checkpoint.get('best_valid_metric'),
+            'checkpoint_main_metric': checkpoint.get('main_metric'),
+            'checkpoint_valid_metrics': checkpoint.get('valid_metrics'),
+            'test_metrics': test_metrics,
+            'world_size': self.world_size,
+            'status': 'test_only_finished',
+            'finished_at': _utc_now_iso(),
+        })
+        self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+        self._pnt(f'wrote test-only meta to {self.meta_path}')
+
     def _load_meta_stub(self):
         if self.meta_path.exists():
             try:
@@ -374,7 +435,65 @@ class Trainer:
             dist.barrier()
         return metrics
 
+    def _assert_checkpoint_compatible(self, checkpoint: dict):
+        saved_config = checkpoint.get('config') or {}
+        required_keys = [
+            'data', 'model', 'repr_type', 'repr_source_model', 'sid_export', 'sid_coder', 'hash_coder',
+            'repr_combine', 'task_type', 'maxitems', 'model_max_length', 'item_text_max_tokens',
+            'freeze_backbone', 'uid_decoding', 'uid_cluster_levels', 'uid_cluster_topk',
+            'code_decoding', 'model_dtype', 'use_lora', 'lora_rank', 'lora_alpha', 'lora_dropout',
+            'lora_layers', 'hidden_size', 'num_layers', 'num_heads', 'dropout',
+        ]
+        current_config = asdict(self.config)
+        mismatches = []
+        for key in required_keys:
+            if saved_config.get(key) != current_config.get(key):
+                mismatches.append((key, saved_config.get(key), current_config.get(key)))
+        if mismatches:
+            preview = ', '.join(
+                f'{key}: ckpt={saved!r} current={current!r}'
+                for key, saved, current in mismatches[:5]
+            )
+            raise ValueError(f'Checkpoint config is incompatible with current config ({preview})')
+
+    def _load_checkpoint_for_eval(self, checkpoint_path: str | Path):
+        checkpoint_path = Path(checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f'Checkpoint not found: {checkpoint_path}')
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        self._assert_checkpoint_compatible(checkpoint)
+        if self.is_main_process:
+            load_info = self.model_core.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            missing = getattr(load_info, 'missing_keys', [])
+            unexpected = getattr(load_info, 'unexpected_keys', [])
+            if unexpected:
+                raise RuntimeError(f'unexpected checkpoint keys: {unexpected}')
+            self._pnt(
+                f'loaded checkpoint {checkpoint_path} '
+                f'with {len(missing)} missing frozen/base keys'
+            )
+        return checkpoint
+
     def train(self):
+        if self.config.test_only:
+            self.build_test_loader_only()
+            self._pnt(
+                f'start test-only evaluation on {self.config.data} with {self.config.model} '
+                f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
+                f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
+                f'batch_size={self.config.batch_size} checkpoint={self.config.load_ckpt}'
+            )
+            checkpoint = self._load_checkpoint_for_eval(self.config.load_ckpt)
+            test_metrics = self._evaluate_eval_set(self.test_loader, desc='test-only')
+            if self.is_main_process:
+                self._pnt(
+                    f'test_only test_loss={test_metrics["loss"]:.4f} '
+                    f'{self._format_test_metrics(test_metrics)}'
+                )
+                self._save_test_only_meta(checkpoint, test_metrics)
+            if self.distributed:
+                dist.destroy_process_group()
+            return
         self.build_dataloaders()
         if self.config.valid_only:
             self._pnt(
@@ -459,13 +578,7 @@ class Trainer:
                 break
 
         if self.is_main_process:
-            checkpoint = torch.load(self.run_dir / 'best.pt', map_location=self.device)
-            load_info = self.model_core.load_state_dict(checkpoint['model_state_dict'], strict=False)
-            missing = getattr(load_info, 'missing_keys', [])
-            unexpected = getattr(load_info, 'unexpected_keys', [])
-            if unexpected:
-                raise RuntimeError(f'unexpected checkpoint keys: {unexpected}')
-            self._pnt(f'loaded best checkpoint with {len(missing)} missing frozen/base keys')
+            self._load_checkpoint_for_eval(self.run_dir / 'best.pt')
         test_metrics = self._evaluate_eval_set(self.test_loader, desc='test')
         if self.is_main_process:
             self._pnt(
