@@ -68,6 +68,29 @@ def ensure_quantized(data: str, model: str, quantizer_name: str | None = None):
     return quantizer
 
 
+def ensure_clustered(data: str, uid_cluster_levels: str):
+    setup_logging()
+    pnt(f'auto preparing clustered artifacts for {data}/{uid_cluster_levels}')
+    from clusterer import Clusterer, ClustererConfig
+
+    configurations = ConfigInit(
+        required_args=['data'],
+        default_args=dict(
+            config='config/clusterer.yaml',
+        ),
+        makedirs=[],
+    ).parse_kwargs(
+        {
+            'data': data,
+            'uid_cluster_levels': uid_cluster_levels,
+            'config': 'config/clusterer.yaml',
+        }
+    )
+    clusterer = Clusterer(ClustererConfig.from_refconfig(configurations))
+    clusterer.run()
+    return clusterer
+
+
 def ensure_compiled(config: CompileConfig):
     setup_logging()
     pnt(f'auto preparing compiled artifacts for {config.data}/{config.prepare_id}')

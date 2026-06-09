@@ -10,6 +10,7 @@ from models import build_backbone
 from utils import function
 
 from .encoders import LLMSequenceEncoder, ScratchSequenceEncoder
+from .uid_hierarchy import UIDHierarchyArtifacts
 
 
 class SequentialRecModel(nn.Module):
@@ -25,6 +26,7 @@ class SequentialRecModel(nn.Module):
         freeze_default = compiled.model_kind == 'llm'
         self.freeze_backbone = function.coerce_bool(config.freeze_backbone, default=freeze_default)
         self.use_lora = function.coerce_bool(config.use_lora, default=compiled.model_kind == 'llm')
+        self.uid_hierarchical_decoding = config.task_type == 'uid' and str(getattr(config, 'uid_decoding', 'flat')).lower() == 'hierarchical'
 
         if compiled.model_kind == 'llm':
             self.encoder = LLMSequenceEncoder(
@@ -61,6 +63,8 @@ class SequentialRecModel(nn.Module):
         self.embedding_projection = None
         self.embedding_head = None
         self.uid_head = None
+        self.uid_hierarchy = None
+        self.uid_node_heads = None
         self.sid_head = None
         self.hash_head = None
         self.model_token_head = None
@@ -72,7 +76,15 @@ class SequentialRecModel(nn.Module):
             self.register_buffer('embedding_matrix', torch.empty(0))
 
         supervised_repr_types = history_repr_types
-        if 'uid' in supervised_repr_types or config.task_type == 'uid':
+        if self.uid_hierarchical_decoding:
+            hierarchy_dir = getattr(config, 'uid_hierarchy_dir', None)
+            if not hierarchy_dir:
+                raise ValueError('uid hierarchical decoding requires prepared hierarchy artifacts')
+            self.uid_hierarchy = UIDHierarchyArtifacts(hierarchy_dir, compiled, config.uid_cluster_topk)
+            self.uid_node_heads = nn.ModuleList(
+                [nn.Linear(hidden_size, child_count) for child_count in self.uid_hierarchy.node_child_counts]
+            )
+        elif 'uid' in supervised_repr_types or config.task_type == 'uid':
             self.uid_head = nn.Linear(hidden_size, compiled.num_items)
         if 'sid' in supervised_repr_types or config.task_type == 'sid':
             if not compiled.sid_vocab_size or not compiled.sid_num_quantizers:
@@ -124,6 +136,9 @@ class SequentialRecModel(nn.Module):
             self.embedding_head.to(dtype=self.compute_dtype)
         if self.uid_head is not None:
             self.uid_head.to(dtype=self.compute_dtype)
+        if self.uid_node_heads is not None:
+            for head in self.uid_node_heads:
+                head.to(dtype=self.compute_dtype)
         if self.sid_head is not None:
             self.sid_head.to(dtype=self.compute_dtype)
         if self.hash_head is not None:
@@ -256,6 +271,11 @@ class SequentialRecModel(nn.Module):
         if self.uid_head is None:
             raise ValueError('uid supervision requested but uid_head is not initialized')
         return self.uid_head(hidden_states)
+
+    def _uid_hierarchy_logits(self, node_id: int, hidden_states: torch.Tensor):
+        if self.uid_node_heads is None:
+            raise ValueError('hierarchical uid supervision requested but uid hierarchy heads are not initialized')
+        return self.uid_node_heads[node_id](hidden_states)
 
     def _sid_logits(self, hidden_states: torch.Tensor):
         if self.sid_head is None:
@@ -836,6 +856,98 @@ class SequentialRecModel(nn.Module):
             'uid_acc': accuracy.item(),
         }
 
+    def _compute_uid_hierarchical_losses(self, hidden_states: torch.Tensor, target_uids: torch.Tensor):
+        if self.uid_hierarchy is None:
+            raise ValueError('hierarchical uid losses requested without uid hierarchy artifacts')
+
+        item_node_ids = self.uid_hierarchy.item_node_ids.to(device=self.device)[target_uids]
+        item_labels = self.uid_hierarchy.item_labels.to(device=self.device)[target_uids]
+        batch_size = hidden_states.shape[0]
+        depth = self.uid_hierarchy.depth
+
+        losses_per_sample = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
+        path_correct = torch.ones(batch_size, dtype=torch.bool, device=self.device)
+        metrics = {}
+
+        for level_index in range(depth):
+            node_ids = item_node_ids[:, level_index]
+            labels = item_labels[:, level_index]
+            level_predictions = torch.full_like(labels, fill_value=-1)
+            unique_node_ids = sorted({int(node_id) for node_id in node_ids.tolist()})
+            for node_id in unique_node_ids:
+                sample_indices = (node_ids == node_id).nonzero(as_tuple=False).view(-1)
+                if sample_indices.numel() == 0:
+                    continue
+                logits = self._uid_hierarchy_logits(node_id, hidden_states[sample_indices])
+                level_losses = F.cross_entropy(logits.float(), labels[sample_indices], reduction='none')
+                losses_per_sample[sample_indices] += level_losses
+                predictions = logits.argmax(dim=-1)
+                level_predictions[sample_indices] = predictions
+
+            level_correct = level_predictions == labels
+            path_correct = path_correct & level_correct
+            if level_index == 0:
+                metrics['uid_cluster_acc'] = float(level_correct.float().mean().item())
+            if level_index == depth - 1:
+                metrics['uid_local_acc'] = float(level_correct.float().mean().item())
+
+        metrics['uid_acc'] = float(path_correct.float().mean().item())
+        return losses_per_sample / max(depth, 1), metrics
+
+    def _compute_uid_hierarchical_loss(self, pooled: torch.Tensor, batch):
+        target_uids = torch.tensor([int(sample['target_uid']) for sample in batch], dtype=torch.long, device=self.device)
+        losses, metrics = self._compute_uid_hierarchical_losses(pooled, target_uids)
+        return losses.mean(), metrics
+
+    def _compute_uid_hierarchical_ranking_metrics(self, pooled: torch.Tensor, batch):
+        if self.uid_hierarchy is None:
+            raise ValueError('hierarchical uid ranking requested without uid hierarchy artifacts')
+
+        ks = self.ranking_ks()
+        totals = {f'hr@{k}': 0.0 for k in ks}
+        totals.update({f'ndcg@{k}': 0.0 for k in ks})
+        totals['mrr'] = 0.0
+
+        for batch_index, sample in enumerate(batch):
+            hidden = pooled[batch_index:batch_index + 1]
+            frontier = [(0, 0.0)]
+            candidate_scores = {}
+            for level_index in range(self.uid_hierarchy.depth):
+                next_frontier = []
+                for node_id, prefix_score in frontier:
+                    logits = self._uid_hierarchy_logits(node_id, hidden).squeeze(0)
+                    log_probs = F.log_softmax(logits.float(), dim=-1)
+                    child_count = int(self.uid_hierarchy.node_child_counts[node_id])
+                    topk_spec = self.uid_hierarchy.topk_per_level[level_index]
+                    topk = child_count if topk_spec <= 0 else min(topk_spec, child_count)
+                    top_scores, top_labels = torch.topk(log_probs, k=topk)
+                    if level_index < self.uid_hierarchy.depth - 1:
+                        child_nodes = self.uid_hierarchy.child_nodes[node_id]
+                        for label, score in zip(top_labels.tolist(), top_scores.tolist()):
+                            next_frontier.append((int(child_nodes[int(label)]), prefix_score + float(score)))
+                    else:
+                        leaf_items = self.uid_hierarchy.leaf_items[node_id]
+                        for label, score in zip(top_labels.tolist(), top_scores.tolist()):
+                            item_uid = int(leaf_items[int(label)])
+                            candidate_scores[item_uid] = max(candidate_scores.get(item_uid, float('-inf')), prefix_score + float(score))
+                frontier = next_frontier
+
+            ranked_uids = [
+                item_uid
+                for item_uid, _ in sorted(candidate_scores.items(), key=lambda item: item[1], reverse=True)
+            ]
+            target_uid = int(sample['target_uid'])
+            rank = ranked_uids.index(target_uid) + 1 if target_uid in ranked_uids else None
+            if rank is not None:
+                totals['mrr'] += 1.0 / rank
+            for k in ks:
+                if rank is not None and rank <= k:
+                    totals[f'hr@{k}'] += 1.0
+                    totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+
+        batch_size = max(len(batch), 1)
+        return {key: value / batch_size for key, value in totals.items()}
+
     def _compute_embedding_loss(self, pooled: torch.Tensor, batch):
         target_indices = torch.tensor(
             [int(self.compiled.item_views['embedding'][sample['target_uid']]) for sample in batch],
@@ -957,11 +1069,15 @@ class SequentialRecModel(nn.Module):
             group_mask = [groups[index] for index in mask_indices]
 
             if kind == 'uid':
-                logits = self._uid_logits(kind_hidden)
-                losses = F.cross_entropy(logits.float(), kind_labels, reduction='none')
-                predictions = logits.argmax(dim=-1)
-                accuracy = (predictions == kind_labels).float().mean().item()
-                metrics['uid_acc'] = accuracy
+                if self.uid_hierarchical_decoding and self.config.task_type == 'uid':
+                    losses, uid_metrics = self._compute_uid_hierarchical_losses(kind_hidden, kind_labels)
+                    metrics.update(uid_metrics)
+                else:
+                    logits = self._uid_logits(kind_hidden)
+                    losses = F.cross_entropy(logits.float(), kind_labels, reduction='none')
+                    predictions = logits.argmax(dim=-1)
+                    accuracy = (predictions == kind_labels).float().mean().item()
+                    metrics['uid_acc'] = accuracy
             elif kind == 'sid':
                 logits = self._sid_logits(kind_hidden)
                 masked_logits = self._mask_sid_logits_for_slots(logits, kind_slots)
@@ -1022,10 +1138,14 @@ class SequentialRecModel(nn.Module):
         pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
 
         if self.config.task_type == 'uid':
-            loss, metrics = self._compute_uid_loss(pooled, batch)
-            labels = torch.tensor([sample['target_uid'] for sample in batch], dtype=torch.long, device=self.device)
-            logits = self._uid_logits(pooled)
-            metrics.update(self._compute_ranking_metrics_from_logits(logits, labels))
+            if self.uid_hierarchical_decoding:
+                loss, metrics = self._compute_uid_hierarchical_loss(pooled, batch)
+                metrics.update(self._compute_uid_hierarchical_ranking_metrics(pooled, batch))
+            else:
+                loss, metrics = self._compute_uid_loss(pooled, batch)
+                labels = torch.tensor([sample['target_uid'] for sample in batch], dtype=torch.long, device=self.device)
+                logits = self._uid_logits(pooled)
+                metrics.update(self._compute_ranking_metrics_from_logits(logits, labels))
             return loss, metrics
         if self.config.task_type == 'sid':
             if self._sid_decoding_mode() == 'parallel':

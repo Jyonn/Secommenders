@@ -26,6 +26,9 @@ class ArtifactStore:
             return self._dir('quantized', self.dataset, model, quantizer_name)
         return self._dir('quantized', self.dataset, model)
 
+    def clustered_dir(self, prepare_id: str) -> Path:
+        return self._dir('clustered', self.dataset, prepare_id)
+
     def compiled_dir(self, prepare_id: str) -> Path:
         return self._dir('compiled', self.dataset, prepare_id)
 

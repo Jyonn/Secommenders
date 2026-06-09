@@ -37,6 +37,9 @@ trainer:
   device: ${device:null}$
   num_gpus: ${num_gpus:1}$
   freeze_backbone: ${freeze_backbone:auto}$
+  uid_decoding: ${uid_decoding:flat}$
+  uid_cluster_levels: ${uid_cluster_levels:null}$
+  uid_cluster_topk: ${uid_cluster_topk:null}$
   code_decoding: ${code_decoding:auto}$
   code_beam_width: ${code_beam_width:20}$
   code_beam_chunk_size: ${code_beam_chunk_size:0}$

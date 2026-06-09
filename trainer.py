@@ -23,6 +23,7 @@ from utils.artifact import ArtifactStore
 from utils.config_init import ConfigInit
 from utils.gpu import GPU
 from utils.logging import attach_run_log, setup_logging
+from utils.pipeline import ensure_clustered
 
 
 class Trainer:
@@ -34,6 +35,7 @@ class Trainer:
         self.distributed = self.world_size > 1
         self._init_distributed()
         self.run_dir = ArtifactStore(config.data).trained_dir(config.run_id)
+        self._prepare_uid_hierarchy_if_needed()
         self.compiled = CompiledArtifacts(config).load()
         self.device = self._resolve_device()
         self.model_core = SequentialRecModel(self.compiled, config).to(self.device)
@@ -56,6 +58,12 @@ class Trainer:
         self.meta_path = self.run_dir / 'meta.json'
         self.pid_path = self.run_dir / 'pid.json'
         self.log_path = self.run_dir / 'train.log'
+
+    def _prepare_uid_hierarchy_if_needed(self):
+        if self.config.task_type != 'uid' or self.config.uid_decoding != 'hierarchical':
+            return
+        clusterer = ensure_clustered(self.config.data, self.config.uid_cluster_levels)
+        setattr(self.config, 'uid_hierarchy_dir', str(clusterer.output_dir))
 
     @property
     def is_main_process(self):
@@ -116,7 +124,12 @@ class Trainer:
             f'accumulate_batch={self.config.accumulate_batch} effective_batch_size={effective_batch_size} '
             f'world_size={self.world_size} order=length-sorted'
         )
-        if self.config.task_type == 'sid':
+        if self.config.task_type == 'uid' and self.config.uid_decoding == 'hierarchical':
+            self._pnt(
+                f'uid decoding=hierarchical levels={self.config.uid_cluster_levels} '
+                f'topk={self.config.uid_cluster_topk}'
+            )
+        elif self.config.task_type == 'sid':
             sid_decoding = self.model_core._sid_decoding_mode()
             self._pnt(
                 f'sid decoding={sid_decoding} '

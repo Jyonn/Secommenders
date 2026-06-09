@@ -30,6 +30,9 @@ class TrainConfig:
     device: Optional[str]
     num_gpus: int
     freeze_backbone: str
+    uid_decoding: str
+    uid_cluster_levels: Optional[str]
+    uid_cluster_topk: Optional[str]
     code_decoding: str
     main_metric: str
     metrics: list[str]
@@ -69,6 +72,15 @@ class TrainConfig:
             metrics = [metric.strip().lower() for metric in raw_metrics.split(',') if metric.strip()]
         else:
             metrics = [str(metric).strip().lower() for metric in list(raw_metrics) if str(metric).strip()]
+        uid_decoding = str(getattr(trainer, 'uid_decoding', 'flat')).strip().lower()
+        uid_cluster_levels = function.normalize_optional_string(getattr(trainer, 'uid_cluster_levels', None))
+        uid_cluster_topk = function.normalize_optional_string(getattr(trainer, 'uid_cluster_topk', None))
+        if uid_decoding == 'hierarchical' and raw_task_type != 'uid':
+            raise ValueError('trainer.uid_decoding=hierarchical is only supported when task_type=uid')
+        if uid_decoding == 'hierarchical' and not uid_cluster_levels:
+            raise ValueError('trainer.uid_cluster_levels is required when uid_decoding=hierarchical')
+        if uid_decoding == 'hierarchical' and not uid_cluster_topk:
+            raise ValueError('trainer.uid_cluster_topk is required when uid_decoding=hierarchical')
         return cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
@@ -92,6 +104,9 @@ class TrainConfig:
             device=trainer.device,
             num_gpus=int(getattr(trainer, 'num_gpus', 1)),
             freeze_backbone=str(trainer.freeze_backbone).lower(),
+            uid_decoding=uid_decoding,
+            uid_cluster_levels=uid_cluster_levels,
+            uid_cluster_topk=uid_cluster_topk,
             code_decoding=str(getattr(trainer, 'code_decoding', 'auto')).strip().lower(),
             main_metric=str(getattr(evaluator, 'main_metric', 'loss')).strip().lower(),
             metrics=metrics,
@@ -145,6 +160,12 @@ class TrainConfig:
         parts = [part for part in parts if part]
         if self.repr_combine != 'concat':
             parts.append(self.repr_combine)
+        if self.task_type == 'uid' and self.uid_decoding != 'flat':
+            parts.append(f'ud-{self.uid_decoding}')
+        if self.task_type == 'uid' and self.uid_decoding == 'hierarchical' and self.uid_cluster_levels:
+            parts.append(f'ucl-{self.uid_cluster_levels.replace(",", "x")}')
+        if self.task_type == 'uid' and self.uid_decoding == 'hierarchical' and self.uid_cluster_topk:
+            parts.append(f'uck-{self.uid_cluster_topk.replace(",", "x")}')
         if self.freeze_backbone != 'auto':
             parts.append(f'fr-{self.freeze_backbone}')
         if self.use_lora != 'auto':
@@ -183,6 +204,13 @@ class TrainConfig:
             payload.pop('sid_coder', None)
         if 'hash' not in used_views:
             payload.pop('hash_coder', None)
+        if self.task_type != 'uid':
+            payload.pop('uid_decoding', None)
+            payload.pop('uid_cluster_levels', None)
+            payload.pop('uid_cluster_topk', None)
+        elif self.uid_decoding != 'hierarchical':
+            payload.pop('uid_cluster_levels', None)
+            payload.pop('uid_cluster_topk', None)
         if self.task_type != 'sid':
             payload.pop('code_decoding', None)
             payload.pop('code_beam_width', None)
