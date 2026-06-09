@@ -437,6 +437,13 @@ class Trainer:
 
     def _assert_checkpoint_compatible(self, checkpoint: dict):
         saved_config = checkpoint.get('config') or {}
+        # Older checkpoints may predate recently added config fields. Normalize
+        # them to their historical defaults so we only reject true structural
+        # mismatches instead of schema evolution.
+        normalized_saved_config = dict(saved_config)
+        normalized_saved_config.setdefault('uid_decoding', 'flat')
+        normalized_saved_config.setdefault('uid_cluster_levels', None)
+        normalized_saved_config.setdefault('uid_cluster_topk', None)
         required_keys = [
             'data', 'model', 'repr_type', 'repr_source_model', 'sid_export', 'sid_coder', 'hash_coder',
             'repr_combine', 'task_type', 'maxitems', 'model_max_length', 'item_text_max_tokens',
@@ -447,8 +454,8 @@ class Trainer:
         current_config = asdict(self.config)
         mismatches = []
         for key in required_keys:
-            if saved_config.get(key) != current_config.get(key):
-                mismatches.append((key, saved_config.get(key), current_config.get(key)))
+            if normalized_saved_config.get(key) != current_config.get(key):
+                mismatches.append((key, normalized_saved_config.get(key), current_config.get(key)))
         if mismatches:
             preview = ', '.join(
                 f'{key}: ckpt={saved!r} current={current!r}'
