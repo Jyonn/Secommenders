@@ -331,11 +331,11 @@ class Trainer:
             'test_metric_name': self._default_ranking_metric(),
             'declared_test_metrics': self.config.metrics,
             'valid_metrics': valid_metrics,
-            'test_metrics': None,
             'world_size': self.world_size,
             'status': 'valid_only_finished',
             'finished_at': _utc_now_iso(),
         })
+        meta.pop('test_metrics', None)
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote valid-only meta to {self.meta_path}')
 
