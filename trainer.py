@@ -318,6 +318,27 @@ class Trainer:
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote trainer meta to {self.meta_path}')
 
+    def _save_valid_only_meta(self, valid_metrics: dict):
+        if not self.is_main_process:
+            return
+        meta = self._load_meta_stub()
+        meta.update({
+            'config': asdict(self.config),
+            'compiled_dir': str(self.compiled.compile_dir),
+            'run_dir': str(self.run_dir),
+            'main_metric': self._main_metric_name(),
+            'train_metric_name': self._metric_name(),
+            'test_metric_name': self._default_ranking_metric(),
+            'declared_test_metrics': self.config.metrics,
+            'valid_metrics': valid_metrics,
+            'test_metrics': None,
+            'world_size': self.world_size,
+            'status': 'valid_only_finished',
+            'finished_at': _utc_now_iso(),
+        })
+        self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+        self._pnt(f'wrote valid-only meta to {self.meta_path}')
+
     def _load_meta_stub(self):
         if self.meta_path.exists():
             try:
@@ -342,6 +363,23 @@ class Trainer:
 
     def train(self):
         self.build_dataloaders()
+        if self.config.valid_only:
+            self._pnt(
+                f'start valid-only evaluation on {self.config.data} with {self.config.model} '
+                f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
+                f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
+                f'batch_size={self.config.batch_size} valid_eval=single-shot'
+            )
+            valid_metrics = self._evaluate_eval_set(self.valid_loader, desc='valid-only')
+            if self.is_main_process:
+                self._pnt(
+                    f'valid_only valid_loss={valid_metrics["loss"]:.4f} '
+                    f'{self._format_test_metrics(valid_metrics)}'
+                )
+                self._save_valid_only_meta(valid_metrics)
+            if self.distributed:
+                dist.destroy_process_group()
+            return
         optimizer = self.build_optimizer()
         metric_name = self._metric_name()
         main_metric_name = self._main_metric_name()

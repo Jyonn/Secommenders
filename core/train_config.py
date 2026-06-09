@@ -22,6 +22,7 @@ class TrainConfig:
     item_text_max_tokens: int
     batch_size: int
     accumulate_batch: int
+    valid_only: bool
     epochs: int
     learning_rate: float
     weight_decay: float
@@ -83,6 +84,7 @@ class TrainConfig:
             item_text_max_tokens=int(data_config.item_text_max_tokens),
             batch_size=int(trainer.batch_size),
             accumulate_batch=max(1, int(getattr(trainer, 'accumulate_batch', 1))),
+            valid_only=bool(getattr(trainer, 'valid_only', False)),
             epochs=int(trainer.epochs),
             learning_rate=float(trainer.learning_rate),
             weight_decay=float(trainer.weight_decay),
@@ -136,6 +138,7 @@ class TrainConfig:
             f'{self.repr_type}2{self.task_type}',
             f'bs{self.batch_size}',
             f'acc{self.accumulate_batch}' if self.accumulate_batch != 1 else None,
+            'validonly' if self.valid_only else None,
             f'lr{compact_float(self.learning_rate)}',
             f'wd{compact_float(self.weight_decay)}',
         ]
