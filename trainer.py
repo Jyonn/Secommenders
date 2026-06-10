@@ -746,15 +746,19 @@ def _register_remote_experiment(run_dir: Path, config: TrainConfig):
     server = _report_server()
     if rank != 0 or not session or server is None:
         return
-    reply = server.register_experiment(
-        session,
-        pid=os.getpid(),
-        hostname=socket.gethostname(),
-        run_dir=str(run_dir),
-        log_path=str(run_dir / 'train.log'),
-        command=_command_string(),
-        phase=_report_phase(),
-    )
+    try:
+        reply = server.register_experiment(
+            session,
+            pid=os.getpid(),
+            hostname=socket.gethostname(),
+            run_dir=str(run_dir),
+            log_path=str(run_dir / 'train.log'),
+            command=_command_string(),
+            phase=_report_phase(),
+        )
+    except Exception as exc:
+        pnt(f'warning: failed to register remote experiment session={session}: {repr(exc)}')
+        return
     if not reply.ok:
         pnt(f'warning: failed to register remote experiment session={session}: {reply.msg or reply.identifier}')
 
@@ -772,15 +776,19 @@ def _update_remote_experiment(run_dir: Path, *, status: str, error_text: str = '
     if len(log_text.encode('utf-8')) >= 2_000_000:
         meta = dict(meta)
         meta['report_log_truncated'] = True
-    reply = server.update_experiment(
-        session,
-        status=status,
-        phase=_report_phase(),
-        meta=meta,
-        performance=performance,
-        log=log_text,
-        error=error_text,
-    )
+    try:
+        reply = server.update_experiment(
+            session,
+            status=status,
+            phase=_report_phase(),
+            meta=meta,
+            performance=performance,
+            log=log_text,
+            error=error_text,
+        )
+    except Exception as exc:
+        pnt(f'warning: failed to update remote experiment session={session}: {repr(exc)}')
+        return
     if not reply.ok:
         pnt(f'warning: failed to update remote experiment session={session}: {reply.msg or reply.identifier}')
 

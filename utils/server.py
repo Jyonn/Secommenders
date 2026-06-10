@@ -74,25 +74,45 @@ class Server:
     def _headers(self):
         return {'Authentication': self.auth}
 
+    def _request(self, method: str, uri: str, **kwargs) -> BaseResp:
+        try:
+            response = requests.request(
+                method,
+                uri,
+                headers=self._headers(),
+                timeout=self.timeout,
+                **kwargs,
+            )
+        except requests.RequestException as exc:
+            pnt(f'warning: {method.upper()} {uri} failed: {repr(exc)}')
+            raise
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            preview = response.text[:500].replace('\n', ' ')
+            pnt(
+                f'warning: {method.upper()} {uri} returned non-JSON response '
+                f'status={response.status_code}: {preview or repr(exc)}'
+            )
+            raise
+        return BaseResp(payload, http_code=response.status_code)
+
     def post(self, uri: str, data: Dict[str, Any]) -> BaseResp:
         pnt(f'uploading {self.calculate_bytes(data)} bytes to {uri}')
-        response = requests.post(uri, headers=self._headers(), json=data, timeout=self.timeout)
-        return BaseResp(response.json(), http_code=response.status_code)
+        return self._request('post', uri, json=data)
 
     def put(self, uri: str, data: Dict[str, Any]) -> BaseResp:
         pnt(f'uploading {self.calculate_bytes(data)} bytes to {uri}')
-        response = requests.put(uri, headers=self._headers(), json=data, timeout=self.timeout)
-        return BaseResp(response.json(), http_code=response.status_code)
+        return self._request('put', uri, json=data)
 
     def delete(self, uri: str) -> BaseResp:
         pnt(f'sending delete request to {uri}')
-        response = requests.delete(uri, headers=self._headers(), timeout=self.timeout)
-        return BaseResp(response.json(), http_code=response.status_code)
+        return self._request('delete', uri)
 
     def get(self, uri: str, query: Dict[str, Any]) -> BaseResp:
         pnt(f'sending query request to {uri} with {query}')
-        response = requests.get(uri, headers=self._headers(), params=query, timeout=self.timeout)
-        return BaseResp(response.json(), http_code=response.status_code)
+        return self._request('get', uri, params=query)
 
     def get_all_evaluations(self) -> Iterator[EvaluationBody]:
         total_page = None
