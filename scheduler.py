@@ -22,6 +22,7 @@ from utils.server import Server
 
 ROOT = Path(__file__).resolve().parent
 ARTIFACT_ROOT = ROOT / 'artifacts' / 'scheduler'
+NOTIFICATOR_SDK_PATH = Path.home() / 'Projects' / 'Apps' / 'Notificator' / 'notificator-sdk'
 BATCH_LADDER = [64, 32, 16, 8, 4, 2, 1]
 OOM_PATTERNS = [
     'cuda out of memory',
@@ -36,6 +37,18 @@ def utc_now_iso():
 
 def sanitize_name(text: str):
     return re.sub(r'[^a-zA-Z0-9._-]+', '_', text).strip('._-') or 'exp'
+
+
+def load_notificator_class():
+    try:
+        from notificator import Notificator
+        return Notificator
+    except ImportError:
+        sdk_path = str(NOTIFICATOR_SDK_PATH)
+        if sdk_path not in sys.path and NOTIFICATOR_SDK_PATH.exists():
+            sys.path.insert(0, sdk_path)
+        from notificator import Notificator
+        return Notificator
 
 
 def coerce_cli_value(value: str):
@@ -277,6 +290,85 @@ def performance_from_meta(meta: dict | None):
     return None
 
 
+class SchedulerNotifier:
+    def __init__(
+        self,
+        *,
+        client,
+        bark: str,
+        sound: str | None = None,
+        icon: str | None = None,
+        group: str | None = None,
+        url: str | None = None,
+        title_prefix: str = 'Secommenders',
+    ):
+        self.client = client
+        self.bark = bark
+        self.sound = sound
+        self.icon = icon
+        self.group = group
+        self.url = url
+        self.title_prefix = title_prefix
+
+    @classmethod
+    def from_config(cls, conf: dict | None):
+        if not conf:
+            return None
+        try:
+            Notificator = load_notificator_class()
+        except Exception as exc:
+            print(f'warning: failed to load notificator sdk: {repr(exc)}')
+            return None
+
+        name = str(conf.get('name') or '').strip()
+        token = str(conf.get('token') or os.environ.get(conf.get('token_env', ''), '')).strip()
+        bark = str(conf.get('bark') or os.environ.get(conf.get('bark_env', ''), '')).strip()
+        host = str(conf.get('host') or os.environ.get(conf.get('host_env', ''), '')).strip() or None
+        locale = str(conf.get('locale') or '').strip() or None
+        if not name or not token or not bark:
+            print(
+                'warning: notificator disabled because name/token/bark is incomplete '
+                f'(name={bool(name)} token={bool(token)} bark={bool(bark)})'
+            )
+            return None
+        try:
+            client = Notificator(name=name, token=token, host=host, locale=locale) if locale else Notificator(
+                name=name,
+                token=token,
+                host=host,
+            )
+        except Exception as exc:
+            print(f'warning: failed to initialize notificator client: {repr(exc)}')
+            return None
+        return cls(
+            client=client,
+            bark=bark,
+            sound=str(conf.get('sound') or '').strip() or None,
+            icon=str(conf.get('icon') or '').strip() or None,
+            group=str(conf.get('group') or '').strip() or None,
+            url=str(conf.get('url') or '').strip() or None,
+            title_prefix=str(conf.get('title_prefix') or 'Secommenders').strip() or 'Secommenders',
+        )
+
+    def send(self, title: str, body: str):
+        final_title = f'{self.title_prefix}: {title}'.strip()
+        try:
+            self.client.bark(
+                self.bark,
+                'text',
+                body,
+                title=final_title,
+                sound=self.sound,
+                icon=self.icon,
+                group=self.group,
+                url=self.url,
+            )
+            return True
+        except Exception as exc:
+            print(f'warning: failed to send notificator message "{final_title}": {repr(exc)}')
+            return False
+
+
 def needs_oom_precheck(base_args: dict):
     task_type = str(base_args.get('task_type', '')).lower()
     return task_type in {'sid', 'hash'}
@@ -296,6 +388,7 @@ class Scheduler:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
         self.server = self._build_server(self.plan.get('backend') or {})
+        self.notifier = SchedulerNotifier.from_config(self.plan.get('notificator') or {})
         self.experiments = self._load_or_initialize_state()
         self.active_jobs = {}
 
@@ -402,6 +495,7 @@ class Scheduler:
             'last_error': 'skipped_existing_run' if status == 'done' else None,
             'started_at': None,
             'finished_at': utc_now_iso() if status == 'done' else None,
+            'notification_marks': {},
         }
         exp.update(self._build_remote_spec(raw_exp, index, base_args, batch_size))
         return exp
@@ -414,6 +508,7 @@ class Scheduler:
                 exp.setdefault('report_session', None)
                 exp.setdefault('report_uploaded_at', None)
                 exp.setdefault('report_upload_error', None)
+                exp.setdefault('notification_marks', {})
                 if exp.get('status') == 'done' and exp.get('run_dir') and run_dir_completed(Path(exp['run_dir'])):
                     continue
                 if exp.get('status') == 'done' and exp.get('run_dir') and not run_dir_completed(Path(exp['run_dir'])):
@@ -430,6 +525,36 @@ class Scheduler:
         experiments = [self._normalize_experiment(raw_exp, index) for index, raw_exp in enumerate(raw_experiments, start=1)]
         self._save_state(experiments)
         return experiments
+
+    @staticmethod
+    def _notification_marked(exp: dict, key: str):
+        return bool((exp.get('notification_marks') or {}).get(key))
+
+    @staticmethod
+    def _mark_notification(exp: dict, key: str):
+        marks = exp.setdefault('notification_marks', {})
+        marks[key] = utc_now_iso()
+
+    @staticmethod
+    def _metrics_summary(performance: dict | None):
+        if not isinstance(performance, dict):
+            return ''
+        items = []
+        for key in sorted(performance):
+            value = performance[key]
+            if isinstance(value, (int, float)):
+                items.append(f'{key}={value:.4f}')
+            else:
+                items.append(f'{key}={value}')
+        return ', '.join(items[:6])
+
+    def _notify(self, exp: dict, key: str, title: str, body: str):
+        if self.notifier is None or self._notification_marked(exp, key):
+            return False
+        if self.notifier.send(title, body):
+            self._mark_notification(exp, key)
+            return True
+        return False
 
     def _save_state(self, experiments=None):
         payload = {
@@ -511,6 +636,15 @@ class Scheduler:
             raise ValueError(f'failed to update remote experiment: {reply.msg or reply.identifier}')
         exp['report_uploaded_at'] = utc_now_iso()
         exp['report_upload_error'] = None
+        summary = self._metrics_summary(performance)
+        body_lines = [
+            f'name={exp["name"]}',
+            f'phase={exp.get("phase")}',
+            f'run_dir={exp.get("run_dir")}',
+        ]
+        if summary:
+            body_lines.append(f'metrics={summary}')
+        self._notify(exp, 'uploaded', 'Experiment Uploaded', '\n'.join(body_lines))
 
     def _sync_completed_experiments(self):
         updated = False
@@ -521,6 +655,18 @@ class Scheduler:
                 self._sync_completed_experiment(exp)
             except Exception as exc:
                 exp['report_upload_error'] = repr(exc)
+                self._notify(
+                    exp,
+                    f'upload-failed:{repr(exc)[:80]}',
+                    'Remote Upload Failed',
+                    '\n'.join(
+                        [
+                            f'name={exp["name"]}',
+                            f'phase={exp.get("phase")}',
+                            f'error={repr(exc)}',
+                        ]
+                    ),
+                )
                 updated = True
                 print(f'warning: failed to backfill remote upload for {exp["name"]}: {repr(exc)}')
             else:
@@ -603,6 +749,19 @@ class Scheduler:
         exp['status'] = 'failed'
         exp['last_error'] = error
         exp['finished_at'] = utc_now_iso()
+        self._notify(
+            exp,
+            f'failed:{exp.get("phase")}:{error[:80]}',
+            'Experiment Failed',
+            '\n'.join(
+                [
+                    f'name={exp["name"]}',
+                    f'phase={exp.get("phase")}',
+                    f'batch_size={exp.get("batch_size")}',
+                    f'error={error}',
+                ]
+            ),
+        )
 
     def _handle_success(self, exp: dict):
         if exp['phase'] == 'precheck':
@@ -625,6 +784,19 @@ class Scheduler:
             exp['test_retries'] = int(exp.get('test_retries', 0)) + 1
             exp['status'] = 'pending'
             exp['finished_at'] = utc_now_iso()
+            self._notify(
+                exp,
+                f'oom-test-{current_batch_size}-to-{smaller_batch}',
+                'OOM Test Retry',
+                '\n'.join(
+                    [
+                        f'name={exp["name"]}',
+                        f'phase=test',
+                        f'batch_size={current_batch_size}->{smaller_batch}',
+                        'action=retry test-only with smaller batch',
+                    ]
+                ),
+            )
             return
 
         if exp['phase'] == 'train' and exp.get('run_dir'):
@@ -639,6 +811,19 @@ class Scheduler:
                 exp['test_retries'] = int(exp.get('test_retries', 0)) + 1
                 exp['status'] = 'pending'
                 exp['finished_at'] = utc_now_iso()
+                self._notify(
+                    exp,
+                    f'oom-train-to-test-{current_batch_size}-to-{smaller_batch}',
+                    'OOM Final Test Fallback',
+                    '\n'.join(
+                        [
+                            f'name={exp["name"]}',
+                            f'phase=train->test',
+                            f'batch_size={current_batch_size}->{smaller_batch}',
+                            'action=resume from best checkpoint and rerun final test',
+                        ]
+                    ),
+                )
                 return
 
         if smaller_batch is None:
@@ -650,6 +835,19 @@ class Scheduler:
         exp['status'] = 'pending'
         exp['retries'] = int(exp.get('retries', 0)) + 1
         exp['finished_at'] = utc_now_iso()
+        self._notify(
+            exp,
+            f'oom-precheck-{current_batch_size}-to-{smaller_batch}',
+            'OOM Batch Reduction',
+            '\n'.join(
+                [
+                    f'name={exp["name"]}',
+                    f'phase={exp.get("phase")}',
+                    f'batch_size={current_batch_size}->{smaller_batch}',
+                    'action=rerun precheck with smaller batch',
+                ]
+            ),
+        )
 
     def _handle_failure(self, exp: dict, returncode: int, log_tail: str):
         if log_has_oom(log_tail):
