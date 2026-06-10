@@ -1,5 +1,4 @@
 import json
-import os
 from collections import Counter
 from pathlib import Path
 from typing import Iterable, cast
@@ -29,16 +28,16 @@ class RecIFVideoFormatter(BaseFormatter):
 
     def __init__(self, data_dir=None):
         super().__init__(data_dir=data_dir)
-        self.n_core = int(os.getenv('RECIF_VIDEO_N_CORE', self.DEFAULT_N_CORE))
-        self.min_length = int(os.getenv('RECIF_VIDEO_MIN_LENGTH', self.DEFAULT_MIN_LENGTH))
-        self.max_length = int(os.getenv('RECIF_VIDEO_MAX_LENGTH', self.DEFAULT_MAX_LENGTH))
+        self.n_core = int(self.DEFAULT_N_CORE)
+        self.min_length = int(self.DEFAULT_MIN_LENGTH)
+        self.max_length = int(self.DEFAULT_MAX_LENGTH)
 
         if self.n_core <= 0:
-            raise ValueError('RECIF_VIDEO_N_CORE must be positive')
+            raise ValueError('DEFAULT_N_CORE must be positive')
         if self.min_length <= 0:
-            raise ValueError('RECIF_VIDEO_MIN_LENGTH must be positive')
+            raise ValueError('DEFAULT_MIN_LENGTH must be positive')
         if self.max_length < self.min_length:
-            raise ValueError('RECIF_VIDEO_MAX_LENGTH must be >= RECIF_VIDEO_MIN_LENGTH')
+            raise ValueError('DEFAULT_MAX_LENGTH must be >= DEFAULT_MIN_LENGTH')
 
         self._filtered_items: pd.DataFrame | None = None
         self._filtered_users: pd.DataFrame | None = None
@@ -213,3 +212,21 @@ class RecIFVideoFormatter(BaseFormatter):
     def load_users(self) -> pd.DataFrame:
         self._run_filter_pipeline()
         return cast(pd.DataFrame, self._filtered_users)
+
+
+class RecIFVideoBaseFormatter(RecIFVideoFormatter):
+    DEFAULT_N_CORE = 20
+    DEFAULT_MIN_LENGTH = 10
+    DEFAULT_MAX_LENGTH = 20
+
+
+class RecIFVideoLargeFormatter(RecIFVideoFormatter):
+    DEFAULT_N_CORE = 10
+    DEFAULT_MIN_LENGTH = 5
+    DEFAULT_MAX_LENGTH = 20
+
+
+class RecIFVideoXLargeFormatter(RecIFVideoFormatter):
+    DEFAULT_N_CORE = 5
+    DEFAULT_MIN_LENGTH = 5
+    DEFAULT_MAX_LENGTH = 30
