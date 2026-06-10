@@ -1,0 +1,25 @@
+name: mind-batch
+poll_interval_seconds: 15
+effective_batch_size: 64
+experiments:
+  - name: mind_qwen_sid2sid
+    command: >
+      python trainer.py --data mind --model qwen35th4b --task_type sid
+      --repr_type sid --repr_source_model llama3 --sid_coder rqvae
+      --sid_export recon
+
+  - name: mind_qwen_sidtext2sid
+    args:
+      data: mind
+      model: qwen35th4b
+      task_type: sid
+      repr_type: sid+text
+      repr_source_model: llama3
+      sid_coder: rqvae
+      sid_export: recon
+
+  - name: mind_scratch_uid2uid
+    args:
+      data: mind
+      model: scratch
+      task_type: uid

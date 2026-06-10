@@ -11,6 +11,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 from core.train_config import TrainConfig
 from utils.config_init import ConfigInit
 from utils.model import match as match_model_key
@@ -205,10 +207,15 @@ def run_dir_for_args(args: dict):
     return ROOT / 'artifacts' / 'trained' / config.data / config.run_id
 
 
+def needs_oom_precheck(base_args: dict):
+    task_type = str(base_args.get('task_type', '')).lower()
+    return task_type in {'sid', 'hash'}
+
+
 class Scheduler:
     def __init__(self, plan_path: Path):
         self.plan_path = Path(plan_path)
-        self.plan = json.loads(self.plan_path.read_text())
+        self.plan = yaml.safe_load(self.plan_path.read_text())
         self.plan_name = sanitize_name(self.plan.get('name') or self.plan_path.stem)
         self.poll_interval = int(self.plan.get('poll_interval_seconds', 15))
         self.effective_batch_size = int(self.plan.get('effective_batch_size', 64))
@@ -243,7 +250,7 @@ class Scheduler:
             'base_args': base_args,
             'batch_size_cap': batch_cap,
             'batch_size': batch_size,
-            'phase': 'precheck',
+            'phase': 'precheck' if needs_oom_precheck(base_args) else 'train',
             'status': 'pending',
             'retries': 0,
             'test_retries': 0,
@@ -434,7 +441,7 @@ class Scheduler:
 
 def main():
     parser = argparse.ArgumentParser(description='Batch experiment scheduler for Secommenders.')
-    parser.add_argument('--plan', required=True, help='Path to scheduler plan JSON file.')
+    parser.add_argument('--plan', required=True, help='Path to scheduler plan YAML file.')
     args = parser.parse_args()
 
     scheduler = Scheduler(Path(args.plan))
