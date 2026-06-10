@@ -712,9 +712,6 @@ def _report_phase():
     return os.environ.get('SECOMMENDER_REPORT_PHASE', '')
 
 
-REPORT_LOG_LIMITS = (200_000, 50_000, 0)
-
-
 def _read_json_if_exists(path: Path):
     if not path.exists():
         return None
@@ -724,15 +721,42 @@ def _read_json_if_exists(path: Path):
         return None
 
 
-def _read_log_for_report(path: Path, max_bytes: int = REPORT_LOG_LIMITS[0]):
+def _looks_like_tqdm_progress(line: str):
+    text = str(line).strip()
+    if not text:
+        return False
+    if text.count('|') < 2:
+        return False
+    return any(token in text for token in ('%|', 'it/s', 's/it'))
+
+
+def _collapse_tqdm_progress(text: str):
+    lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    collapsed = []
+    pending_progress = None
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        if _looks_like_tqdm_progress(line):
+            pending_progress = line
+            continue
+        if pending_progress is not None:
+            collapsed.append(pending_progress)
+            pending_progress = None
+        collapsed.append(line)
+    if pending_progress is not None:
+        collapsed.append(pending_progress)
+    return '\n'.join(collapsed)
+
+
+def _read_log_for_report(path: Path, max_bytes: int = 2_000_000):
     if not path.exists():
-        return '', False
+        return ''
     data = path.read_bytes()
-    if max_bytes <= 0:
-        return '', bool(data)
-    if len(data) <= max_bytes:
-        return data.decode('utf-8', errors='ignore'), False
-    return data[-max_bytes:].decode('utf-8', errors='ignore'), True
+    text = _collapse_tqdm_progress(data.decode('utf-8', errors='ignore'))
+    encoded = text.encode('utf-8')
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[-max_bytes:].decode('utf-8', errors='ignore')
 
 
 def _report_performance_from_meta(meta: dict | None):
@@ -776,42 +800,26 @@ def _update_remote_experiment(run_dir: Path, *, status: str, error_text: str = '
         return
 
     meta = _read_json_if_exists(run_dir / 'meta.json') or {}
+    log_text = _read_log_for_report(run_dir / 'train.log')
     performance = _report_performance_from_meta(meta)
-    for log_limit in REPORT_LOG_LIMITS:
-        log_text, log_truncated = _read_log_for_report(run_dir / 'train.log', max_bytes=log_limit)
-        payload_meta = meta
-        if log_truncated:
-            payload_meta = dict(meta)
-            payload_meta['report_log_truncated'] = True
-        try:
-            reply = server.update_experiment(
-                session,
-                status=status,
-                phase=_report_phase(),
-                meta=payload_meta,
-                performance=performance,
-                log=log_text,
-                error=error_text,
-            )
-        except Exception as exc:
-            if 'HTTP 413' in repr(exc) and log_limit != REPORT_LOG_LIMITS[-1]:
-                pnt(
-                    f'warning: remote update too large for session={session}; '
-                    f'retrying with smaller log payload (limit={log_limit})'
-                )
-                continue
-            pnt(f'warning: failed to update remote experiment session={session}: {repr(exc)}')
-            return
-        if reply.ok:
-            return
-        if reply.http_code == 413 and log_limit != REPORT_LOG_LIMITS[-1]:
-            pnt(
-                f'warning: remote update rejected as too large for session={session}; '
-                f'retrying with smaller log payload (limit={log_limit})'
-            )
-            continue
-        pnt(f'warning: failed to update remote experiment session={session}: {reply.msg or reply.identifier}')
+    if len(log_text.encode('utf-8')) >= 2_000_000:
+        meta = dict(meta)
+        meta['report_log_truncated'] = True
+    try:
+        reply = server.update_experiment(
+            session,
+            status=status,
+            phase=_report_phase(),
+            meta=meta,
+            performance=performance,
+            log=log_text,
+            error=error_text,
+        )
+    except Exception as exc:
+        pnt(f'warning: failed to update remote experiment session={session}: {repr(exc)}')
         return
+    if not reply.ok:
+        pnt(f'warning: failed to update remote experiment session={session}: {reply.msg or reply.identifier}')
 
 
 def _run_trainer(config: TrainConfig):

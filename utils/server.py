@@ -95,9 +95,7 @@ class Server:
                 f'warning: {method.upper()} {uri} returned non-JSON response '
                 f'status={response.status_code}: {preview or repr(exc)}'
             )
-            raise ValueError(
-                f'HTTP {response.status_code} non-JSON response: {preview or "empty body"}'
-            ) from exc
+            raise
         return BaseResp(payload, http_code=response.status_code)
 
     def post(self, uri: str, data: Dict[str, Any]) -> BaseResp:
