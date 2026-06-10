@@ -207,6 +207,17 @@ def run_dir_for_args(args: dict):
     return ROOT / 'artifacts' / 'trained' / config.data / config.run_id
 
 
+def run_dir_completed(run_dir: Path):
+    meta_path = run_dir / 'meta.json'
+    if not meta_path.exists():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text())
+    except json.JSONDecodeError:
+        return False
+    return isinstance(meta, dict) and 'test_metrics' in meta
+
+
 def needs_oom_precheck(base_args: dict):
     task_type = str(base_args.get('task_type', '')).lower()
     return task_type in {'sid', 'hash'}
@@ -244,22 +255,32 @@ class Scheduler:
         batch_size = next((candidate for candidate in BATCH_LADDER if candidate <= batch_cap), None)
         if batch_size is None:
             raise ValueError(f'No supported batch size found for experiment {name} with cap={batch_cap}')
+        phase = 'precheck' if needs_oom_precheck(base_args) else 'train'
+        run_dir = run_dir_for_args(
+            build_args_for_phase(
+                base_args,
+                batch_size=batch_size,
+                effective_batch_size=self.effective_batch_size,
+                phase=phase,
+            )
+        )
+        status = 'done' if run_dir_completed(run_dir) else 'pending'
         return {
             'name': name,
             'priority': int(raw_exp.get('priority', 0)),
             'base_args': base_args,
             'batch_size_cap': batch_cap,
             'batch_size': batch_size,
-            'phase': 'precheck' if needs_oom_precheck(base_args) else 'train',
-            'status': 'pending',
+            'phase': phase,
+            'status': status,
             'retries': 0,
             'test_retries': 0,
-            'run_dir': None,
+            'run_dir': str(run_dir) if status == 'done' else None,
             'ckpt_path': None,
             'log_path': None,
-            'last_error': None,
+            'last_error': 'skipped_existing_run' if status == 'done' else None,
             'started_at': None,
-            'finished_at': None,
+            'finished_at': utc_now_iso() if status == 'done' else None,
         }
 
     def _load_or_initialize_state(self):
@@ -267,6 +288,11 @@ class Scheduler:
             state = json.loads(self.state_path.read_text())
             experiments = state.get('experiments', [])
             for exp in experiments:
+                if exp.get('status') == 'done' and exp.get('run_dir') and run_dir_completed(Path(exp['run_dir'])):
+                    continue
+                if exp.get('status') == 'done' and exp.get('run_dir') and not run_dir_completed(Path(exp['run_dir'])):
+                    exp['status'] = 'pending'
+                    exp['last_error'] = 'existing done state no longer has completed run_dir'
                 if exp.get('status') == 'running':
                     exp['status'] = 'pending'
                     exp['last_error'] = 'scheduler restarted while job was running'
