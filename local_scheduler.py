@@ -13,10 +13,13 @@ SID_VARIANTS = [('rqvae', 'recon')]
 UID_VARIANTS = ['flat', ('hierarchical', '20', '3,20')]
 
 
-def build_basic_schedule():
+def build_basic_schedule(dataset: str):
+    dataset = str(dataset).strip().lower()
+    if dataset not in DATASETS:
+        raise ValueError(f'Unknown dataset: {dataset}')
     return (
         Schedule(
-            name='basic',
+            name=f'basic_{dataset}',
             effective_batch_size=64,
         )
         .main_metric('ndcg@10')
@@ -25,19 +28,23 @@ def build_basic_schedule():
         .uid_variants(*UID_VARIANTS)
         .grid(
             'basic_llm',
-            datasets=DATASETS,
+            datasets=[dataset],
             models=LLM_MODELS,
             targets=['uid', 'sid'],
             histories=LLM_HISTORIES,
         )
         .grid(
             'basic_scratch',
-            datasets=DATASETS,
+            datasets=[dataset],
             models=SCRATCH_MODELS,
             targets=['uid', 'sid'],
             histories=SCRATCH_HISTORIES,
         )
-    ).export(Path('config/basic_scheduler.yaml'))
+    ).export(Path(f'config/basic_{dataset}_scheduler.yaml'))
+
+
+def build_basic_schedules():
+    return [build_basic_schedule(dataset) for dataset in DATASETS]
 
 
 def build_simple_schedule():
