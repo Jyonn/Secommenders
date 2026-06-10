@@ -271,7 +271,7 @@ class Trainer:
             weight_decay=self.config.weight_decay,
         )
 
-    def _run_loader(self, loader, optimizer=None, desc='train', distributed_reduce=True):
+    def _run_loader(self, loader, optimizer=None, desc='train', distributed_reduce=True, max_batches=None):
         is_train = optimizer is not None
         self.model.train(is_train)
         total_loss = 0.0
@@ -284,7 +284,10 @@ class Trainer:
         if is_train:
             optimizer.zero_grad()
         for batch_index, batch in enumerate(iterator):
-            is_last_micro_batch = batch_index == (len(loader) - 1)
+            if max_batches is not None and batch_index >= max_batches:
+                break
+            effective_loader_len = len(loader) if max_batches is None else min(len(loader), max_batches)
+            is_last_micro_batch = batch_index == (effective_loader_len - 1)
             should_step = ((batch_index + 1) % accumulate_batch == 0) or is_last_micro_batch
             if is_train:
                 sync_context = nullcontext()
@@ -421,12 +424,18 @@ class Trainer:
                 return {}
         return {}
 
-    def _evaluate_eval_set(self, loader, desc: str):
+    def _evaluate_eval_set(self, loader, desc: str, max_batches=None):
         if self.distributed:
             dist.barrier()
         metrics = None
         if self.is_main_process:
-            metrics = self._run_loader(loader, optimizer=None, desc=desc, distributed_reduce=False)
+            metrics = self._run_loader(
+                loader,
+                optimizer=None,
+                desc=desc,
+                distributed_reduce=False,
+                max_batches=max_batches,
+            )
         if self.distributed:
             payload = [metrics]
             dist.broadcast_object_list(payload, src=0)
@@ -508,13 +517,19 @@ class Trainer:
             return
         self.build_dataloaders()
         if self.config.valid_only:
+            valid_only_batches = None if self.config.valid_only == -1 else int(self.config.valid_only)
             self._pnt(
                 f'start valid-only evaluation on {self.config.data} with {self.config.model} '
                 f'repr={self.config.repr_type} task={self.config.task_type} device={self.device} '
                 f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
-                f'batch_size={self.config.batch_size} valid_eval=single-shot'
+                f'batch_size={self.config.batch_size} '
+                f'valid_eval={"full" if valid_only_batches is None else f"{valid_only_batches}-batch-smoke"}'
             )
-            valid_metrics = self._evaluate_eval_set(self.valid_loader, desc='valid-only')
+            valid_metrics = self._evaluate_eval_set(
+                self.valid_loader,
+                desc='valid-only',
+                max_batches=valid_only_batches,
+            )
             if self.is_main_process:
                 self._pnt(
                     f'valid_only valid_loss={valid_metrics["loss"]:.4f} '

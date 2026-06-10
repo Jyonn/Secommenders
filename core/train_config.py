@@ -22,7 +22,7 @@ class TrainConfig:
     item_text_max_tokens: int
     batch_size: int
     accumulate_batch: int
-    valid_only: bool
+    valid_only: int
     test_only: bool
     load_ckpt: Optional[str]
     epochs: int
@@ -77,7 +77,15 @@ class TrainConfig:
         uid_decoding = str(getattr(trainer, 'uid_decoding', 'flat')).strip().lower()
         uid_cluster_levels = function.normalize_optional_string(getattr(trainer, 'uid_cluster_levels', None))
         uid_cluster_topk = function.normalize_optional_string(getattr(trainer, 'uid_cluster_topk', None))
-        valid_only = bool(getattr(trainer, 'valid_only', False))
+        raw_valid_only = getattr(trainer, 'valid_only', False)
+        if isinstance(raw_valid_only, bool):
+            valid_only = -1 if raw_valid_only else 0
+        elif raw_valid_only is None:
+            valid_only = 0
+        else:
+            valid_only = int(raw_valid_only)
+            if valid_only < 0:
+                raise ValueError('trainer.valid_only must be false/0, true, or a positive integer')
         test_only = bool(getattr(trainer, 'test_only', False))
         load_ckpt = function.normalize_optional_string(getattr(trainer, 'load_ckpt', None))
         if valid_only and test_only:
@@ -166,7 +174,11 @@ class TrainConfig:
             f'{self.repr_type}2{self.task_type}',
             f'bs{self.batch_size}',
             f'acc{self.accumulate_batch}' if self.accumulate_batch != 1 else None,
-            'validonly' if self.valid_only else None,
+            (
+                'validonly'
+                if self.valid_only == -1
+                else f'validonly{self.valid_only}' if self.valid_only > 0 else None
+            ),
             'testonly' if self.test_only else None,
             f'lr{compact_float(self.learning_rate)}',
             f'wd{compact_float(self.weight_decay)}',
