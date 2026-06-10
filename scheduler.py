@@ -220,6 +220,9 @@ def run_dir_completed(run_dir: Path):
     return isinstance(meta, dict) and 'test_metrics' in meta
 
 
+REPORT_LOG_LIMITS = (200_000, 50_000, 0)
+
+
 def read_json_if_exists(path: Path):
     if not path.exists():
         return None
@@ -229,13 +232,15 @@ def read_json_if_exists(path: Path):
         return None
 
 
-def read_log_for_report(path: Path, max_bytes: int = 2_000_000):
+def read_log_for_report(path: Path, max_bytes: int = REPORT_LOG_LIMITS[0]):
     if not path.exists():
-        return ''
+        return '', False
     data = path.read_bytes()
+    if max_bytes <= 0:
+        return '', bool(data)
     if len(data) <= max_bytes:
-        return data.decode('utf-8', errors='ignore')
-    return data[-max_bytes:].decode('utf-8', errors='ignore')
+        return data.decode('utf-8', errors='ignore'), False
+    return data[-max_bytes:].decode('utf-8', errors='ignore'), True
 
 
 def performance_from_meta(meta: dict | None):
@@ -449,11 +454,7 @@ class Scheduler:
     def _sync_completed_experiment(self, exp: dict):
         run_dir = Path(exp['run_dir'])
         meta = read_json_if_exists(run_dir / 'meta.json') or {}
-        log_text = read_log_for_report(run_dir / 'train.log')
         performance = performance_from_meta(meta)
-        if len(log_text.encode('utf-8')) >= 2_000_000:
-            meta = dict(meta)
-            meta['report_log_truncated'] = True
 
         session = self._ensure_remote_session(exp)
         register_reply = self.server.register_experiment(
@@ -469,20 +470,41 @@ class Scheduler:
             raise ValueError(
                 f'failed to register remote experiment: {register_reply.msg or register_reply.identifier}'
             )
-
-        reply = self.server.update_experiment(
-            session,
-            status='completed',
-            phase=str(exp.get('phase') or ''),
-            meta=meta,
-            performance=performance,
-            log=log_text,
-            error='',
-        )
-        if not reply.ok:
+        for log_limit in REPORT_LOG_LIMITS:
+            log_text, log_truncated = read_log_for_report(run_dir / 'train.log', max_bytes=log_limit)
+            payload_meta = meta
+            if log_truncated:
+                payload_meta = dict(meta)
+                payload_meta['report_log_truncated'] = True
+            try:
+                reply = self.server.update_experiment(
+                    session,
+                    status='completed',
+                    phase=str(exp.get('phase') or ''),
+                    meta=payload_meta,
+                    performance=performance,
+                    log=log_text,
+                    error='',
+                )
+            except Exception as exc:
+                if 'HTTP 413' in repr(exc) and log_limit != REPORT_LOG_LIMITS[-1]:
+                    print(
+                        f'warning: remote upload too large for {exp["name"]}; '
+                        f'retrying with smaller log payload (limit={log_limit})'
+                    )
+                    continue
+                raise
+            if reply.ok:
+                exp['report_uploaded_at'] = utc_now_iso()
+                exp['report_upload_error'] = None
+                return
+            if reply.http_code == 413 and log_limit != REPORT_LOG_LIMITS[-1]:
+                print(
+                    f'warning: remote upload rejected as too large for {exp["name"]}; '
+                    f'retrying with smaller log payload (limit={log_limit})'
+                )
+                continue
             raise ValueError(f'failed to update remote experiment: {reply.msg or reply.identifier}')
-        exp['report_uploaded_at'] = utc_now_iso()
-        exp['report_upload_error'] = None
 
     def _sync_completed_experiments(self):
         updated = False

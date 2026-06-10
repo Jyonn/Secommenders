@@ -712,6 +712,9 @@ def _report_phase():
     return os.environ.get('SECOMMENDER_REPORT_PHASE', '')
 
 
+REPORT_LOG_LIMITS = (200_000, 50_000, 0)
+
+
 def _read_json_if_exists(path: Path):
     if not path.exists():
         return None
@@ -721,13 +724,15 @@ def _read_json_if_exists(path: Path):
         return None
 
 
-def _read_log_for_report(path: Path, max_bytes: int = 2_000_000):
+def _read_log_for_report(path: Path, max_bytes: int = REPORT_LOG_LIMITS[0]):
     if not path.exists():
-        return ''
+        return '', False
     data = path.read_bytes()
+    if max_bytes <= 0:
+        return '', bool(data)
     if len(data) <= max_bytes:
-        return data.decode('utf-8', errors='ignore')
-    return data[-max_bytes:].decode('utf-8', errors='ignore')
+        return data.decode('utf-8', errors='ignore'), False
+    return data[-max_bytes:].decode('utf-8', errors='ignore'), True
 
 
 def _report_performance_from_meta(meta: dict | None):
@@ -771,26 +776,42 @@ def _update_remote_experiment(run_dir: Path, *, status: str, error_text: str = '
         return
 
     meta = _read_json_if_exists(run_dir / 'meta.json') or {}
-    log_text = _read_log_for_report(run_dir / 'train.log')
     performance = _report_performance_from_meta(meta)
-    if len(log_text.encode('utf-8')) >= 2_000_000:
-        meta = dict(meta)
-        meta['report_log_truncated'] = True
-    try:
-        reply = server.update_experiment(
-            session,
-            status=status,
-            phase=_report_phase(),
-            meta=meta,
-            performance=performance,
-            log=log_text,
-            error=error_text,
-        )
-    except Exception as exc:
-        pnt(f'warning: failed to update remote experiment session={session}: {repr(exc)}')
-        return
-    if not reply.ok:
+    for log_limit in REPORT_LOG_LIMITS:
+        log_text, log_truncated = _read_log_for_report(run_dir / 'train.log', max_bytes=log_limit)
+        payload_meta = meta
+        if log_truncated:
+            payload_meta = dict(meta)
+            payload_meta['report_log_truncated'] = True
+        try:
+            reply = server.update_experiment(
+                session,
+                status=status,
+                phase=_report_phase(),
+                meta=payload_meta,
+                performance=performance,
+                log=log_text,
+                error=error_text,
+            )
+        except Exception as exc:
+            if 'HTTP 413' in repr(exc) and log_limit != REPORT_LOG_LIMITS[-1]:
+                pnt(
+                    f'warning: remote update too large for session={session}; '
+                    f'retrying with smaller log payload (limit={log_limit})'
+                )
+                continue
+            pnt(f'warning: failed to update remote experiment session={session}: {repr(exc)}')
+            return
+        if reply.ok:
+            return
+        if reply.http_code == 413 and log_limit != REPORT_LOG_LIMITS[-1]:
+            pnt(
+                f'warning: remote update rejected as too large for session={session}; '
+                f'retrying with smaller log payload (limit={log_limit})'
+            )
+            continue
         pnt(f'warning: failed to update remote experiment session={session}: {reply.msg or reply.identifier}')
+        return
 
 
 def _run_trainer(config: TrainConfig):
