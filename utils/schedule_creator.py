@@ -111,6 +111,22 @@ class Job:
         self._plan_fields: dict[str, Any] = {}
         self._repr_parts: list[str] | None = None
 
+    def _set_arg(self, key: str, value: Any):
+        self._args[key] = value
+        return self
+
+    def _set_string_arg(self, key: str, value: str, *, lower: bool = False):
+        normalized = str(value).strip()
+        if lower:
+            normalized = normalized.lower()
+        return self._set_arg(key, normalized)
+
+    def _set_int_arg(self, key: str, value: int):
+        return self._set_arg(key, int(value))
+
+    def _set_float_arg(self, key: str, value: float):
+        return self._set_arg(key, float(value))
+
     def clone(self, append_name: str | None = None, name: str | None = None):
         if name is not None and append_name is not None:
             raise ValueError('clone() accepts either append_name or name, not both')
@@ -127,16 +143,13 @@ class Job:
         return cloned
 
     def data(self, value: str):
-        self._args['data'] = str(value).strip().lower()
-        return self
+        return self._set_string_arg('data', value, lower=True)
 
     def model(self, value: str):
-        self._args['model'] = str(value).strip().lower()
-        return self
+        return self._set_string_arg('model', value, lower=True)
 
     def task(self, value: str):
-        self._args['task_type'] = str(value).strip().lower()
-        return self
+        return self._set_string_arg('task_type', value, lower=True)
 
     def repr(self, *repr_types: str):
         if not repr_types:
@@ -152,24 +165,134 @@ class Job:
         return self
 
     def repr_source_model(self, value: str):
-        self._args['repr_source_model'] = normalize_model_name(value)
-        return self
+        return self._set_arg('repr_source_model', normalize_model_name(value))
 
     def sid_coder(self, value: str):
-        self._args['sid_coder'] = str(value).strip().lower()
-        return self
+        return self._set_string_arg('sid_coder', value, lower=True)
 
     def sid_export(self, value: str):
-        self._args['sid_export'] = str(value).strip().lower()
-        return self
+        return self._set_string_arg('sid_export', value, lower=True)
 
     def hash_coder(self, value: str):
-        self._args['hash_coder'] = str(value).strip().lower()
-        return self
+        return self._set_string_arg('hash_coder', value, lower=True)
 
     def repr_combine(self, value: str):
-        self._args['repr_combine'] = str(value).strip().lower()
-        return self
+        return self._set_string_arg('repr_combine', value, lower=True)
+
+    def maxitems(self, value: int):
+        return self._set_int_arg('maxitems', value)
+
+    def model_max_length(self, value: int):
+        return self._set_int_arg('model_max_length', value)
+
+    def item_text_max_tokens(self, value: int):
+        return self._set_int_arg('item_text_max_tokens', value)
+
+    def batch_size(self, value: int):
+        return self._set_int_arg('batch_size', value)
+
+    def accumulate_batch(self, value: int):
+        return self._set_int_arg('accumulate_batch', value)
+
+    def valid_only(self, value: bool | int):
+        return self._set_arg('valid_only', value)
+
+    def test_only(self, value: bool = True):
+        return self._set_arg('test_only', bool(value))
+
+    def load_ckpt(self, value: str):
+        return self._set_string_arg('load_ckpt', value)
+
+    def epochs(self, value: int):
+        return self._set_int_arg('epochs', value)
+
+    def learning_rate(self, value: float):
+        return self._set_float_arg('learning_rate', value)
+
+    def weight_decay(self, value: float):
+        return self._set_float_arg('weight_decay', value)
+
+    def seed(self, value: int):
+        return self._set_int_arg('seed', value)
+
+    def device(self, value: str):
+        return self._set_string_arg('device', value)
+
+    def num_gpus(self, value: int):
+        return self._set_int_arg('num_gpus', value)
+
+    def freeze_backbone(self, value: str | bool):
+        return self._set_string_arg('freeze_backbone', value, lower=True)
+
+    def uid_decoding(self, value: str):
+        return self._set_string_arg('uid_decoding', value, lower=True)
+
+    def uid_cluster_levels(self, value: str):
+        return self._set_string_arg('uid_cluster_levels', value)
+
+    def uid_cluster_topk(self, value: str):
+        return self._set_string_arg('uid_cluster_topk', value)
+
+    def code_decoding(self, value: str):
+        return self._set_string_arg('code_decoding', value, lower=True)
+
+    def main_metric(self, value: str):
+        return self._set_string_arg('main_metric', value, lower=True)
+
+    def metrics(self, *values: str):
+        if len(values) == 1 and isinstance(values[0], str) and ',' in values[0]:
+            metrics = [part.strip().lower() for part in values[0].split(',') if part.strip()]
+        else:
+            metrics = [str(value).strip().lower() for value in values if str(value).strip()]
+        return self._set_arg('metrics', metrics)
+
+    def patience(self, value: int):
+        return self._set_int_arg('patience', value)
+
+    def alignment(self, value: float):
+        return self._set_float_arg('alignment', value)
+
+    def code_beam_width(self, value: int):
+        return self._set_int_arg('code_beam_width', value)
+
+    def code_beam_chunk_size(self, value: int):
+        return self._set_int_arg('code_beam_chunk_size', value)
+
+    def code_collision_loss_weight(self, value: float):
+        return self._set_float_arg('code_collision_loss_weight', value)
+
+    def model_dtype(self, value: str):
+        return self._set_string_arg('model_dtype', value, lower=True)
+
+    def use_lora(self, value: str | bool):
+        return self._set_string_arg('use_lora', value, lower=True)
+
+    def lora_rank(self, value: int):
+        return self._set_int_arg('lora_rank', value)
+
+    def lora_alpha(self, value: int):
+        return self._set_int_arg('lora_alpha', value)
+
+    def lora_dropout(self, value: float):
+        return self._set_float_arg('lora_dropout', value)
+
+    def lora_layers(self, value: str):
+        return self._set_string_arg('lora_layers', value)
+
+    def lora_target_modules(self, value: str):
+        return self._set_string_arg('lora_target_modules', value)
+
+    def hidden_size(self, value: int):
+        return self._set_int_arg('hidden_size', value)
+
+    def num_layers(self, value: int):
+        return self._set_int_arg('num_layers', value)
+
+    def num_heads(self, value: int):
+        return self._set_int_arg('num_heads', value)
+
+    def dropout(self, value: float):
+        return self._set_float_arg('dropout', value)
 
     def priority(self, value: int):
         self._plan_fields['priority'] = int(value)
