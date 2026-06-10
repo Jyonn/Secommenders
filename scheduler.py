@@ -286,6 +286,12 @@ class Scheduler:
         uri = uri or os.environ.get(Server.ENV_URI)
         auth = auth or os.environ.get(Server.ENV_AUTH)
         if not uri or not auth:
+            if backend_conf:
+                print(
+                    'warning: backend reporting disabled because backend config is incomplete '
+                    f'(uri={"set" if uri else "missing"}, auth={"set" if auth else "missing"}, '
+                    f'uri_env={uri_env!r}, auth_env={auth_env!r})'
+                )
             return None
         return Server(uri=uri, auth=auth)
 
@@ -428,6 +434,17 @@ class Scheduler:
         if not run_dir or not run_dir_completed(Path(run_dir)):
             return False
         return not exp.get('report_uploaded_at')
+
+    def _has_unsynced_completed_experiments(self):
+        for exp in self.experiments:
+            if exp.get('status') != 'done':
+                continue
+            run_dir = exp.get('run_dir')
+            if not run_dir or not run_dir_completed(Path(run_dir)):
+                continue
+            if not exp.get('report_uploaded_at'):
+                return True
+        return False
 
     def _sync_completed_experiment(self, exp: dict):
         run_dir = Path(exp['run_dir'])
@@ -644,6 +661,11 @@ class Scheduler:
 
     def run(self):
         print(f'scheduler plan={self.plan_name} experiments={len(self.experiments)} output={self.output_dir}')
+        if self.server is None and self._has_unsynced_completed_experiments():
+            print(
+                'warning: completed experiments still need remote sync, '
+                'but backend reporting is unavailable for this plan'
+            )
         self._sync_completed_experiments()
         while not self._all_terminal():
             self._poll_active_jobs()
