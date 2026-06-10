@@ -111,8 +111,16 @@ class Job:
         self._plan_fields: dict[str, Any] = {}
         self._repr_parts: list[str] | None = None
 
-    def clone(self, name: str | None = None):
-        cloned = Job(name or self.name)
+    def clone(self, append_name: str | None = None, name: str | None = None):
+        if name is not None and append_name is not None:
+            raise ValueError('clone() accepts either append_name or name, not both')
+        if name is not None:
+            cloned_name = str(name).strip()
+        elif append_name is not None:
+            cloned_name = f'{self.name}{str(append_name)}'
+        else:
+            cloned_name = self.name
+        cloned = Job(cloned_name)
         cloned._args = deepcopy(self._args)
         cloned._plan_fields = deepcopy(self._plan_fields)
         cloned._repr_parts = deepcopy(self._repr_parts)
