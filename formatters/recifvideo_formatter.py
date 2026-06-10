@@ -221,6 +221,6 @@ class RecIFVideoLargeFormatter(RecIFVideoFormatter):
 
 
 class RecIFVideoXLargeFormatter(RecIFVideoFormatter):
-    DEFAULT_N_CORE = 5
+    DEFAULT_N_CORE = 3
     DEFAULT_MIN_LENGTH = 5
-    DEFAULT_MAX_LENGTH = 50
+    DEFAULT_MAX_LENGTH = 80
