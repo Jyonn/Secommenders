@@ -1,6 +1,9 @@
 name: mind-batch
 poll_interval_seconds: 15
 effective_batch_size: 64
+backend:
+  uri: https://your-public-backend.example.com
+  auth_env: SECOMMENDER_BACKEND_AUTH_TOKEN
 experiments:
   - name: mind_qwen_sid2sid
     command: >

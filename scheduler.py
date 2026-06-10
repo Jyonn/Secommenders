@@ -14,8 +14,10 @@ from pathlib import Path
 import yaml
 
 from core.train_config import TrainConfig
+from utils.compile import short_config_hash
 from utils.config_init import ConfigInit
 from utils.model import match as match_model_key
+from utils.server import Server
 
 
 ROOT = Path(__file__).resolve().parent
@@ -236,8 +238,62 @@ class Scheduler:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
+        self.server = self._build_server(self.plan.get('backend') or {})
         self.experiments = self._load_or_initialize_state()
         self.active_jobs = {}
+
+    @staticmethod
+    def _build_server(backend_conf: dict):
+        if not backend_conf:
+            return Server.from_env()
+
+        uri = backend_conf.get('uri')
+        auth = backend_conf.get('auth_token')
+        uri_env = backend_conf.get('uri_env')
+        auth_env = backend_conf.get('auth_env')
+        if uri_env:
+            uri = os.environ.get(uri_env, uri)
+        if auth_env:
+            auth = os.environ.get(auth_env, auth)
+        uri = uri or os.environ.get(Server.ENV_URI)
+        auth = auth or os.environ.get(Server.ENV_AUTH)
+        if not uri or not auth:
+            return None
+        return Server(uri=uri, auth=auth)
+
+    def _build_remote_spec(self, raw_exp: dict, index: int, base_args: dict, batch_size: int):
+        logical_args = build_args_for_phase(
+            base_args,
+            batch_size=batch_size,
+            effective_batch_size=self.effective_batch_size,
+            phase='train',
+        )
+        config = build_train_config(logical_args)
+        command = raw_exp.get('command')
+        if command:
+            report_command = ' '.join(command.strip().split())
+        else:
+            report_command = ' '.join(shlex.quote(part) for part in trainer_command_from_args(logical_args))
+        payload = {
+            'plan_name': self.plan_name,
+            'plan_path': str(self.plan_path),
+            'experiment_index': index,
+            'experiment_name': raw_exp.get('name') or f'exp{index:03d}',
+            'effective_batch_size': self.effective_batch_size,
+            'base_args': base_args,
+            'logical_train_args': logical_args,
+            'run_id': config.run_id,
+            'compile_prepare_id': config.compile_config.prepare_id,
+        }
+        signature = short_config_hash(payload, length=16)
+        seed = int(base_args.get('seed', getattr(config, 'seed', 42)))
+        return {
+            'report_signature': signature,
+            'report_command': report_command,
+            'report_configuration': json.dumps(payload, indent=2, sort_keys=True),
+            'report_seed': seed,
+            'report_session': None,
+        }
 
     def _normalize_experiment(self, raw_exp: dict, index: int):
         if 'args' in raw_exp:
@@ -265,7 +321,7 @@ class Scheduler:
             )
         )
         status = 'done' if run_dir_completed(run_dir) else 'pending'
-        return {
+        exp = {
             'name': name,
             'priority': int(raw_exp.get('priority', 0)),
             'base_args': base_args,
@@ -282,6 +338,8 @@ class Scheduler:
             'started_at': None,
             'finished_at': utc_now_iso() if status == 'done' else None,
         }
+        exp.update(self._build_remote_spec(raw_exp, index, base_args, batch_size))
+        return exp
 
     def _load_or_initialize_state(self):
         if self.state_path.exists():
@@ -336,6 +394,7 @@ class Scheduler:
             phase=str(exp['phase']),
             load_ckpt=exp.get('ckpt_path'),
         )
+        session = self._ensure_remote_session(exp)
         run_dir = run_dir_for_args(args)
         log_name = sanitize_name(f"{exp['name']}__{exp['phase']}__b{exp['batch_size']}__r{exp['retries']}")
         log_path = self.logs_dir / f'{log_name}.log'
@@ -343,6 +402,11 @@ class Scheduler:
         env = os.environ.copy()
         env['CUDA_VISIBLE_DEVICES'] = str(gpu['index'])
         env.setdefault('PYTHONUNBUFFERED', '1')
+        if session:
+            env['SECOMMENDER_REPORT_URI'] = self.server.uri
+            env['SECOMMENDER_REPORT_AUTH_TOKEN'] = self.server.auth
+            env['SECOMMENDER_REPORT_SESSION'] = session
+            env['SECOMMENDER_REPORT_PHASE'] = str(exp['phase'])
         with log_path.open('w') as handle:
             handle.write(f'# started_at={utc_now_iso()}\n')
             handle.write(f'# gpu={gpu["index"]} free_mb={gpu["free_mb"]} total_mb={gpu["total_mb"]}\n')
@@ -366,6 +430,30 @@ class Scheduler:
             'experiment': exp,
         }
         self._save_state()
+
+    def _ensure_remote_session(self, exp: dict):
+        if self.server is None or exp['phase'] == 'precheck':
+            return None
+        if exp.get('report_session'):
+            return exp['report_session']
+
+        evaluation_reply = self.server.create_or_get_evaluation(
+            signature=exp['report_signature'],
+            command=exp['report_command'],
+            configuration=exp['report_configuration'],
+            name=exp['name'],
+        )
+        if not evaluation_reply.ok:
+            raise ValueError(f'failed to create evaluation: {evaluation_reply.msg or evaluation_reply.identifier}')
+        experiment_reply = self.server.create_or_get_experiment(
+            signature=exp['report_signature'],
+            seed=int(exp['report_seed']),
+        )
+        if not experiment_reply.ok:
+            raise ValueError(f'failed to create experiment: {experiment_reply.msg or experiment_reply.identifier}')
+        exp['report_session'] = str(experiment_reply.body)
+        self._save_state()
+        return exp['report_session']
 
     def _mark_failed(self, exp: dict, error: str):
         exp['status'] = 'failed'
@@ -448,7 +536,11 @@ class Scheduler:
         available_gpus = [gpu for gpu in query_gpus() if gpu['index'] not in {record['gpu'] for record in self.active_jobs.values()}]
         pending = self._pending_experiments()
         for gpu, exp in zip(available_gpus, pending):
-            self._launch(exp, gpu)
+            try:
+                self._launch(exp, gpu)
+            except Exception as exc:
+                self._mark_failed(exp, f'launch failed: {exc}')
+                self._save_state()
 
     def run(self):
         print(f'scheduler plan={self.plan_name} experiments={len(self.experiments)} output={self.output_dir}')

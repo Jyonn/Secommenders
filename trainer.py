@@ -25,6 +25,7 @@ from utils.config_init import ConfigInit
 from utils.gpu import GPU
 from utils.logging import attach_run_log, setup_logging
 from utils.pipeline import ensure_clustered
+from utils.server import Server
 
 
 class Trainer:
@@ -699,15 +700,101 @@ def _setup_run_artifacts(config: TrainConfig):
     return run_dir
 
 
+def _report_server():
+    return Server.from_env()
+
+
+def _report_session():
+    return os.environ.get('SECOMMENDER_REPORT_SESSION')
+
+
+def _report_phase():
+    return os.environ.get('SECOMMENDER_REPORT_PHASE', '')
+
+
+def _read_json_if_exists(path: Path):
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+
+
+def _read_log_for_report(path: Path, max_bytes: int = 2_000_000):
+    if not path.exists():
+        return ''
+    data = path.read_bytes()
+    if len(data) <= max_bytes:
+        return data.decode('utf-8', errors='ignore')
+    return data[-max_bytes:].decode('utf-8', errors='ignore')
+
+
+def _report_performance_from_meta(meta: dict | None):
+    if not isinstance(meta, dict):
+        return None
+    for key in ('test_metrics', 'valid_metrics', 'checkpoint_valid_metrics'):
+        metrics = meta.get(key)
+        if isinstance(metrics, dict):
+            return metrics
+    return None
+
+
+def _register_remote_experiment(run_dir: Path, config: TrainConfig):
+    rank = int(os.environ.get('RANK', '0'))
+    session = _report_session()
+    server = _report_server()
+    if rank != 0 or not session or server is None:
+        return
+    reply = server.register_experiment(
+        session,
+        pid=os.getpid(),
+        hostname=socket.gethostname(),
+        run_dir=str(run_dir),
+        log_path=str(run_dir / 'train.log'),
+        command=_command_string(),
+        phase=_report_phase(),
+    )
+    if not reply.ok:
+        pnt(f'warning: failed to register remote experiment session={session}: {reply.msg or reply.identifier}')
+
+
+def _update_remote_experiment(run_dir: Path, *, status: str, error_text: str = ''):
+    rank = int(os.environ.get('RANK', '0'))
+    session = _report_session()
+    server = _report_server()
+    if rank != 0 or not session or server is None:
+        return
+
+    meta = _read_json_if_exists(run_dir / 'meta.json') or {}
+    log_text = _read_log_for_report(run_dir / 'train.log')
+    performance = _report_performance_from_meta(meta)
+    if len(log_text.encode('utf-8')) >= 2_000_000:
+        meta = dict(meta)
+        meta['report_log_truncated'] = True
+    reply = server.update_experiment(
+        session,
+        status=status,
+        phase=_report_phase(),
+        meta=meta,
+        performance=performance,
+        log=log_text,
+        error=error_text,
+    )
+    if not reply.ok:
+        pnt(f'warning: failed to update remote experiment session={session}: {reply.msg or reply.identifier}')
+
+
 def _run_trainer(config: TrainConfig):
-    _setup_run_artifacts(config)
+    run_dir = _setup_run_artifacts(config)
+    _register_remote_experiment(run_dir, config)
     try:
         trainer = Trainer(config)
         trainer.train()
+        _update_remote_experiment(run_dir, status='completed')
     except Exception as exc:
         rank = int(os.environ.get('RANK', '0'))
         if rank == 0:
-            run_dir = _run_dir_for_config(config)
             meta_path = run_dir / 'meta.json'
             meta = {}
             if meta_path.exists():
@@ -723,6 +810,7 @@ def _run_trainer(config: TrainConfig):
                 }
             )
             meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+        _update_remote_experiment(run_dir, status='failed', error_text=repr(exc))
         raise
 
 
