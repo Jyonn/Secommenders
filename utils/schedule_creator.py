@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -109,6 +110,13 @@ class Job:
         self._args: dict[str, Any] = {}
         self._plan_fields: dict[str, Any] = {}
         self._repr_parts: list[str] | None = None
+
+    def clone(self, name: str | None = None):
+        cloned = Job(name or self.name)
+        cloned._args = deepcopy(self._args)
+        cloned._plan_fields = deepcopy(self._plan_fields)
+        cloned._repr_parts = deepcopy(self._repr_parts)
+        return cloned
 
     def data(self, value: str):
         self._args['data'] = str(value).strip().lower()
