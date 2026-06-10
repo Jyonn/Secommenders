@@ -220,6 +220,34 @@ def run_dir_completed(run_dir: Path):
     return isinstance(meta, dict) and 'test_metrics' in meta
 
 
+def read_json_if_exists(path: Path):
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+
+
+def read_log_for_report(path: Path, max_bytes: int = 2_000_000):
+    if not path.exists():
+        return ''
+    data = path.read_bytes()
+    if len(data) <= max_bytes:
+        return data.decode('utf-8', errors='ignore')
+    return data[-max_bytes:].decode('utf-8', errors='ignore')
+
+
+def performance_from_meta(meta: dict | None):
+    if not isinstance(meta, dict):
+        return None
+    for key in ('test_metrics', 'valid_metrics', 'checkpoint_valid_metrics'):
+        metrics = meta.get(key)
+        if isinstance(metrics, dict):
+            return metrics
+    return None
+
+
 def needs_oom_precheck(base_args: dict):
     task_type = str(base_args.get('task_type', '')).lower()
     return task_type in {'sid', 'hash'}
@@ -293,6 +321,8 @@ class Scheduler:
             'report_configuration': json.dumps(payload, indent=2, sort_keys=True),
             'report_seed': seed,
             'report_session': None,
+            'report_uploaded_at': None,
+            'report_upload_error': None,
         }
 
     def _normalize_experiment(self, raw_exp: dict, index: int):
@@ -346,6 +376,9 @@ class Scheduler:
             state = json.loads(self.state_path.read_text())
             experiments = state.get('experiments', [])
             for exp in experiments:
+                exp.setdefault('report_session', None)
+                exp.setdefault('report_uploaded_at', None)
+                exp.setdefault('report_upload_error', None)
                 if exp.get('status') == 'done' and exp.get('run_dir') and run_dir_completed(Path(exp['run_dir'])):
                     continue
                 if exp.get('status') == 'done' and exp.get('run_dir') and not run_dir_completed(Path(exp['run_dir'])):
@@ -386,6 +419,70 @@ class Scheduler:
     def _all_terminal(self):
         return all(self._terminal(exp) for exp in self.experiments)
 
+    def _needs_remote_sync(self, exp: dict):
+        if self.server is None:
+            return False
+        if exp.get('status') != 'done':
+            return False
+        run_dir = exp.get('run_dir')
+        if not run_dir or not run_dir_completed(Path(run_dir)):
+            return False
+        return not exp.get('report_uploaded_at')
+
+    def _sync_completed_experiment(self, exp: dict):
+        run_dir = Path(exp['run_dir'])
+        meta = read_json_if_exists(run_dir / 'meta.json') or {}
+        log_text = read_log_for_report(run_dir / 'train.log')
+        performance = performance_from_meta(meta)
+        if len(log_text.encode('utf-8')) >= 2_000_000:
+            meta = dict(meta)
+            meta['report_log_truncated'] = True
+
+        session = self._ensure_remote_session(exp)
+        register_reply = self.server.register_experiment(
+            session,
+            pid=meta.get('pid'),
+            hostname=str(meta.get('hostname') or ''),
+            run_dir=str(run_dir),
+            log_path=str(meta.get('log_path') or (run_dir / 'train.log')),
+            command=str(meta.get('command') or exp.get('report_command') or ''),
+            phase=str(exp.get('phase') or ''),
+        )
+        if not register_reply.ok:
+            raise ValueError(
+                f'failed to register remote experiment: {register_reply.msg or register_reply.identifier}'
+            )
+
+        reply = self.server.update_experiment(
+            session,
+            status='completed',
+            phase=str(exp.get('phase') or ''),
+            meta=meta,
+            performance=performance,
+            log=log_text,
+            error='',
+        )
+        if not reply.ok:
+            raise ValueError(f'failed to update remote experiment: {reply.msg or reply.identifier}')
+        exp['report_uploaded_at'] = utc_now_iso()
+        exp['report_upload_error'] = None
+
+    def _sync_completed_experiments(self):
+        updated = False
+        for exp in self.experiments:
+            if not self._needs_remote_sync(exp):
+                continue
+            try:
+                self._sync_completed_experiment(exp)
+            except Exception as exc:
+                exp['report_upload_error'] = repr(exc)
+                updated = True
+                print(f'warning: failed to backfill remote upload for {exp["name"]}: {repr(exc)}')
+            else:
+                updated = True
+        if updated:
+            self._save_state()
+
     def _launch(self, exp: dict, gpu: dict):
         args = build_args_for_phase(
             exp['base_args'],
@@ -424,6 +521,8 @@ class Scheduler:
         exp['log_path'] = str(log_path)
         exp['started_at'] = utc_now_iso()
         exp['last_error'] = None
+        exp['report_uploaded_at'] = None
+        exp['report_upload_error'] = None
         self.active_jobs[process.pid] = {
             'process': process,
             'gpu': gpu['index'],
@@ -468,6 +567,7 @@ class Scheduler:
             return
         exp['status'] = 'done'
         exp['finished_at'] = utc_now_iso()
+        exp['report_uploaded_at'] = None
 
     def _handle_oom(self, exp: dict, log_tail: str):
         current_batch_size = int(exp['batch_size'])
@@ -544,13 +644,16 @@ class Scheduler:
 
     def run(self):
         print(f'scheduler plan={self.plan_name} experiments={len(self.experiments)} output={self.output_dir}')
+        self._sync_completed_experiments()
         while not self._all_terminal():
             self._poll_active_jobs()
+            self._sync_completed_experiments()
             self._launch_pending_jobs()
             if self._all_terminal():
                 break
             time.sleep(self.poll_interval)
 
+        self._sync_completed_experiments()
         self._save_state()
         done = sum(1 for exp in self.experiments if exp['status'] == 'done')
         failed = sum(1 for exp in self.experiments if exp['status'] == 'failed')
