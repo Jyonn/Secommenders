@@ -10,7 +10,6 @@ import yaml
 from utils.compile import CompileConfig, normalize_model_name
 from utils import model as model_utils
 
-
 def _validate_compile_config(config: CompileConfig):
     supported_repr_types = {'uid', 'sid', 'hash', 'text', 'embedding'}
     supported_task_types = {'uid', 'sid', 'hash', 'embedding'}

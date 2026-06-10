@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from notificator import Notificator
+
 from core.train_config import TrainConfig
 from utils.compile import short_config_hash
 from utils.config_init import ConfigInit
@@ -22,7 +24,6 @@ from utils.server import Server
 
 ROOT = Path(__file__).resolve().parent
 ARTIFACT_ROOT = ROOT / 'artifacts' / 'scheduler'
-NOTIFICATOR_SDK_PATH = Path.home() / 'Projects' / 'Apps' / 'Notificator' / 'notificator-sdk'
 BATCH_LADDER = [64, 32, 16, 8, 4, 2, 1]
 OOM_PATTERNS = [
     'cuda out of memory',
@@ -37,18 +38,6 @@ def utc_now_iso():
 
 def sanitize_name(text: str):
     return re.sub(r'[^a-zA-Z0-9._-]+', '_', text).strip('._-') or 'exp'
-
-
-def load_notificator_class():
-    try:
-        from notificator import Notificator
-        return Notificator
-    except ImportError:
-        sdk_path = str(NOTIFICATOR_SDK_PATH)
-        if sdk_path not in sys.path and NOTIFICATOR_SDK_PATH.exists():
-            sys.path.insert(0, sdk_path)
-        from notificator import Notificator
-        return Notificator
 
 
 def coerce_cli_value(value: str):
@@ -314,11 +303,6 @@ class SchedulerNotifier:
     def from_config(cls, conf: dict | None):
         if not conf:
             return None
-        try:
-            Notificator = load_notificator_class()
-        except Exception as exc:
-            print(f'warning: failed to load notificator sdk: {repr(exc)}')
-            return None
 
         name = str(conf.get('name') or '').strip()
         token = str(conf.get('token') or os.environ.get(conf.get('token_env', ''), '')).strip()
@@ -331,15 +315,11 @@ class SchedulerNotifier:
                 f'(name={bool(name)} token={bool(token)} bark={bool(bark)})'
             )
             return None
-        try:
-            client = Notificator(name=name, token=token, host=host, locale=locale) if locale else Notificator(
-                name=name,
-                token=token,
-                host=host,
-            )
-        except Exception as exc:
-            print(f'warning: failed to initialize notificator client: {repr(exc)}')
-            return None
+        client = Notificator(name=name, token=token, host=host, locale=locale) if locale else Notificator(
+            name=name,
+            token=token,
+            host=host,
+        )
         return cls(
             client=client,
             bark=bark,

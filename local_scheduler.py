@@ -66,3 +66,4 @@ def build_simple_schedule():
 
 if __name__ == '__main__':
     build_simple_schedule()
+    build_basic_schedules()
