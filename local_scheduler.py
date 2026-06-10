@@ -13,7 +13,7 @@ SID_VARIANTS = [('rqvae', 'recon')]
 UID_VARIANTS = ['flat', ('hierarchical', '20', '3,20')]
 
 
-def build_schedule():
+def build_basic_schedule():
     return (
         Schedule(
             name='basic',
@@ -39,14 +39,25 @@ def build_schedule():
             targets=['uid', 'sid'],
             histories=SCRATCH_HISTORIES,
         )
-    )
+    ).export(Path('config/basic_scheduler.yaml'))
 
 
-def main():
-    output_path = Path('config/local_scheduler.yaml')
-    build_schedule().export(output_path)
-    print(output_path)
+def build_simple_schedule():
+    return (
+        Schedule(
+            name='simple',
+            effective_batch_size=64,
+        )
+        .main_metric('ndcg@10')
+        .grid(
+            'simple_uid2uid',
+            datasets=['mind'],
+            models=['scratch'],
+            targets=['uid'],
+            histories=['uid'],
+        )
+    ).export(Path('config/simple_scheduler.yaml'))
 
 
-if __name__ == '__main__':
-    main()
+build_simple_schedule()
+
