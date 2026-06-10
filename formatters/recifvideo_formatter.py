@@ -211,22 +211,16 @@ class RecIFVideoFormatter(BaseFormatter):
 
     def load_users(self) -> pd.DataFrame:
         self._run_filter_pipeline()
-        return cast(pd.DataFrame, self._filtered_users)
-
-
-class RecIFVideoBaseFormatter(RecIFVideoFormatter):
-    DEFAULT_N_CORE = 20
-    DEFAULT_MIN_LENGTH = 10
-    DEFAULT_MAX_LENGTH = 20
+        return self._filtered_users
 
 
 class RecIFVideoLargeFormatter(RecIFVideoFormatter):
     DEFAULT_N_CORE = 10
     DEFAULT_MIN_LENGTH = 5
-    DEFAULT_MAX_LENGTH = 20
+    DEFAULT_MAX_LENGTH = 50
 
 
 class RecIFVideoXLargeFormatter(RecIFVideoFormatter):
     DEFAULT_N_CORE = 5
     DEFAULT_MIN_LENGTH = 5
-    DEFAULT_MAX_LENGTH = 30
+    DEFAULT_MAX_LENGTH = 50
