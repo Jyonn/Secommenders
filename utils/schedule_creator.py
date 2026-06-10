@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Sequence
 
 import yaml
 
@@ -99,6 +99,133 @@ class _BackendConfig:
         if self.auth_env:
             payload['auth_env'] = self.auth_env
         return payload
+
+
+@dataclass(frozen=True)
+class _UidVariant:
+    decoding: str
+    cluster_levels: str | None = None
+    cluster_topk: str | None = None
+
+
+@dataclass(frozen=True)
+class _SidVariant:
+    coder: str
+    export: str
+
+
+@dataclass(frozen=True)
+class _StudySpec:
+    name: str
+    datasets: tuple[str, ...]
+    models: tuple[str, ...]
+    targets: tuple[str, ...]
+    histories: tuple[tuple[str, ...], ...]
+    args: dict[str, Any]
+    plan_fields: dict[str, Any]
+    source_models: tuple[str, ...] | None = None
+    sid_variants: tuple[_SidVariant, ...] | None = None
+    hash_coders: tuple[str, ...] | None = None
+    uid_variants: tuple[_UidVariant, ...] | None = None
+
+
+def _ensure_tuple(values: str | Iterable[str] | None, *, lower: bool = True) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, str):
+        items = [values]
+    else:
+        items = list(values)
+    normalized = []
+    for value in items:
+        item = str(value).strip()
+        if not item:
+            continue
+        normalized.append(item.lower() if lower else item)
+    return tuple(normalized)
+
+
+def _normalize_history_entry(history: str | Sequence[str]) -> tuple[str, ...]:
+    if isinstance(history, str):
+        values = [history]
+    else:
+        values = list(history)
+    normalized = []
+    for value in values:
+        item = str(value).strip().lower()
+        if not item:
+            continue
+        if item in normalized:
+            continue
+        normalized.append(item)
+    if not normalized:
+        raise ValueError('history entry must contain at least one representation')
+    return tuple(normalized)
+
+
+def _normalize_histories(histories: str | Sequence[str] | Iterable[str | Sequence[str]]):
+    if isinstance(histories, str):
+        return (_normalize_history_entry(histories),)
+    items = list(histories)
+    if not items:
+        return ()
+    if all(isinstance(item, str) for item in items):
+        return tuple(_normalize_history_entry(item) for item in items)
+    return tuple(_normalize_history_entry(item) for item in items)
+
+
+def _slugify(value: str):
+    text = str(value).strip().lower()
+    text = text.replace('+', 'p').replace(',', 'x').replace('/', '-')
+    return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in text).strip('-')
+
+
+def _normalize_sid_variant(value: Any) -> _SidVariant:
+    if isinstance(value, _SidVariant):
+        return value
+    if isinstance(value, dict):
+        coder = value.get('coder')
+        export = value.get('export')
+    else:
+        try:
+            coder, export = value
+        except Exception as exc:
+            raise ValueError('sid variant must be a (coder, export) pair or dict') from exc
+    coder = str(coder).strip().lower()
+    export = str(export).strip().lower()
+    if not coder or not export:
+        raise ValueError('sid variant requires both coder and export')
+    return _SidVariant(coder=coder, export=export)
+
+
+def _normalize_uid_variant(value: Any) -> _UidVariant:
+    if isinstance(value, _UidVariant):
+        return value
+    if isinstance(value, str):
+        decoding = value
+        cluster_levels = None
+        cluster_topk = None
+    elif isinstance(value, dict):
+        decoding = value.get('decoding')
+        cluster_levels = value.get('cluster_levels')
+        cluster_topk = value.get('cluster_topk')
+    else:
+        parts = list(value)
+        if not parts:
+            raise ValueError('uid variant must not be empty')
+        decoding = parts[0]
+        cluster_levels = parts[1] if len(parts) > 1 else None
+        cluster_topk = parts[2] if len(parts) > 2 else None
+    decoding = str(decoding).strip().lower()
+    if not decoding:
+        raise ValueError('uid variant requires decoding')
+    cluster_levels = str(cluster_levels).strip() if cluster_levels is not None else None
+    cluster_topk = str(cluster_topk).strip() if cluster_topk is not None else None
+    return _UidVariant(
+        decoding=decoding,
+        cluster_levels=cluster_levels or None,
+        cluster_topk=cluster_topk or None,
+    )
 
 
 class Job:
@@ -375,7 +502,7 @@ class Schedule:
     def __init__(
         self,
         *,
-        jobs: list[Job],
+        jobs: list[Job] | None = None,
         name: str | None = None,
         backend_host: str | None = None,
         backend_auth: str | None = None,
@@ -384,9 +511,7 @@ class Schedule:
         poll_interval_seconds: int = 15,
         effective_batch_size: int = 64,
     ):
-        if not jobs:
-            raise ValueError('Schedule requires at least one job')
-        self.jobs = jobs
+        self.jobs = list(jobs or [])
         self.name = str(name).strip() if name else None
         self.poll_interval_seconds = int(poll_interval_seconds)
         self.effective_batch_size = int(effective_batch_size)
@@ -396,9 +521,16 @@ class Schedule:
             host_env=backend_host_env,
             auth_env=backend_auth_env,
         )
-        self._validate()
+        self._default_args: dict[str, Any] = {}
+        self._default_plan_fields: dict[str, Any] = {}
+        self._default_source_models: tuple[str, ...] = ()
+        self._default_sid_variants: tuple[_SidVariant, ...] = ()
+        self._default_hash_coders: tuple[str, ...] = ()
+        self._default_uid_variants: tuple[_UidVariant, ...] = ()
+        self._studies: list[_StudySpec] = []
+        self._validate_config()
 
-    def _validate(self):
+    def _validate_config(self):
         if self.poll_interval_seconds <= 0:
             raise ValueError('poll_interval_seconds must be positive')
         if self.effective_batch_size <= 0:
@@ -407,8 +539,257 @@ class Schedule:
             raise ValueError('Use either backend_auth or backend_auth_env, not both')
         if self.backend.host and self.backend.host_env:
             raise ValueError('Use either backend_host or backend_host_env, not both')
+
+    def defaults(self, **kwargs):
+        self._default_args.update(kwargs)
+        return self
+
+    def arg(self, key: str, value: Any):
+        key = str(key).strip()
+        if not key:
+            raise ValueError('arg key must be non-empty')
+        self._default_args[key] = value
+        return self
+
+    def args(self, **kwargs):
+        return self.defaults(**kwargs)
+
+    def plan_defaults(self, *, priority: int | None = None, batch_size_cap: int | None = None):
+        if priority is not None:
+            self._default_plan_fields['priority'] = int(priority)
+        if batch_size_cap is not None:
+            self._default_plan_fields['batch_size_cap'] = int(batch_size_cap)
+        return self
+
+    def main_metric(self, value: str):
+        self._default_args['main_metric'] = str(value).strip().lower()
+        return self
+
+    def metrics(self, *values: str):
+        if len(values) == 1 and isinstance(values[0], str) and ',' in values[0]:
+            metrics = [part.strip().lower() for part in values[0].split(',') if part.strip()]
+        else:
+            metrics = [str(value).strip().lower() for value in values if str(value).strip()]
+        self._default_args['metrics'] = metrics
+        return self
+
+    def priority(self, value: int):
+        self._default_plan_fields['priority'] = int(value)
+        return self
+
+    def batch_size_cap(self, value: int):
+        self._default_plan_fields['batch_size_cap'] = int(value)
+        return self
+
+    def source_models(self, *models: str):
+        self._default_source_models = tuple(normalize_model_name(model) for model in models if str(model).strip())
+        return self
+
+    def sid_variants(self, *variants: Any):
+        self._default_sid_variants = tuple(_normalize_sid_variant(variant) for variant in variants)
+        return self
+
+    def hash_coders(self, *coders: str):
+        self._default_hash_coders = _ensure_tuple(coders)
+        return self
+
+    def uid_variants(self, *variants: Any):
+        self._default_uid_variants = tuple(_normalize_uid_variant(variant) for variant in variants)
+        return self
+
+    def grid(
+        self,
+        name: str,
+        *,
+        datasets: str | Iterable[str],
+        models: str | Iterable[str],
+        targets: str | Iterable[str],
+        histories: Iterable[str | Sequence[str]],
+        args: dict[str, Any] | None = None,
+        priority: int | None = None,
+        batch_size_cap: int | None = None,
+        source_models: str | Iterable[str] | None = None,
+        sid_variants: Iterable[Any] | None = None,
+        hash_coders: str | Iterable[str] | None = None,
+        uid_variants: Iterable[Any] | None = None,
+    ):
+        histories_tuple = _normalize_histories(histories)
+        if not histories_tuple:
+            raise ValueError('grid() requires at least one history entry')
+        spec = _StudySpec(
+            name=str(name).strip(),
+            datasets=_ensure_tuple(datasets),
+            models=_ensure_tuple(models),
+            targets=_ensure_tuple(targets),
+            histories=histories_tuple,
+            args=deepcopy(args or {}),
+            plan_fields={
+                key: value
+                for key, value in {
+                    'priority': int(priority) if priority is not None else None,
+                    'batch_size_cap': int(batch_size_cap) if batch_size_cap is not None else None,
+                }.items()
+                if value is not None
+            },
+            source_models=(
+                tuple(normalize_model_name(model) for model in _ensure_tuple(source_models))
+                if source_models is not None else None
+            ),
+            sid_variants=(
+                tuple(_normalize_sid_variant(variant) for variant in sid_variants)
+                if sid_variants is not None else None
+            ),
+            hash_coders=_ensure_tuple(hash_coders) if hash_coders is not None else None,
+            uid_variants=(
+                tuple(_normalize_uid_variant(variant) for variant in uid_variants)
+                if uid_variants is not None else None
+            ),
+        )
+        if not spec.name:
+            raise ValueError('grid() requires a non-empty name')
+        if not spec.datasets:
+            raise ValueError('grid() requires at least one dataset')
+        if not spec.models:
+            raise ValueError('grid() requires at least one model')
+        if not spec.targets:
+            raise ValueError('grid() requires at least one target')
+        self._studies.append(spec)
+        return self
+
+    def _resolved_jobs(self):
+        jobs = list(self.jobs)
+        for spec in self._studies:
+            jobs.extend(self._expand_study(spec))
+        if not jobs:
+            raise ValueError('Schedule requires at least one job or grid() study')
+        return jobs
+
+    def _job_name(self, spec: _StudySpec, dataset: str, model: str, history: tuple[str, ...], target: str, args: dict[str, Any]):
+        history_label = '+'.join(history)
+        parts = [spec.name, dataset, model, f'{history_label}2{target}']
+        if 'repr_source_model' in args:
+            parts.append(_slugify(args['repr_source_model']))
+        if 'sid_coder' in args:
+            parts.append(_slugify(args['sid_coder']))
+        if 'sid_export' in args:
+            parts.append(_slugify(args['sid_export']))
+        if 'hash_coder' in args:
+            parts.append(_slugify(args['hash_coder']))
+        uid_decoding = args.get('uid_decoding')
+        if uid_decoding:
+            parts.append(_slugify(uid_decoding))
+            if uid_decoding == 'hierarchical':
+                if args.get('uid_cluster_levels'):
+                    parts.append(f"lv{_slugify(args['uid_cluster_levels'])}")
+                if args.get('uid_cluster_topk'):
+                    parts.append(f"tk{_slugify(args['uid_cluster_topk'])}")
+        return '_'.join(parts)
+
+    def _semantic_source_options(self, spec: _StudySpec, *, requires_source: bool):
+        if not requires_source:
+            return [None]
+        explicit = spec.source_models if spec.source_models is not None else self._default_source_models
+        if explicit:
+            return list(explicit)
+        default_value = self._default_args.get('repr_source_model')
+        if default_value:
+            return [normalize_model_name(default_value)]
+        raise ValueError('Semantic experiment requires source_models() or defaults(repr_source_model=...)')
+
+    def _sid_options(self, spec: _StudySpec, *, uses_sid: bool):
+        if not uses_sid:
+            return [None]
+        explicit = spec.sid_variants if spec.sid_variants is not None else self._default_sid_variants
+        if explicit:
+            return list(explicit)
+        coder = self._default_args.get('sid_coder')
+        export = self._default_args.get('sid_export')
+        if coder and export:
+            return [_SidVariant(coder=str(coder).strip().lower(), export=str(export).strip().lower())]
+        raise ValueError('SID experiment requires sid_variants() or defaults(sid_coder=..., sid_export=...)')
+
+    def _hash_options(self, spec: _StudySpec, *, uses_hash: bool):
+        if not uses_hash:
+            return [None]
+        explicit = spec.hash_coders if spec.hash_coders is not None else self._default_hash_coders
+        if explicit:
+            return list(explicit)
+        default_value = self._default_args.get('hash_coder')
+        if default_value:
+            return [str(default_value).strip().lower()]
+        raise ValueError('Hash experiment requires hash_coders() or defaults(hash_coder=...)')
+
+    def _uid_options(self, spec: _StudySpec, *, target: str):
+        if target != 'uid':
+            return [None]
+        explicit = spec.uid_variants if spec.uid_variants is not None else self._default_uid_variants
+        if explicit:
+            return list(explicit)
+        decoding = self._default_args.get('uid_decoding')
+        if decoding:
+            return [
+                _UidVariant(
+                    decoding=str(decoding).strip().lower(),
+                    cluster_levels=self._default_args.get('uid_cluster_levels'),
+                    cluster_topk=self._default_args.get('uid_cluster_topk'),
+                )
+            ]
+        return [_UidVariant(decoding='flat')]
+
+    def _expand_study(self, spec: _StudySpec):
+        jobs = []
+        for dataset in spec.datasets:
+            for model in spec.models:
+                for target in spec.targets:
+                    for history in spec.histories:
+                        repr_types = [target]
+                        for view in history:
+                            if view != target:
+                                repr_types.append(view)
+                        used_views = set(repr_types)
+                        requires_source = any(view in {'sid', 'hash', 'embedding'} for view in used_views)
+                        source_options = self._semantic_source_options(spec, requires_source=requires_source)
+                        sid_options = self._sid_options(spec, uses_sid='sid' in used_views)
+                        hash_options = self._hash_options(spec, uses_hash='hash' in used_views)
+                        uid_options = self._uid_options(spec, target=target)
+                        for source_model in source_options:
+                            for sid_variant in sid_options:
+                                for hash_coder in hash_options:
+                                    for uid_variant in uid_options:
+                                        args = deepcopy(self._default_args)
+                                        args.update(spec.args)
+                                        args['data'] = dataset
+                                        args['model'] = model
+                                        args['task_type'] = target
+                                        args['repr_type'] = '+'.join(repr_types)
+                                        if source_model is not None:
+                                            args['repr_source_model'] = source_model
+                                        if sid_variant is not None:
+                                            args['sid_coder'] = sid_variant.coder
+                                            args['sid_export'] = sid_variant.export
+                                        if hash_coder is not None:
+                                            args['hash_coder'] = hash_coder
+                                        if uid_variant is not None:
+                                            args['uid_decoding'] = uid_variant.decoding
+                                            if uid_variant.cluster_levels is not None:
+                                                args['uid_cluster_levels'] = uid_variant.cluster_levels
+                                            if uid_variant.cluster_topk is not None:
+                                                args['uid_cluster_topk'] = uid_variant.cluster_topk
+                                        job = Job(self._job_name(spec, dataset, model, history, target, args))
+                                        job.args(**args)
+                                        plan_fields = deepcopy(self._default_plan_fields)
+                                        plan_fields.update(spec.plan_fields)
+                                        for key, value in plan_fields.items():
+                                            if key == 'priority':
+                                                job.priority(value)
+                                            elif key == 'batch_size_cap':
+                                                job.batch_size_cap(value)
+                                        jobs.append(job)
+        return jobs
+
+    def _validate_jobs(self, jobs: list[Job]):
         seen = set()
-        for job in self.jobs:
+        for job in jobs:
             if not isinstance(job, Job):
                 raise TypeError('Schedule jobs must be Job instances')
             if job.name in seen:
@@ -417,6 +798,9 @@ class Schedule:
             job.to_plan_item()
 
     def to_dict(self, path: str | Path | None = None):
+        self._validate_config()
+        jobs = self._resolved_jobs()
+        self._validate_jobs(jobs)
         schedule_name = self.name
         if not schedule_name and path is not None:
             schedule_name = Path(path).stem
@@ -424,7 +808,7 @@ class Schedule:
             'name': schedule_name or 'schedule',
             'poll_interval_seconds': self.poll_interval_seconds,
             'effective_batch_size': self.effective_batch_size,
-            'experiments': [job.to_plan_item() for job in self.jobs],
+            'experiments': [job.to_plan_item() for job in jobs],
         }
         backend_payload = self.backend.to_dict()
         if backend_payload:
