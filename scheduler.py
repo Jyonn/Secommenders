@@ -503,15 +503,33 @@ class Scheduler:
         exp.update(self._build_remote_spec(raw_exp, index, base_args, batch_size))
         return exp
 
+    def _migrate_experiment_state(self, exp: dict):
+        base_args = exp.get('base_args') or {}
+        if not base_args:
+            return exp
+        exp.setdefault('batch_size_cap', initial_batch_cap(str(base_args.get('model'))))
+        exp.setdefault('required_free_memory_mb', required_free_memory_mb(base_args))
+        exp.setdefault('phase', 'precheck' if needs_oom_precheck(base_args) else 'train')
+        exp.setdefault('retries', 0)
+        exp.setdefault('test_retries', 0)
+        exp.setdefault('run_dir', None)
+        exp.setdefault('ckpt_path', None)
+        exp.setdefault('log_path', None)
+        exp.setdefault('last_error', None)
+        exp.setdefault('started_at', None)
+        exp.setdefault('finished_at', None)
+        exp.setdefault('notification_marks', {})
+        exp.setdefault('report_session', None)
+        exp.setdefault('report_uploaded_at', None)
+        exp.setdefault('report_upload_error', None)
+        return exp
+
     def _load_or_initialize_state(self):
         if self.state_path.exists():
             state = json.loads(self.state_path.read_text())
             experiments = state.get('experiments', [])
             for exp in experiments:
-                exp.setdefault('report_session', None)
-                exp.setdefault('report_uploaded_at', None)
-                exp.setdefault('report_upload_error', None)
-                exp.setdefault('notification_marks', {})
+                exp = self._migrate_experiment_state(exp)
                 if exp.get('status') == 'done' and exp.get('run_dir') and run_dir_completed(Path(exp['run_dir'])):
                     continue
                 if exp.get('status') == 'done' and exp.get('run_dir') and not run_dir_completed(Path(exp['run_dir'])):
