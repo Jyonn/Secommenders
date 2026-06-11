@@ -18,13 +18,26 @@ from notificator import Notificator
 from core.train_config import TrainConfig
 from utils.compile import short_config_hash
 from utils.config_init import ConfigInit
-from utils.model import match as match_model_key
 from utils.server import Server
 
 
 ROOT = Path(__file__).resolve().parent
 ARTIFACT_ROOT = ROOT / 'artifacts' / 'scheduler'
 BATCH_LADDER = [64, 32, 16, 8, 4, 2, 1]
+MODEL_BATCH_CAPS = {
+    'scratch': 64,
+    'qwen35th08b': 32,
+    'qwen35th4b': 16,
+    'llama3': 4,
+    'qwen35th8b': 4,
+}
+MODEL_FREE_MEMORY_REQUIREMENTS_MB = {
+    'scratch': 10_000,
+    'qwen35th08b': 20_000,
+    'qwen35th4b': 40_000,
+    'llama3': 80_000,
+    'qwen35th8b': 80_000,
+}
 OOM_PATTERNS = [
     'cuda out of memory',
     'outofmemoryerror',
@@ -102,30 +115,39 @@ def effective_batch_to_accumulate(batch_size: int, effective_batch_size: int):
     return effective_batch_size // batch_size
 
 
-def classify_model_size(model_name: str):
-    model_name = str(model_name).lower()
-    mapped = (match_model_key(model_name) or '').lower()
-    combined = f'{model_name} {mapped}'
-    if model_name == 'scratch':
-        return 'scratch'
-    if any(token in combined for token in ['0.8b', '08b']):
-        return '0.8b'
-    if any(token in combined for token in ['7b', '8b', '9b']):
-        return '8b'
-    if any(token in combined for token in ['4b', '3b', '2b', '1.3b', '1b']):
-        return '4b'
-    return '4b'
-
-
 def initial_batch_cap(model_name: str):
-    bucket = classify_model_size(model_name)
-    if bucket == 'scratch':
-        return 64
-    if bucket == '0.8b':
-        return 32
-    if bucket == '4b':
-        return 16
-    return 4
+    key = str(model_name).lower()
+    if key not in MODEL_BATCH_CAPS:
+        raise ValueError(
+            f'Unsupported scheduler model "{model_name}". '
+            f'Supported models: {sorted(MODEL_BATCH_CAPS)}'
+        )
+    return MODEL_BATCH_CAPS[key]
+
+
+def uses_embedding_path(base_args: dict):
+    repr_type = str(base_args.get('repr_type') or '').lower()
+    task_type = str(base_args.get('task_type') or '').lower()
+    repr_parts = [part.strip() for part in repr_type.split('+') if part.strip()]
+    return 'embedding' in repr_parts or task_type == 'embedding'
+
+
+def required_free_memory_mb(base_args: dict):
+    model_name = str(base_args.get('model') or '').lower()
+    if model_name not in MODEL_FREE_MEMORY_REQUIREMENTS_MB:
+        raise ValueError(
+            f'Unsupported scheduler model "{model_name}". '
+            f'Supported models: {sorted(MODEL_FREE_MEMORY_REQUIREMENTS_MB)}'
+        )
+    base_requirement = MODEL_FREE_MEMORY_REQUIREMENTS_MB[model_name]
+    if not uses_embedding_path(base_args):
+        return base_requirement
+
+    if model_name == 'scratch':
+        return 20_000
+    if model_name == 'qwen35th08b':
+        return 40_000
+    return 80_000
 
 
 def next_smaller_batch_size(current_batch_size: int):
@@ -464,6 +486,7 @@ class Scheduler:
             'priority': int(raw_exp.get('priority', 0)),
             'base_args': base_args,
             'batch_size_cap': batch_cap,
+            'required_free_memory_mb': int(raw_exp.get('required_free_memory_mb') or required_free_memory_mb(base_args)),
             'batch_size': batch_size,
             'phase': phase,
             'status': status,
@@ -858,7 +881,17 @@ class Scheduler:
     def _launch_pending_jobs(self):
         available_gpus = [gpu for gpu in query_gpus() if gpu['index'] not in {record['gpu'] for record in self.active_jobs.values()}]
         pending = self._pending_experiments()
-        for gpu, exp in zip(available_gpus, pending):
+        for exp in pending:
+            eligible_index = next(
+                (
+                    index for index, gpu in enumerate(available_gpus)
+                    if int(gpu['free_mb']) >= int(exp['required_free_memory_mb'])
+                ),
+                None,
+            )
+            if eligible_index is None:
+                continue
+            gpu = available_gpus.pop(eligible_index)
             try:
                 self._launch(exp, gpu)
             except Exception as exc:

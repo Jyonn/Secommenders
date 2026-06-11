@@ -147,11 +147,23 @@ The current scheduler uses these rules:
 
 - `batch_size * accumulate_batch = 64`
 - `code_beam_chunk_size = batch_size`
-- initial batch size cap by model family:
+- initial batch size cap by model name:
   - `scratch -> 64`
-  - `0.8b -> 32`
-  - `4b/3b/2b/1b -> 16`
-  - `7b/8b/9b -> 4`
+  - `qwen35th08b -> 32`
+  - `qwen35th4b -> 16`
+  - `llama3 -> 4`
+  - `qwen35th8b -> 4`
+- GPU launch thresholds by free memory:
+  - `scratch -> 10G`
+  - `qwen35th08b -> 20G`
+  - `qwen35th4b -> 40G`
+  - `llama3/qwen35th8b -> 80G`
+- if the experiment uses `embedding` in repr or task:
+  - thresholds are shifted up by one tier
+  - `scratch -> 20G`
+  - `qwen35th08b -> 40G`
+  - `qwen35th4b -> 80G`
+  - `llama3/qwen35th8b -> 80G`
 - only `sid/hash` experiments run OOM precheck
   - precheck command is `--valid_only 1`
 - `uid` and other tasks start training directly
