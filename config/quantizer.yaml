@@ -37,7 +37,7 @@ encoder:
     use_bias: true
 
 trainer:
-  output_dir: artifacts/quantized/${data}/${model}/${quantizer.name}
+  output_dir: artifacts/quantized/${data}/${model}/${config.quantizer.name}
   validation_ratio: ${validation_ratio:0.1}$
   test_ratio: ${test_ratio:0.1}$
   full_dataset_as_splits: true
