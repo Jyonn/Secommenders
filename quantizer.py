@@ -149,6 +149,31 @@ class Quantizer:
             return device
         return GPU.auto_choose(torch_format=True)
 
+    @staticmethod
+    def _parse_hidden_dims(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            parts = [part.strip() for part in value.split(',') if part.strip()]
+            if not parts:
+                raise ValueError('encoder.config.hidden_dims must contain at least one dimension.')
+            return [int(part) for part in parts]
+        if isinstance(value, (list, tuple)):
+            if not value:
+                raise ValueError('encoder.config.hidden_dims must contain at least one dimension.')
+            return [int(part) for part in value]
+        raise ValueError(
+            'encoder.config.hidden_dims must be a comma-separated string or a list/tuple of integers.'
+        )
+
+    def _resolve_encoder_config(self):
+        if not getattr(self.config, 'encoder', None) or not self.config.encoder.config:
+            return None
+        encoder_config = dict(self.config.encoder.config())
+        if 'hidden_dims' in encoder_config:
+            encoder_config['hidden_dims'] = self._parse_hidden_dims(encoder_config['hidden_dims'])
+        return encoder_config
+
     def _resolve_quantizer_config(self):
         quantizer_config = dict(self.config.quantizer.config())
         requested_latent_dim = quantizer_config.get('latent_dim')
@@ -258,12 +283,13 @@ class Quantizer:
             decoder_name = self.config.decoder.name or None
             decoder_config = self.config.decoder.config() if self.config.decoder.config else None
         quantizer_config = self._resolve_quantizer_config()
+        encoder_config = self._resolve_encoder_config()
 
         self.model = load_model(
             self.config.quantizer.name,
             sample_spec=sample_spec,
             encoder=self.config.encoder.name or None,
-            encoder_config=self.config.encoder.config() if self.config.encoder.config else None,
+            encoder_config=encoder_config,
             decoder=decoder_name,
             decoder_config=decoder_config,
             **quantizer_config,
