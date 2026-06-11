@@ -224,6 +224,7 @@ class TrainConfig:
     @property
     def sign_payload(self):
         payload = asdict(self)
+        payload.pop('device', None)
         used_views = self.compile_config.used_views
         if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
             payload.pop('repr_source_model', None)

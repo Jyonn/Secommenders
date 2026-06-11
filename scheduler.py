@@ -696,20 +696,21 @@ class Scheduler:
             self._save_state()
 
     def _launch(self, exp: dict, gpu: dict):
-        args = build_args_for_phase(
+        logical_args = build_args_for_phase(
             exp['base_args'],
             batch_size=int(exp['batch_size']),
             effective_batch_size=self.effective_batch_size,
             phase=str(exp['phase']),
             load_ckpt=exp.get('ckpt_path'),
         )
+        args = deepcopy(logical_args)
+        args['device'] = f'cuda:{gpu["index"]}'
         session = self._ensure_remote_session(exp)
-        run_dir = run_dir_for_args(args)
+        run_dir = run_dir_for_args(logical_args)
         log_name = sanitize_name(f"{exp['name']}__{exp['phase']}__b{exp['batch_size']}__r{exp['retries']}")
         log_path = self.logs_dir / f'{log_name}.log'
         command = trainer_command_from_args(args)
         env = os.environ.copy()
-        env['CUDA_VISIBLE_DEVICES'] = str(gpu['index'])
         env.setdefault('PYTHONUNBUFFERED', '1')
         if session:
             env['SECOMMENDER_REPORT_URI'] = self.server.uri
