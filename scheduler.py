@@ -29,14 +29,14 @@ MODEL_BATCH_CAPS = {
     'qwen35th08b': 32,
     'qwen35th4b': 16,
     'llama3': 4,
-    'qwen35th8b': 4,
+    'qwen35th9b': 4,
 }
 MODEL_FREE_MEMORY_REQUIREMENTS_MB = {
     'scratch': 10_000,
     'qwen35th08b': 20_000,
     'qwen35th4b': 40_000,
     'llama3': 80_000,
-    'qwen35th8b': 80_000,
+    'qwen35th9b': 80_000,
 }
 OOM_PATTERNS = [
     'cuda out of memory',

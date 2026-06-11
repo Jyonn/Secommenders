@@ -152,18 +152,18 @@ The current scheduler uses these rules:
   - `qwen35th08b -> 32`
   - `qwen35th4b -> 16`
   - `llama3 -> 4`
-  - `qwen35th8b -> 4`
+  - `qwen35th9b -> 4`
 - GPU launch thresholds by free memory:
   - `scratch -> 10G`
   - `qwen35th08b -> 20G`
   - `qwen35th4b -> 40G`
-  - `llama3/qwen35th8b -> 80G`
+  - `llama3/qwen35th9b -> 80G`
 - if the experiment uses `embedding` in repr or task:
   - thresholds are shifted up by one tier
   - `scratch -> 20G`
   - `qwen35th08b -> 40G`
   - `qwen35th4b -> 80G`
-  - `llama3/qwen35th8b -> 80G`
+  - `llama3/qwen35th9b -> 80G`
 - only `sid/hash` experiments run OOM precheck
   - precheck command is `--valid_only 1`
 - `uid` and other tasks start training directly
