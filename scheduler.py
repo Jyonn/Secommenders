@@ -603,28 +603,31 @@ class Scheduler:
     def _needs_remote_sync(self, exp: dict):
         if self.server is None:
             return False
-        if exp.get('status') != 'done':
+        status = exp.get('status')
+        if status not in {'done', 'failed'}:
             return False
-        run_dir = exp.get('run_dir')
-        if not run_dir or not run_dir_completed(Path(run_dir)):
+        if status == 'done':
+            run_dir = exp.get('run_dir')
+            if not run_dir or not run_dir_completed(Path(run_dir)):
+                return False
+        elif exp.get('phase') == 'precheck':
             return False
         return not exp.get('report_uploaded_at')
 
     def _has_unsynced_completed_experiments(self):
         for exp in self.experiments:
-            if exp.get('status') != 'done':
+            if not self._needs_remote_sync(exp):
                 continue
-            run_dir = exp.get('run_dir')
-            if not run_dir or not run_dir_completed(Path(run_dir)):
-                continue
-            if not exp.get('report_uploaded_at'):
-                return True
+            return True
         return False
 
-    def _sync_completed_experiment(self, exp: dict):
-        run_dir = Path(exp['run_dir'])
-        meta = read_json_if_exists(run_dir / 'meta.json') or {}
-        log_text = read_log_for_report(run_dir / 'train.log')
+    def _sync_terminal_experiment(self, exp: dict):
+        run_dir_text = exp.get('run_dir')
+        run_dir = Path(run_dir_text) if run_dir_text else None
+        meta = read_json_if_exists(run_dir / 'meta.json') if run_dir else None
+        meta = meta or {}
+        log_path = Path(exp['log_path']) if exp.get('log_path') else (run_dir / 'train.log' if run_dir else None)
+        log_text = read_log_for_report(log_path) if log_path else ''
         performance = performance_from_meta(meta)
         if len(log_text.encode('utf-8')) >= 2_000_000:
             meta = dict(meta)
@@ -635,8 +638,8 @@ class Scheduler:
             session,
             pid=meta.get('pid'),
             hostname=str(meta.get('hostname') or ''),
-            run_dir=str(run_dir),
-            log_path=str(meta.get('log_path') or (run_dir / 'train.log')),
+            run_dir=str(run_dir) if run_dir else '',
+            log_path=str(meta.get('log_path') or log_path or ''),
             command=str(meta.get('command') or exp.get('report_command') or ''),
             phase=str(exp.get('phase') or ''),
         )
@@ -644,20 +647,24 @@ class Scheduler:
             raise ValueError(
                 f'failed to register remote experiment: {register_reply.msg or register_reply.identifier}'
             )
+        remote_status = 'completed' if exp.get('status') == 'done' else 'failed'
+        error_text = ''
+        if remote_status == 'failed':
+            error_text = str(meta.get('error') or exp.get('last_error') or '')
         reply = self.server.update_experiment(
             session,
-            status='completed',
+            status=remote_status,
             phase=str(exp.get('phase') or ''),
             meta=meta,
             performance=performance,
             log=log_text,
-            error='',
+            error=error_text,
         )
         if not reply.ok:
             raise ValueError(f'failed to update remote experiment: {reply.msg or reply.identifier}')
         exp['report_uploaded_at'] = utc_now_iso()
         exp['report_upload_error'] = None
-        summary = self._metrics_summary(performance)
+        summary = self._metrics_summary(performance) if remote_status == 'completed' else ''
         body_lines = [
             f'name={exp["name"]}',
             f'phase={exp.get("phase")}',
@@ -665,15 +672,22 @@ class Scheduler:
         ]
         if summary:
             body_lines.append(f'metrics={summary}')
-        self._notify(exp, 'uploaded', 'Experiment Uploaded', '\n'.join(body_lines))
+        if error_text:
+            body_lines.append(f'error={error_text[:200]}')
+        self._notify(
+            exp,
+            'uploaded' if remote_status == 'completed' else 'failed-uploaded',
+            'Experiment Uploaded' if remote_status == 'completed' else 'Failed Experiment Uploaded',
+            '\n'.join(body_lines),
+        )
 
-    def _sync_completed_experiments(self):
+    def _sync_terminal_experiments(self):
         updated = False
         for exp in self.experiments:
             if not self._needs_remote_sync(exp):
                 continue
             try:
-                self._sync_completed_experiment(exp)
+                self._sync_terminal_experiment(exp)
             except Exception as exc:
                 exp['report_upload_error'] = repr(exc)
                 self._notify(
@@ -684,6 +698,7 @@ class Scheduler:
                         [
                             f'name={exp["name"]}',
                             f'phase={exp.get("phase")}',
+                            f'status={exp.get("status")}',
                             f'error={repr(exc)}',
                         ]
                     ),
@@ -717,6 +732,21 @@ class Scheduler:
             env['SECOMMENDER_REPORT_AUTH_TOKEN'] = self.server.auth
             env['SECOMMENDER_REPORT_SESSION'] = session
             env['SECOMMENDER_REPORT_PHASE'] = str(exp['phase'])
+            try:
+                register_reply = self.server.register_experiment(
+                    session,
+                    run_dir=str(run_dir),
+                    log_path=str(log_path),
+                    command=' '.join(shlex.quote(part) for part in command),
+                    phase=str(exp['phase']),
+                )
+                if not register_reply.ok:
+                    print(
+                        'warning: failed to pre-register remote experiment '
+                        f'for {exp["name"]}: {register_reply.msg or register_reply.identifier}'
+                    )
+            except Exception as exc:
+                print(f'warning: failed to pre-register remote experiment for {exp["name"]}: {repr(exc)}')
         with log_path.open('w') as handle:
             handle.write(f'# started_at={utc_now_iso()}\n')
             handle.write(f'# gpu={gpu["index"]} free_mb={gpu["free_mb"]} total_mb={gpu["total_mb"]}\n')
@@ -771,6 +801,8 @@ class Scheduler:
         exp['status'] = 'failed'
         exp['last_error'] = error
         exp['finished_at'] = utc_now_iso()
+        exp['report_uploaded_at'] = None
+        exp['report_upload_error'] = None
         self._notify(
             exp,
             f'failed:{exp.get("phase")}:{error[:80]}',
@@ -921,19 +953,19 @@ class Scheduler:
         print(f'scheduler plan={self.plan_name} experiments={len(self.experiments)} output={self.output_dir}')
         if self.server is None and self._has_unsynced_completed_experiments():
             print(
-                'warning: completed experiments still need remote sync, '
+                'warning: terminal experiments still need remote sync, '
                 'but backend reporting is unavailable for this plan'
             )
-        self._sync_completed_experiments()
+        self._sync_terminal_experiments()
         while not self._all_terminal():
             self._poll_active_jobs()
-            self._sync_completed_experiments()
+            self._sync_terminal_experiments()
             self._launch_pending_jobs()
             if self._all_terminal():
                 break
             time.sleep(self.poll_interval)
 
-        self._sync_completed_experiments()
+        self._sync_terminal_experiments()
         self._save_state()
         done = sum(1 for exp in self.experiments if exp['status'] == 'done')
         failed = sum(1 for exp in self.experiments if exp['status'] == 'failed')
