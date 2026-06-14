@@ -23,22 +23,39 @@ def build_basic_schedule(dataset: str):
             effective_batch_size=64,
         )
         .main_metric('ndcg@10')
-        .source_models(*SOURCE_MODELS)
         .sid_variants(*SID_VARIANTS)
         .uid_variants(*UID_VARIANTS)
         .grid(
             'basic_llm',
             datasets=[dataset],
-            models=LLM_MODELS,
-            targets=['uid', 'sid'],
+            models= ['llama3', 'qwen35th08b'],
+            targets=['uid'],
             histories=LLM_HISTORIES,
+            source_models=SOURCE_MODELS
+        )
+        .grid(
+            'basic_llm',
+            datasets=[dataset],
+            models=['llama3', 'qwen35th08b'],
+            targets=['sid'],
+            histories=LLM_HISTORIES,
+            source_models=['llama3']
         )
         .grid(
             'basic_scratch',
             datasets=[dataset],
             models=SCRATCH_MODELS,
-            targets=['uid', 'sid'],
+            targets=['uid'],
             histories=SCRATCH_HISTORIES,
+            source_models=SOURCE_MODELS
+        )
+        .grid(
+            'basic_scratch',
+            datasets=[dataset],
+            models=SCRATCH_MODELS,
+            targets=['sid'],
+            histories=SCRATCH_HISTORIES,
+            source_models=['llama3']
         )
     ).export(Path(f'config/basic_{dataset}_scheduler.yaml'))
 
