@@ -17,6 +17,7 @@ class BaseFormatter(abc.ABC):
     HIS_COL: str
 
     REQUIRE_STRINGIFY: bool
+    PROVIDES_TEST_SET = False
 
     def __init__(self, data_dir=None):
         self.data_dir = data_dir
@@ -25,6 +26,7 @@ class BaseFormatter(abc.ABC):
 
         self.items: Optional[pd.DataFrame] = None
         self.users: Optional[pd.DataFrame] = None
+        self.test_users: Optional[pd.DataFrame] = None
         self.item_vocab: Optional[dict] = None
         self.user_vocab: Optional[dict] = None
 
@@ -45,6 +47,13 @@ class BaseFormatter(abc.ABC):
     def load_users(self) -> pd.DataFrame:
         raise NotImplementedError
 
+    def load_test_users(self) -> Optional[pd.DataFrame]:
+        if self.PROVIDES_TEST_SET:
+            raise NotImplementedError(
+                f'formatter {self.get_name()} declares PROVIDES_TEST_SET=True but does not implement load_test_users()'
+            )
+        return None
+
     def _stringify(self, df: pd.DataFrame):
         if not self.REQUIRE_STRINGIFY:
             return df
@@ -56,15 +65,16 @@ class BaseFormatter(abc.ABC):
 
     def _paths(self):
         base_dir = Path(self.store_dir)
-        return (
-            base_dir / 'items.parquet',
-            base_dir / 'users.parquet',
-            base_dir / 'meta.json',
-            base_dir / 'stats.json',
-        )
+        return {
+            'items': base_dir / 'items.parquet',
+            'users': base_dir / 'users.parquet',
+            'test_users': base_dir / 'test_users.parquet',
+            'meta': base_dir / 'meta.json',
+            'stats': base_dir / 'stats.json',
+        }
 
     def _save_meta(self):
-        _, _, meta_path, _ = self._paths()
+        meta_path = self._paths()['meta']
         meta = {
             'version': self.VER,
             'stage': 'formatted',
@@ -75,11 +85,12 @@ class BaseFormatter(abc.ABC):
             'history_col': self.HIS_COL,
             'default_attrs': list(self.default_attrs),
             'require_stringify': bool(self.REQUIRE_STRINGIFY),
+            'provides_test_set': bool(self.PROVIDES_TEST_SET),
         }
         meta_path.write_text(json.dumps(meta, indent=2) + '\n')
 
     def _save_stats(self):
-        _, _, _, stats_path = self._paths()
+        stats_path = self._paths()['stats']
         history_lengths = self.users[self.HIS_COL].map(len)
         stats = {
             'item_count': int(len(self.items)),
@@ -87,6 +98,15 @@ class BaseFormatter(abc.ABC):
             'avg_history_length': float(history_lengths.mean()),
             'max_history_length': int(history_lengths.max()),
         }
+        if self.test_users is not None:
+            test_history_lengths = self.test_users[self.HIS_COL].map(len)
+            stats.update(
+                {
+                    'test_user_count': int(len(self.test_users)),
+                    'test_avg_history_length': float(test_history_lengths.mean()),
+                    'test_max_history_length': int(test_history_lengths.max()),
+                }
+            )
         stats_path.write_text(json.dumps(stats, indent=2) + '\n')
 
     @staticmethod
@@ -131,32 +151,54 @@ class BaseFormatter(abc.ABC):
         return users[[self.UID_COL, self.HIS_COL]].reset_index(drop=True)
 
     def load(self):
-        items_path, users_path, _, _ = self._paths()
+        paths = self._paths()
+        items_path = paths['items']
+        users_path = paths['users']
+        test_users_path = paths['test_users']
         cache_updated = False
 
-        if items_path.exists() and users_path.exists():
+        test_cache_ready = (not self.PROVIDES_TEST_SET) or test_users_path.exists()
+        if items_path.exists() and users_path.exists() and test_cache_ready:
             pnt(f'loading formatted {self.get_name()} from cache')
             raw_items = pd.read_parquet(items_path)
             raw_users = pd.read_parquet(users_path)
+            raw_test_users = pd.read_parquet(test_users_path) if self.PROVIDES_TEST_SET else None
 
             self.items = self._finalize_items(self._stringify(raw_items))
             self.users = self._finalize_users(self._stringify(raw_users))
+            if raw_test_users is not None:
+                self.test_users = self._finalize_users(self._stringify(raw_test_users))
             cache_updated = not self.items.equals(raw_items) or not self.users.equals(raw_users)
+            if raw_test_users is not None:
+                cache_updated = cache_updated or not self.test_users.equals(raw_test_users)
         else:
             pnt(f'loading {self.get_name()} from raw data')
             self.items = self._finalize_items(self._stringify(self.load_items()))
             self.users = self._finalize_users(self._stringify(self.load_users()))
+            if self.PROVIDES_TEST_SET:
+                raw_test_users = self.load_test_users()
+                if raw_test_users is None:
+                    raise ValueError(
+                        f'formatter {self.get_name()} returned no test users despite PROVIDES_TEST_SET=True'
+                    )
+                self.test_users = self._finalize_users(self._stringify(raw_test_users))
             cache_updated = True
 
         self.items = self._stringify(self.items)
         self.users = self._stringify(self.users)
         if self.REQUIRE_STRINGIFY:
             self.users[self.HIS_COL] = self.users[self.HIS_COL].apply(lambda x: [str(item) for item in x])
+        if self.test_users is not None:
+            self.test_users = self._stringify(self.test_users)
+            if self.REQUIRE_STRINGIFY:
+                self.test_users[self.HIS_COL] = self.test_users[self.HIS_COL].apply(lambda x: [str(item) for item in x])
 
         if cache_updated:
             pnt(f'writing normalized formatted cache for {self.get_name()}')
             self.items.to_parquet(items_path, index=False)
             self.users.to_parquet(users_path, index=False)
+            if self.test_users is not None:
+                self.test_users.to_parquet(test_users_path, index=False)
             self._save_meta()
             self._save_stats()
 
@@ -165,6 +207,8 @@ class BaseFormatter(abc.ABC):
 
         pnt(f'loaded {len(self.items)} formatted items')
         pnt(f'loaded {len(self.users)} formatted users')
+        if self.test_users is not None:
+            pnt(f'loaded {len(self.test_users)} formatted test users')
         return self
 
     def organize_item(self, iid, item_attrs: list, as_dict=False, item_self=False):

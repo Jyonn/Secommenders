@@ -54,8 +54,12 @@ class RecIFVideoFormatter(BaseFormatter):
     def caption_path(self) -> Path:
         return Path(self.data_dir) / 'pid2caption.parquet'
 
+    @property
+    def official_video_test_path(self) -> Path:
+        return Path(self.data_dir) / 'benchmark_data' / 'video' / 'video_test.parquet'
+
     def _save_meta(self):
-        _, _, meta_path, _ = self._paths()
+        meta_path = self._paths()['meta']
         meta = {
             'version': self.VER,
             'stage': 'formatted',
@@ -66,6 +70,7 @@ class RecIFVideoFormatter(BaseFormatter):
             'history_col': self.HIS_COL,
             'default_attrs': list(self.default_attrs),
             'require_stringify': bool(self.REQUIRE_STRINGIFY),
+            'provides_test_set': bool(self.PROVIDES_TEST_SET),
         }
         meta.update(
             {
@@ -224,3 +229,56 @@ class RecIFVideoXLargeFormatter(RecIFVideoFormatter):
     DEFAULT_N_CORE = 3
     DEFAULT_MIN_LENGTH = 5
     DEFAULT_MAX_LENGTH = 50
+
+
+class RecIFVideoXLargeAlignFormatter(RecIFVideoXLargeFormatter):
+    PROVIDES_TEST_SET = True
+
+    @staticmethod
+    def _normalize_target(value):
+        if isinstance(value, np.ndarray):
+            values = value.tolist()
+            return values[-1] if values else None
+        if isinstance(value, list):
+            return value[-1] if value else None
+        if isinstance(value, tuple):
+            return value[-1] if value else None
+        if value is None:
+            return None
+        if isinstance(value, float) and np.isnan(value):
+            return None
+        return value
+
+    def load_test_users(self) -> pd.DataFrame:
+        self._run_filter_pipeline()
+        final_item_ids = set(cast(pd.DataFrame, self._filtered_items)[self.IID_COL].tolist())
+        pnt(f'loading aligned RecIF video official test from {self.official_video_test_path}')
+        test_users = pd.read_parquet(
+            self.official_video_test_path,
+            columns=[self.UID_COL, 'hist_video_pid', 'target_video_pid'],
+        )
+        test_users = test_users.rename(columns={'hist_video_pid': self.HIS_COL})
+        test_users[self.HIS_COL] = test_users[self.HIS_COL].apply(self._normalize_history)
+        test_users['target_video_pid'] = test_users['target_video_pid'].apply(self._normalize_target)
+
+        aligned_histories = []
+        kept_uids = []
+        iterator = zip(
+            test_users[self.UID_COL].tolist(),
+            test_users[self.HIS_COL].tolist(),
+            test_users['target_video_pid'].tolist(),
+        )
+        for uid, history, target in tqdm(iterator, total=len(test_users), desc='align-official-test'):
+            filtered_history = [pid for pid in history if pid in final_item_ids]
+            if target in final_item_ids:
+                filtered_history.append(target)
+            if len(filtered_history) > self.max_length:
+                filtered_history = filtered_history[-self.max_length:]
+            if len(filtered_history) < self.min_length:
+                continue
+            kept_uids.append(uid)
+            aligned_histories.append(filtered_history)
+
+        official_test = pd.DataFrame({self.UID_COL: kept_uids, self.HIS_COL: aligned_histories})
+        pnt(f'aligned official test users kept={len(official_test)} from raw={len(test_users)}')
+        return official_test

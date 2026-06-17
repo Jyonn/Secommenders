@@ -34,12 +34,14 @@ class Processor:
         self.HIS_COL: Optional[str] = None
         self.REQUIRE_STRINGIFY: Optional[bool] = None
         self._default_attrs = []
+        self.provides_test_set = False
 
         self.items: Optional[pd.DataFrame] = None
         self.users: Optional[pd.DataFrame] = None
         self.item_vocab: Optional[dict] = None
         self.user_vocab: Optional[dict] = None
 
+        self.formatted_test_set: Optional[pd.DataFrame] = None
         self.test_set: Optional[pd.DataFrame] = None
         self.valid_set: Optional[pd.DataFrame] = None
         self.finetune_set: Optional[pd.DataFrame] = None
@@ -67,6 +69,7 @@ class Processor:
         return {
             'items': self.formatted_dir / 'items.parquet',
             'users': self.formatted_dir / 'users.parquet',
+            'test_users': self.formatted_dir / 'test_users.parquet',
             'meta': self.formatted_dir / 'meta.json',
             'stats': self.formatted_dir / 'stats.json',
         }
@@ -89,6 +92,7 @@ class Processor:
         self.HIS_COL = meta['history_col']
         self.REQUIRE_STRINGIFY = bool(meta.get('require_stringify', False))
         self._default_attrs = list(meta.get('default_attrs', []))
+        self.provides_test_set = bool(meta.get('provides_test_set', False))
 
     def _load_formatted_meta(self):
         path = self._formatted_paths()['meta']
@@ -236,8 +240,16 @@ class Processor:
 
         self.items = self._stringify(pd.read_parquet(paths['items']))
         self.users = self._stringify(pd.read_parquet(paths['users']))
+        if self.provides_test_set:
+            if not paths['test_users'].exists():
+                ensure_formatted(self.dataset)
+            self.formatted_test_set = self._stringify(pd.read_parquet(paths['test_users']))
         if self.REQUIRE_STRINGIFY:
             self.users[self.HIS_COL] = self.users[self.HIS_COL].apply(lambda x: [str(item) for item in x])
+            if self.formatted_test_set is not None:
+                self.formatted_test_set[self.HIS_COL] = self.formatted_test_set[self.HIS_COL].apply(
+                    lambda x: [str(item) for item in x]
+                )
         return meta
 
     def _ensure_original_users_loaded(self):
@@ -279,6 +291,7 @@ class Processor:
             'require_stringify': bool(self.REQUIRE_STRINGIFY),
             'formatted_meta_path': str(self._formatted_paths()['meta']),
             'formatted_version': formatted_meta.get('version'),
+            'provides_test_set': bool(self.provides_test_set),
         }
         paths['meta'].write_text(json.dumps(meta, indent=2) + '\n')
 
@@ -320,7 +333,17 @@ class Processor:
         users_order = self._load_user_order()
         iterator = self._iterator(users_order, self.users)
 
-        if self.test_set_required:
+        if self.provides_test_set:
+            if self.valid_set_required:
+                self.valid_set = self._split(iterator, self.num_test)
+                self.valid_set.reset_index(drop=True, inplace=True)
+                self.valid_set.to_parquet(paths['valid'], index=False)
+                pnt(f'generated valid set with {len(self.valid_set)}/{self.num_test} samples from train users')
+            if self.test_set_required:
+                self.test_set = self.formatted_test_set.reset_index(drop=True)
+                self.test_set.to_parquet(paths['test'], index=False)
+                pnt(f'using formatter-provided official test set with {len(self.test_set)} samples')
+        elif self.test_set_required:
             raw_test_set = self._split(iterator, self.num_test)
             raw_test_set.reset_index(drop=True, inplace=True)
             self.valid_set, self.test_set = self._split_valid_from_test(raw_test_set)
