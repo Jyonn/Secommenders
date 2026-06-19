@@ -266,6 +266,8 @@ class Processor:
             if dataframe is None:
                 continue
             dataframe[self.HIS_COL].apply(lambda x: [item_set.add(i) for i in x])
+            if 'answer_pids' in dataframe.columns:
+                dataframe['answer_pids'].apply(lambda x: [item_set.add(i) for i in x])
         return item_set
 
     def _build_processed_items(self):

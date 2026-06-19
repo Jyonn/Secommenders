@@ -1045,6 +1045,7 @@ class Compiler:
                 self.processor.UID_COL,
                 'history_uids',
                 'target_uid',
+                'answer_uids',
                 'history_item_count',
                 'total_input_length',
                 'target_pos',
@@ -1098,9 +1099,25 @@ class Compiler:
                         total_input_length=total_input_length,
                     )
             else:
-                target_pos = len(sequence) - 1
-                prefix_uids = sequence[:target_pos]
-                target_uid = sequence[target_pos]
+                answer_uids = None
+                if split_name == 'test' and 'answer_pids' in row:
+                    answer_uids = [
+                        self.uid_item_map[item_id]
+                        for item_id in function.to_list(row['answer_pids'])
+                        if item_id in self.uid_item_map
+                    ]
+                    answer_uids = list(dict.fromkeys(answer_uids))
+                    if not answer_uids:
+                        invalid_target_count += 1
+                        iterator.set_postfix(samples=len(rows), invalid=invalid_target_count, maxhist=resolved_maxitems)
+                        continue
+                    prefix_uids = sequence
+                    target_uid = int(answer_uids[0])
+                    target_pos = len(sequence)
+                else:
+                    target_pos = len(sequence) - 1
+                    prefix_uids = sequence[:target_pos]
+                    target_uid = sequence[target_pos]
                 history_uids, total_input_length = self._build_usable_history(prefix_uids, target_uid)
                 if not history_uids:
                     invalid_target_count += 1
@@ -1112,6 +1129,7 @@ class Compiler:
                         self.processor.UID_COL: row[self.processor.UID_COL],
                         'history_uids': history_uids,
                         'target_uid': int(target_uid),
+                        'answer_uids': answer_uids if answer_uids is not None else [int(target_uid)],
                         'history_item_count': int(len(history_uids)),
                         'total_input_length': int(total_input_length),
                         'target_pos': int(target_pos),
@@ -1122,7 +1140,7 @@ class Compiler:
                     self.sample_visuals[split_name] = self._render_sample_visual(
                         split_name=split_name,
                         user_id=row[self.processor.UID_COL],
-                        sequence=sequence,
+                        sequence=sequence + [int(target_uid)] if answer_uids is not None else sequence,
                         history_uids=history_uids,
                         target_uid=target_uid,
                         target_pos=target_pos,

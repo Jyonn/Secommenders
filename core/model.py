@@ -487,8 +487,7 @@ class SequentialRecModel(nn.Module):
                 ranked_items = self._decode_sid_beams_to_items(self._beam_search_sid_items(sample))
                 ranked_uids = [uid for uid, _, _ in ranked_items]
                 totals['beam_unique_items'] += float(len(ranked_uids))
-                target_uid = int(sample['target_uid'])
-                rank = ranked_uids.index(target_uid) + 1 if target_uid in ranked_uids else None
+                rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
                 if rank is not None:
                     totals['mrr'] += 1.0 / rank
                 for k in ks:
@@ -606,8 +605,9 @@ class SequentialRecModel(nn.Module):
                 ),
                 reverse=True,
             )
-            target_uid = int(sample['target_uid'])
-            rank = ranked_uids.index(target_uid) + 1
+            rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
+            if rank is None:
+                continue
             totals['mrr'] += 1.0 / rank
             for k in ks:
                 if rank <= k:
@@ -616,26 +616,59 @@ class SequentialRecModel(nn.Module):
 
         return {key: value / max(batch_size, 1) for key, value in totals.items()}
 
-    def _compute_ranking_metrics_from_logits(self, logits: torch.Tensor, target_indices: torch.Tensor):
+    def _compute_ranking_metrics_from_logits(self, logits: torch.Tensor, target_indices: torch.Tensor, batch=None):
         ks = self.ranking_ks()
         totals = {f'hr@{k}': 0.0 for k in ks}
         totals.update({f'ndcg@{k}': 0.0 for k in ks})
         totals['mrr'] = 0.0
 
         ranking = torch.argsort(logits.float(), dim=-1, descending=True)
-        targets = target_indices.view(-1, 1)
-        match_positions = (ranking == targets).nonzero(as_tuple=False)
-        if match_positions.shape[0] != logits.shape[0]:
-            raise RuntimeError('failed to recover target rank from logits')
-        ranks = match_positions[:, 1] + 1
+        if batch is None:
+            targets = target_indices.view(-1, 1)
+            match_positions = (ranking == targets).nonzero(as_tuple=False)
+            if match_positions.shape[0] != logits.shape[0]:
+                raise RuntimeError('failed to recover target rank from logits')
+            ranks = match_positions[:, 1] + 1
 
-        for k in ks:
-            hits = (ranks <= k).float()
-            totals[f'hr@{k}'] = float(hits.mean().item())
-            ndcg = hits / torch.log2(ranks.float() + 1)
-            totals[f'ndcg@{k}'] = float(ndcg.mean().item())
-        totals['mrr'] = float((1.0 / ranks.float()).mean().item())
+            for k in ks:
+                hits = (ranks <= k).float()
+                totals[f'hr@{k}'] = float(hits.mean().item())
+                ndcg = hits / torch.log2(ranks.float() + 1)
+                totals[f'ndcg@{k}'] = float(ndcg.mean().item())
+            totals['mrr'] = float((1.0 / ranks.float()).mean().item())
+            return totals
+
+        for batch_index, sample in enumerate(batch):
+            ranked_uids = [int(uid) for uid in ranking[batch_index].tolist()]
+            rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
+            if rank is None:
+                continue
+            totals['mrr'] += 1.0 / rank
+            for k in ks:
+                if rank <= k:
+                    totals[f'hr@{k}'] += 1.0
+                    totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+
+        batch_size = max(len(batch), 1)
+        for key in totals:
+            totals[key] /= batch_size
         return totals
+
+    @staticmethod
+    def _sample_target_uids(sample):
+        answer_uids = sample.get('answer_uids') or []
+        if answer_uids:
+            return [int(uid) for uid in answer_uids]
+        return [int(sample['target_uid'])]
+
+    def _best_rank_from_ranked_uids(self, ranked_uids, sample):
+        candidate_set = set(self._sample_target_uids(sample))
+        best_rank = None
+        for index, uid in enumerate(ranked_uids, start=1):
+            if int(uid) in candidate_set:
+                best_rank = index
+                break
+        return best_rank
 
     def _target_token_values(self, target_uid: int):
         if self.config.task_type == 'embedding':
@@ -936,8 +969,7 @@ class SequentialRecModel(nn.Module):
                 item_uid
                 for item_uid, _ in sorted(candidate_scores.items(), key=lambda item: item[1], reverse=True)
             ]
-            target_uid = int(sample['target_uid'])
-            rank = ranked_uids.index(target_uid) + 1 if target_uid in ranked_uids else None
+            rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
             if rank is not None:
                 totals['mrr'] += 1.0 / rank
             for k in ks:
@@ -1039,8 +1071,9 @@ class SequentialRecModel(nn.Module):
                 ),
                 reverse=True,
             )
-            target_uid = int(sample['target_uid'])
-            rank = ranked_uids.index(target_uid) + 1
+            rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
+            if rank is None:
+                continue
             totals['mrr'] += 1.0 / rank
             for k in ks:
                 if rank <= k:
@@ -1145,7 +1178,7 @@ class SequentialRecModel(nn.Module):
                 loss, metrics = self._compute_uid_loss(pooled, batch)
                 labels = torch.tensor([sample['target_uid'] for sample in batch], dtype=torch.long, device=self.device)
                 logits = self._uid_logits(pooled)
-                metrics.update(self._compute_ranking_metrics_from_logits(logits, labels))
+                metrics.update(self._compute_ranking_metrics_from_logits(logits, labels, batch=batch))
             return loss, metrics
         if self.config.task_type == 'sid':
             if self._sid_decoding_mode() == 'parallel':
@@ -1169,7 +1202,7 @@ class SequentialRecModel(nn.Module):
         norm_predictions = F.normalize(predictions.float(), dim=-1)
         norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
         logits = norm_predictions @ norm_table.T
-        metrics.update(self._compute_ranking_metrics_from_logits(logits, target_indices))
+        metrics.update(self._compute_ranking_metrics_from_logits(logits, target_indices, batch=batch))
         return loss, metrics
 
     def forward_finetune_batch(self, batch):

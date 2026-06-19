@@ -131,6 +131,8 @@ class BaseFormatter(abc.ABC):
         )
 
     def _finalize_users(self, users: pd.DataFrame):
+        core_columns = [self.UID_COL, self.HIS_COL]
+        extra_columns = [column for column in users.columns if column not in core_columns]
         users = users.dropna(subset=[self.UID_COL, self.HIS_COL]).reset_index(drop=True)
         users = users[users[self.HIS_COL].map(self._has_non_empty_history)].reset_index(drop=True)
 
@@ -148,17 +150,28 @@ class BaseFormatter(abc.ABC):
                 f'formatter {self.get_name()} still has {remaining_duplicates} duplicate users '
                 f'after deduplication'
             )
-        return users[[self.UID_COL, self.HIS_COL]].reset_index(drop=True)
+        return users[core_columns + extra_columns].reset_index(drop=True)
 
     def load(self):
         paths = self._paths()
         items_path = paths['items']
         users_path = paths['users']
         test_users_path = paths['test_users']
+        meta_path = paths['meta']
         cache_updated = False
+        cache_meta_valid = False
+        if meta_path.exists():
+            try:
+                cached_meta = json.loads(meta_path.read_text())
+                cache_meta_valid = (
+                    cached_meta.get('version') == self.VER
+                    and bool(cached_meta.get('provides_test_set', False)) == bool(self.PROVIDES_TEST_SET)
+                )
+            except json.JSONDecodeError:
+                cache_meta_valid = False
 
         test_cache_ready = (not self.PROVIDES_TEST_SET) or test_users_path.exists()
-        if items_path.exists() and users_path.exists() and test_cache_ready:
+        if items_path.exists() and users_path.exists() and test_cache_ready and cache_meta_valid:
             pnt(f'loading formatted {self.get_name()} from cache')
             raw_items = pd.read_parquet(items_path)
             raw_users = pd.read_parquet(users_path)

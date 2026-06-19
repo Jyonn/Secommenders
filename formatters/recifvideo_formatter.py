@@ -232,53 +232,62 @@ class RecIFVideoXLargeFormatter(RecIFVideoFormatter):
 
 
 class RecIFVideoXLargeAlignFormatter(RecIFVideoXLargeFormatter):
+    VER = 'v1.1'
     PROVIDES_TEST_SET = True
 
     @staticmethod
-    def _normalize_target(value):
-        if isinstance(value, np.ndarray):
-            values = value.tolist()
-            return values[-1] if values else None
-        if isinstance(value, list):
-            return value[-1] if value else None
-        if isinstance(value, tuple):
-            return value[-1] if value else None
-        if value is None:
-            return None
-        if isinstance(value, float) and np.isnan(value):
-            return None
-        return value
+    def _parse_answer_pids(metadata_value):
+        if isinstance(metadata_value, str):
+            try:
+                metadata = json.loads(metadata_value)
+            except json.JSONDecodeError:
+                return []
+        elif isinstance(metadata_value, dict):
+            metadata = metadata_value
+        else:
+            return []
+
+        raw_answer = metadata.get('answer_pid')
+        if raw_answer is None:
+            raw_answer = metadata.get('answer_pids')
+        if isinstance(raw_answer, np.ndarray):
+            raw_answer = raw_answer.tolist()
+        if isinstance(raw_answer, tuple):
+            raw_answer = list(raw_answer)
+        if not isinstance(raw_answer, list):
+            return []
+        return [pid for pid in raw_answer if pid is not None]
 
     def load_test_users(self) -> pd.DataFrame:
         self._run_filter_pipeline()
         final_item_ids = set(cast(pd.DataFrame, self._filtered_items)[self.IID_COL].tolist())
         pnt(f'loading aligned RecIF video official test from {self.official_video_test_path}')
-        test_users = pd.read_parquet(
-            self.official_video_test_path,
-            columns=[self.UID_COL, 'hist_video_pid', 'target_video_pid'],
-        )
-        test_users = test_users.rename(columns={'hist_video_pid': self.HIS_COL})
-        test_users[self.HIS_COL] = test_users[self.HIS_COL].apply(self._normalize_history)
-        test_users['target_video_pid'] = test_users['target_video_pid'].apply(self._normalize_target)
+        test_users = pd.read_parquet(self.official_video_test_path, columns=['hist_pid', 'metadata'])
+        test_users[self.HIS_COL] = test_users['hist_pid'].apply(self._normalize_history)
+        test_users['answer_pids'] = test_users['metadata'].apply(self._parse_answer_pids)
+        test_users[self.UID_COL] = [f'official_test_{index}' for index in range(len(test_users))]
 
         aligned_histories = []
+        aligned_answers = []
         kept_uids = []
         iterator = zip(
             test_users[self.UID_COL].tolist(),
             test_users[self.HIS_COL].tolist(),
-            test_users['target_video_pid'].tolist(),
+            test_users['answer_pids'].tolist(),
         )
-        for uid, history, target in tqdm(iterator, total=len(test_users), desc='align-official-test'):
+        for uid, history, answer_pids in tqdm(iterator, total=len(test_users), desc='align-official-test'):
             filtered_history = [pid for pid in history if pid in final_item_ids]
-            if target in final_item_ids:
-                filtered_history.append(target)
+            filtered_answers = [pid for pid in answer_pids if pid in final_item_ids]
             if len(filtered_history) > self.max_length:
                 filtered_history = filtered_history[-self.max_length:]
-            if len(filtered_history) < self.min_length:
+            if len(filtered_history) < self.min_length or not filtered_answers:
                 continue
             kept_uids.append(uid)
             aligned_histories.append(filtered_history)
+            aligned_answers.append(filtered_answers)
 
-        official_test = pd.DataFrame({self.UID_COL: kept_uids, self.HIS_COL: aligned_histories})
+        official_test = pd.DataFrame(
+            {self.UID_COL: kept_uids, self.HIS_COL: aligned_histories, 'answer_pids': aligned_answers}
+        )
         pnt(f'aligned official test users kept={len(official_test)} from raw={len(test_users)}')
         return official_test
