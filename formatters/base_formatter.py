@@ -10,7 +10,7 @@ from utils.artifact import ArtifactStore
 
 
 class BaseFormatter(abc.ABC):
-    VER = 'v2.2'
+    VER = 'v2.3'
 
     IID_COL: str
     UID_COL: str
@@ -19,6 +19,7 @@ class BaseFormatter(abc.ABC):
     REQUIRE_STRINGIFY: bool
     PROVIDES_TEST_SET = False
     MULTI_ITEM_COL: Optional[str] = None
+    USER_ORDER_SOURCE_DATASET: Optional[str] = None
 
     def __init__(self, data_dir=None):
         self.data_dir = data_dir
@@ -88,6 +89,7 @@ class BaseFormatter(abc.ABC):
             'require_stringify': bool(self.REQUIRE_STRINGIFY),
             'provides_test_set': bool(self.PROVIDES_TEST_SET),
             'multi_item_col': self.MULTI_ITEM_COL,
+            'user_order_source_dataset': self.USER_ORDER_SOURCE_DATASET,
         }
         meta_path.write_text(json.dumps(meta, indent=2) + '\n')
 
@@ -169,6 +171,7 @@ class BaseFormatter(abc.ABC):
                     cached_meta.get('version') == self.VER
                     and bool(cached_meta.get('provides_test_set', False)) == bool(self.PROVIDES_TEST_SET)
                     and cached_meta.get('multi_item_col') == self.MULTI_ITEM_COL
+                    and cached_meta.get('user_order_source_dataset') == self.USER_ORDER_SOURCE_DATASET
                 )
             except json.JSONDecodeError:
                 cache_meta_valid = False

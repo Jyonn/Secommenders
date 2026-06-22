@@ -72,6 +72,7 @@ class RecIFVideoFormatter(BaseFormatter):
             'require_stringify': bool(self.REQUIRE_STRINGIFY),
             'provides_test_set': bool(self.PROVIDES_TEST_SET),
             'multi_item_col': self.MULTI_ITEM_COL,
+            'user_order_source_dataset': self.USER_ORDER_SOURCE_DATASET,
         }
         meta.update(
             {
@@ -129,13 +130,17 @@ class RecIFVideoFormatter(BaseFormatter):
                 filtered_histories.append(filtered)
         return pd.DataFrame({self.UID_COL: kept_uids, self.HIS_COL: filtered_histories})
 
+    def _tail_history(self, history: list):
+        if len(history) > self.max_length:
+            return history[-self.max_length:]
+        return history
+
     def _apply_length_constraints(self, users: pd.DataFrame, desc: str) -> pd.DataFrame:
         trimmed_histories = []
         kept_uids = []
         iterator = zip(users[self.UID_COL].tolist(), users[self.HIS_COL].tolist())
         for uid, history in tqdm(iterator, total=len(users), desc=desc):
-            if len(history) > self.max_length:
-                history = history[-self.max_length:]
+            history = self._tail_history(history)
             if len(history) < self.min_length:
                 continue
             kept_uids.append(uid)
@@ -236,6 +241,7 @@ class RecIFVideoXLargeAlignFormatter(BaseMultiTargetFormatter, RecIFVideoXLargeF
     VER = 'v1.2'
     PROVIDES_TEST_SET = True
     MULTI_ITEM_COL = 'answer_pids'
+    USER_ORDER_SOURCE_DATASET = 'recifvideoxlarge'
 
     @staticmethod
     def _parse_answer_pids(metadata_value):
@@ -280,8 +286,7 @@ class RecIFVideoXLargeAlignFormatter(BaseMultiTargetFormatter, RecIFVideoXLargeF
         for uid, history, answer_pids in tqdm(iterator, total=len(test_users), desc='align-official-test'):
             filtered_history = [pid for pid in history if pid in final_item_ids]
             filtered_answers = [pid for pid in answer_pids if pid in final_item_ids]
-            if len(filtered_history) > self.max_length:
-                filtered_history = filtered_history[-self.max_length:]
+            filtered_history = self._tail_history(filtered_history)
             if len(filtered_history) < self.min_length or not filtered_answers:
                 continue
             kept_uids.append(uid)

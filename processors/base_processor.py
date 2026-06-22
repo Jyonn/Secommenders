@@ -12,7 +12,7 @@ from utils.pipeline import ensure_formatted
 
 
 class Processor:
-    VER = 'v2.2'
+    VER = 'v2.3'
 
     NUM_TEST = 5_000
     NUM_FINETUNE = 40_000
@@ -36,6 +36,7 @@ class Processor:
         self._default_attrs = []
         self.provides_test_set = False
         self.multi_item_col: Optional[str] = None
+        self.user_order_source_dataset: Optional[str] = None
 
         self.items: Optional[pd.DataFrame] = None
         self.users: Optional[pd.DataFrame] = None
@@ -95,6 +96,7 @@ class Processor:
         self._default_attrs = list(meta.get('default_attrs', []))
         self.provides_test_set = bool(meta.get('provides_test_set', False))
         self.multi_item_col = meta.get('multi_item_col')
+        self.user_order_source_dataset = meta.get('user_order_source_dataset')
 
     def _load_formatted_meta(self):
         path = self._formatted_paths()['meta']
@@ -184,6 +186,17 @@ class Processor:
         path = self._paths()['user_order']
         if path.exists():
             return [line.strip() for line in path.read_text().splitlines() if line.strip()]
+
+        if self.user_order_source_dataset:
+            source_path = ArtifactStore(self.user_order_source_dataset).processed_dir() / 'user_order.txt'
+            if source_path.exists():
+                user_order = [line.strip() for line in source_path.read_text().splitlines() if line.strip()]
+                path.write_text(''.join(f'{user}\n' for user in user_order))
+                pnt(
+                    f'reused user order from {self.user_order_source_dataset} '
+                    f'for {self.get_name()} with {len(user_order)} users'
+                )
+                return user_order
 
         users = self.users[self.UID_COL].unique().tolist()
         random.shuffle(users)
@@ -301,6 +314,7 @@ class Processor:
             'formatted_version': formatted_meta.get('version'),
             'provides_test_set': bool(self.provides_test_set),
             'multi_item_col': self.multi_item_col,
+            'user_order_source_dataset': self.user_order_source_dataset,
         }
         paths['meta'].write_text(json.dumps(meta, indent=2) + '\n')
 
