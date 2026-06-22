@@ -39,7 +39,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v2.7'
+    VER = 'v2.8'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'hash', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'hash', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -1045,7 +1045,7 @@ class Compiler:
                 self.processor.UID_COL,
                 'history_uids',
                 'target_uid',
-                'answer_uids',
+                'ground_truth_uids',
                 'history_item_count',
                 'total_input_length',
                 'target_pos',
@@ -1099,20 +1099,24 @@ class Compiler:
                         total_input_length=total_input_length,
                     )
             else:
-                answer_uids = None
-                if split_name == 'test' and 'answer_pids' in row:
-                    answer_uids = [
+                ground_truth_uids = None
+                if (
+                    split_name == 'test'
+                    and self.processor.multi_item_col
+                    and self.processor.multi_item_col in row
+                ):
+                    ground_truth_uids = [
                         self.uid_item_map[item_id]
-                        for item_id in function.to_list(row['answer_pids'])
+                        for item_id in function.to_list(row[self.processor.multi_item_col])
                         if item_id in self.uid_item_map
                     ]
-                    answer_uids = list(dict.fromkeys(answer_uids))
-                    if not answer_uids:
+                    ground_truth_uids = list(dict.fromkeys(ground_truth_uids))
+                    if not ground_truth_uids:
                         invalid_target_count += 1
                         iterator.set_postfix(samples=len(rows), invalid=invalid_target_count, maxhist=resolved_maxitems)
                         continue
                     prefix_uids = sequence
-                    target_uid = int(answer_uids[0])
+                    target_uid = int(ground_truth_uids[0])
                     target_pos = len(sequence)
                 else:
                     target_pos = len(sequence) - 1
@@ -1129,7 +1133,7 @@ class Compiler:
                         self.processor.UID_COL: row[self.processor.UID_COL],
                         'history_uids': history_uids,
                         'target_uid': int(target_uid),
-                        'answer_uids': answer_uids if answer_uids is not None else [int(target_uid)],
+                        'ground_truth_uids': ground_truth_uids if ground_truth_uids is not None else [int(target_uid)],
                         'history_item_count': int(len(history_uids)),
                         'total_input_length': int(total_input_length),
                         'target_pos': int(target_pos),
@@ -1140,7 +1144,7 @@ class Compiler:
                     self.sample_visuals[split_name] = self._render_sample_visual(
                         split_name=split_name,
                         user_id=row[self.processor.UID_COL],
-                        sequence=sequence + [int(target_uid)] if answer_uids is not None else sequence,
+                        sequence=sequence + [int(target_uid)] if ground_truth_uids is not None else sequence,
                         history_uids=history_uids,
                         target_uid=target_uid,
                         target_pos=target_pos,

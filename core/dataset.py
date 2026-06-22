@@ -13,7 +13,9 @@ class CompiledTestSampleDataset(Dataset):
                     'uid': row['uid'],
                     'history_uids': [int(value) for value in function.to_list(row['history_uids'])],
                     'target_uid': int(row['target_uid']),
-                    'answer_uids': [int(value) for value in function.to_list(row.get('answer_uids', [row['target_uid']]))],
+                    'ground_truth_uids': [
+                        int(value) for value in function.to_list(row.get('ground_truth_uids', [row['target_uid']]))
+                    ],
                     'history_item_count': int(row['history_item_count']),
                     'total_input_length': int(row['total_input_length']),
                     'target_pos': int(row['target_pos']),

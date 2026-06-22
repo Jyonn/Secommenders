@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 from pigmento import pnt
 from tqdm import tqdm
 
-from formatters.base_formatter import BaseFormatter
+from formatters.base_formatter import BaseFormatter, BaseMultiTargetFormatter
 
 
 class RecIFVideoFormatter(BaseFormatter):
@@ -71,6 +71,7 @@ class RecIFVideoFormatter(BaseFormatter):
             'default_attrs': list(self.default_attrs),
             'require_stringify': bool(self.REQUIRE_STRINGIFY),
             'provides_test_set': bool(self.PROVIDES_TEST_SET),
+            'multi_item_col': self.MULTI_ITEM_COL,
         }
         meta.update(
             {
@@ -231,9 +232,10 @@ class RecIFVideoXLargeFormatter(RecIFVideoFormatter):
     DEFAULT_MAX_LENGTH = 50
 
 
-class RecIFVideoXLargeAlignFormatter(RecIFVideoXLargeFormatter):
-    VER = 'v1.1'
+class RecIFVideoXLargeAlignFormatter(BaseMultiTargetFormatter, RecIFVideoXLargeFormatter):
+    VER = 'v1.2'
     PROVIDES_TEST_SET = True
+    MULTI_ITEM_COL = 'answer_pids'
 
     @staticmethod
     def _parse_answer_pids(metadata_value):
@@ -264,7 +266,7 @@ class RecIFVideoXLargeAlignFormatter(RecIFVideoXLargeFormatter):
         pnt(f'loading aligned RecIF video official test from {self.official_video_test_path}')
         test_users = pd.read_parquet(self.official_video_test_path, columns=['hist_pid', 'metadata'])
         test_users[self.HIS_COL] = test_users['hist_pid'].apply(self._normalize_history)
-        test_users['answer_pids'] = test_users['metadata'].apply(self._parse_answer_pids)
+        test_users[self.MULTI_ITEM_COL] = test_users['metadata'].apply(self._parse_answer_pids)
         test_users[self.UID_COL] = [f'official_test_{index}' for index in range(len(test_users))]
 
         aligned_histories = []
@@ -273,7 +275,7 @@ class RecIFVideoXLargeAlignFormatter(RecIFVideoXLargeFormatter):
         iterator = zip(
             test_users[self.UID_COL].tolist(),
             test_users[self.HIS_COL].tolist(),
-            test_users['answer_pids'].tolist(),
+            test_users[self.MULTI_ITEM_COL].tolist(),
         )
         for uid, history, answer_pids in tqdm(iterator, total=len(test_users), desc='align-official-test'):
             filtered_history = [pid for pid in history if pid in final_item_ids]
@@ -287,7 +289,7 @@ class RecIFVideoXLargeAlignFormatter(RecIFVideoXLargeFormatter):
             aligned_answers.append(filtered_answers)
 
         official_test = pd.DataFrame(
-            {self.UID_COL: kept_uids, self.HIS_COL: aligned_histories, 'answer_pids': aligned_answers}
+            {self.UID_COL: kept_uids, self.HIS_COL: aligned_histories, self.MULTI_ITEM_COL: aligned_answers}
         )
         pnt(f'aligned official test users kept={len(official_test)} from raw={len(test_users)}')
         return official_test

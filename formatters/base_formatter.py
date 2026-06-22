@@ -10,7 +10,7 @@ from utils.artifact import ArtifactStore
 
 
 class BaseFormatter(abc.ABC):
-    VER = 'v2.1'
+    VER = 'v2.2'
 
     IID_COL: str
     UID_COL: str
@@ -18,6 +18,7 @@ class BaseFormatter(abc.ABC):
 
     REQUIRE_STRINGIFY: bool
     PROVIDES_TEST_SET = False
+    MULTI_ITEM_COL: Optional[str] = None
 
     def __init__(self, data_dir=None):
         self.data_dir = data_dir
@@ -86,6 +87,7 @@ class BaseFormatter(abc.ABC):
             'default_attrs': list(self.default_attrs),
             'require_stringify': bool(self.REQUIRE_STRINGIFY),
             'provides_test_set': bool(self.PROVIDES_TEST_SET),
+            'multi_item_col': self.MULTI_ITEM_COL,
         }
         meta_path.write_text(json.dumps(meta, indent=2) + '\n')
 
@@ -166,6 +168,7 @@ class BaseFormatter(abc.ABC):
                 cache_meta_valid = (
                     cached_meta.get('version') == self.VER
                     and bool(cached_meta.get('provides_test_set', False)) == bool(self.PROVIDES_TEST_SET)
+                    and cached_meta.get('multi_item_col') == self.MULTI_ITEM_COL
                 )
             except json.JSONDecodeError:
                 cache_meta_valid = False
@@ -205,6 +208,10 @@ class BaseFormatter(abc.ABC):
             self.test_users = self._stringify(self.test_users)
             if self.REQUIRE_STRINGIFY:
                 self.test_users[self.HIS_COL] = self.test_users[self.HIS_COL].apply(lambda x: [str(item) for item in x])
+                if self.MULTI_ITEM_COL and self.MULTI_ITEM_COL in self.test_users.columns:
+                    self.test_users[self.MULTI_ITEM_COL] = self.test_users[self.MULTI_ITEM_COL].apply(
+                        lambda x: [str(item) for item in x]
+                    )
 
         if cache_updated:
             pnt(f'writing normalized formatted cache for {self.get_name()}')
@@ -232,3 +239,7 @@ class BaseFormatter(abc.ABC):
         if len(item_attrs) == 1:
             return item[item_attrs[0]]
         return ', '.join([f'{attr}: {item[attr]}' for attr in item_attrs])
+
+
+class BaseMultiTargetFormatter(BaseFormatter, abc.ABC):
+    MULTI_ITEM_COL: str

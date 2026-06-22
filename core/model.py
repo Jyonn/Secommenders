@@ -477,9 +477,7 @@ class SequentialRecModel(nn.Module):
 
     def _compute_sid_ranking_metrics(self, batch):
         ks = self.ranking_ks()
-        totals = {f'hr@{k}': 0.0 for k in ks}
-        totals.update({f'ndcg@{k}': 0.0 for k in ks})
-        totals['mrr'] = 0.0
+        totals = self._init_ranking_totals(ks)
         totals['beam_unique_items'] = 0.0
 
         with torch.no_grad():
@@ -487,13 +485,7 @@ class SequentialRecModel(nn.Module):
                 ranked_items = self._decode_sid_beams_to_items(self._beam_search_sid_items(sample))
                 ranked_uids = [uid for uid, _, _ in ranked_items]
                 totals['beam_unique_items'] += float(len(ranked_uids))
-                rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
-                if rank is not None:
-                    totals['mrr'] += 1.0 / rank
-                for k in ks:
-                    if rank is not None and rank <= k:
-                        totals[f'hr@{k}'] += 1.0
-                        totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+                self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
 
         batch_size = max(len(batch), 1)
         return {key: value / batch_size for key, value in totals.items()}
@@ -590,9 +582,7 @@ class SequentialRecModel(nn.Module):
                 collision_scores = collision_scores + slot_scores
 
         ks = self.ranking_ks()
-        totals = {f'hr@{k}': 0.0 for k in ks}
-        totals.update({f'ndcg@{k}': 0.0 for k in ks})
-        totals['mrr'] = 0.0
+        totals = self._init_ranking_totals(ks)
 
         semantic_scores_cpu = semantic_scores.detach().cpu()
         collision_scores_cpu = collision_scores.detach().cpu()
@@ -605,22 +595,13 @@ class SequentialRecModel(nn.Module):
                 ),
                 reverse=True,
             )
-            rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
-            if rank is None:
-                continue
-            totals['mrr'] += 1.0 / rank
-            for k in ks:
-                if rank <= k:
-                    totals[f'hr@{k}'] += 1.0
-                    totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+            self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
 
         return {key: value / max(batch_size, 1) for key, value in totals.items()}
 
     def _compute_ranking_metrics_from_logits(self, logits: torch.Tensor, target_indices: torch.Tensor, batch=None):
         ks = self.ranking_ks()
-        totals = {f'hr@{k}': 0.0 for k in ks}
-        totals.update({f'ndcg@{k}': 0.0 for k in ks})
-        totals['mrr'] = 0.0
+        totals = self._init_ranking_totals(ks)
 
         ranking = torch.argsort(logits.float(), dim=-1, descending=True)
         if batch is None:
@@ -633,6 +614,8 @@ class SequentialRecModel(nn.Module):
             for k in ks:
                 hits = (ranks <= k).float()
                 totals[f'hr@{k}'] = float(hits.mean().item())
+                totals[f'pass@{k}'] = totals[f'hr@{k}']
+                totals[f'recall@{k}'] = totals[f'hr@{k}']
                 ndcg = hits / torch.log2(ranks.float() + 1)
                 totals[f'ndcg@{k}'] = float(ndcg.mean().item())
             totals['mrr'] = float((1.0 / ranks.float()).mean().item())
@@ -640,14 +623,7 @@ class SequentialRecModel(nn.Module):
 
         for batch_index, sample in enumerate(batch):
             ranked_uids = [int(uid) for uid in ranking[batch_index].tolist()]
-            rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
-            if rank is None:
-                continue
-            totals['mrr'] += 1.0 / rank
-            for k in ks:
-                if rank <= k:
-                    totals[f'hr@{k}'] += 1.0
-                    totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+            self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
 
         batch_size = max(len(batch), 1)
         for key in totals:
@@ -655,20 +631,47 @@ class SequentialRecModel(nn.Module):
         return totals
 
     @staticmethod
-    def _sample_target_uids(sample):
-        answer_uids = sample.get('answer_uids') or []
-        if answer_uids:
-            return [int(uid) for uid in answer_uids]
+    def _sample_ground_truth_uids(sample):
+        ground_truth_uids = sample.get('ground_truth_uids') or []
+        if ground_truth_uids:
+            return [int(uid) for uid in ground_truth_uids]
         return [int(sample['target_uid'])]
 
-    def _best_rank_from_ranked_uids(self, ranked_uids, sample):
-        candidate_set = set(self._sample_target_uids(sample))
-        best_rank = None
+    @staticmethod
+    def _init_ranking_totals(ks):
+        totals = {f'hr@{k}': 0.0 for k in ks}
+        totals.update({f'pass@{k}': 0.0 for k in ks})
+        totals.update({f'recall@{k}': 0.0 for k in ks})
+        totals.update({f'ndcg@{k}': 0.0 for k in ks})
+        totals['mrr'] = 0.0
+        return totals
+
+    def _accumulate_ranking_metrics(self, totals, ks, ranked_uids, sample):
+        candidate_uids = list(dict.fromkeys(self._sample_ground_truth_uids(sample)))
+        if not candidate_uids:
+            return
+
+        rank_by_uid = {}
         for index, uid in enumerate(ranked_uids, start=1):
-            if int(uid) in candidate_set:
-                best_rank = index
-                break
-        return best_rank
+            uid = int(uid)
+            if uid not in rank_by_uid:
+                rank_by_uid[uid] = index
+
+        matched_ranks = sorted(rank_by_uid[uid] for uid in candidate_uids if uid in rank_by_uid)
+        if matched_ranks:
+            totals['mrr'] += 1.0 / matched_ranks[0]
+
+        for k in ks:
+            hit_count = sum(rank <= k for rank in matched_ranks)
+            hit_ratio = 1.0 if hit_count > 0 else 0.0
+            totals[f'hr@{k}'] += hit_ratio
+            totals[f'pass@{k}'] += hit_ratio
+            totals[f'recall@{k}'] += hit_count / len(candidate_uids)
+            if hit_count > 0:
+                dcg = sum(1.0 / math.log2(rank + 1) for rank in matched_ranks if rank <= k)
+                ideal_hits = min(len(candidate_uids), k)
+                idcg = sum(1.0 / math.log2(position + 1) for position in range(1, ideal_hits + 1))
+                totals[f'ndcg@{k}'] += dcg / idcg if idcg > 0 else 0.0
 
     def _target_token_values(self, target_uid: int):
         if self.config.task_type == 'embedding':
@@ -937,9 +940,7 @@ class SequentialRecModel(nn.Module):
             raise ValueError('hierarchical uid ranking requested without uid hierarchy artifacts')
 
         ks = self.ranking_ks()
-        totals = {f'hr@{k}': 0.0 for k in ks}
-        totals.update({f'ndcg@{k}': 0.0 for k in ks})
-        totals['mrr'] = 0.0
+        totals = self._init_ranking_totals(ks)
 
         for batch_index, sample in enumerate(batch):
             hidden = pooled[batch_index:batch_index + 1]
@@ -969,13 +970,7 @@ class SequentialRecModel(nn.Module):
                 item_uid
                 for item_uid, _ in sorted(candidate_scores.items(), key=lambda item: item[1], reverse=True)
             ]
-            rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
-            if rank is not None:
-                totals['mrr'] += 1.0 / rank
-            for k in ks:
-                if rank is not None and rank <= k:
-                    totals[f'hr@{k}'] += 1.0
-                    totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+            self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
 
         batch_size = max(len(batch), 1)
         return {key: value / batch_size for key, value in totals.items()}
@@ -1056,9 +1051,7 @@ class SequentialRecModel(nn.Module):
                 collision_scores = collision_scores + slot_scores
 
         ks = self.ranking_ks()
-        totals = {f'hr@{k}': 0.0 for k in ks}
-        totals.update({f'ndcg@{k}': 0.0 for k in ks})
-        totals['mrr'] = 0.0
+        totals = self._init_ranking_totals(ks)
 
         semantic_scores_cpu = semantic_scores.detach().cpu()
         collision_scores_cpu = collision_scores.detach().cpu()
@@ -1071,14 +1064,7 @@ class SequentialRecModel(nn.Module):
                 ),
                 reverse=True,
             )
-            rank = self._best_rank_from_ranked_uids(ranked_uids, sample)
-            if rank is None:
-                continue
-            totals['mrr'] += 1.0 / rank
-            for k in ks:
-                if rank <= k:
-                    totals[f'hr@{k}'] += 1.0
-                    totals[f'ndcg@{k}'] += 1.0 / math.log2(rank + 1)
+            self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
 
         return {key: value / max(batch_size, 1) for key, value in totals.items()}
 

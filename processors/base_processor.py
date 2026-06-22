@@ -12,7 +12,7 @@ from utils.pipeline import ensure_formatted
 
 
 class Processor:
-    VER = 'v2.1'
+    VER = 'v2.2'
 
     NUM_TEST = 5_000
     NUM_FINETUNE = 40_000
@@ -35,6 +35,7 @@ class Processor:
         self.REQUIRE_STRINGIFY: Optional[bool] = None
         self._default_attrs = []
         self.provides_test_set = False
+        self.multi_item_col: Optional[str] = None
 
         self.items: Optional[pd.DataFrame] = None
         self.users: Optional[pd.DataFrame] = None
@@ -93,6 +94,7 @@ class Processor:
         self.REQUIRE_STRINGIFY = bool(meta.get('require_stringify', False))
         self._default_attrs = list(meta.get('default_attrs', []))
         self.provides_test_set = bool(meta.get('provides_test_set', False))
+        self.multi_item_col = meta.get('multi_item_col')
 
     def _load_formatted_meta(self):
         path = self._formatted_paths()['meta']
@@ -250,6 +252,10 @@ class Processor:
                 self.formatted_test_set[self.HIS_COL] = self.formatted_test_set[self.HIS_COL].apply(
                     lambda x: [str(item) for item in x]
                 )
+                if self.multi_item_col and self.multi_item_col in self.formatted_test_set.columns:
+                    self.formatted_test_set[self.multi_item_col] = self.formatted_test_set[self.multi_item_col].apply(
+                        lambda x: [str(item) for item in x]
+                    )
         return meta
 
     def _ensure_original_users_loaded(self):
@@ -266,8 +272,8 @@ class Processor:
             if dataframe is None:
                 continue
             dataframe[self.HIS_COL].apply(lambda x: [item_set.add(i) for i in x])
-            if 'answer_pids' in dataframe.columns:
-                dataframe['answer_pids'].apply(lambda x: [item_set.add(i) for i in x])
+            if self.multi_item_col and self.multi_item_col in dataframe.columns:
+                dataframe[self.multi_item_col].apply(lambda x: [item_set.add(i) for i in x])
         return item_set
 
     def _build_processed_items(self):
@@ -294,6 +300,7 @@ class Processor:
             'formatted_meta_path': str(self._formatted_paths()['meta']),
             'formatted_version': formatted_meta.get('version'),
             'provides_test_set': bool(self.provides_test_set),
+            'multi_item_col': self.multi_item_col,
         }
         paths['meta'].write_text(json.dumps(meta, indent=2) + '\n')
 
