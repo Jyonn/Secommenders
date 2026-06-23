@@ -236,5 +236,17 @@ class RecIFVideoXLargeFormatter(RecIFVideoFormatter):
     DEFAULT_N_CORE = 3
     DEFAULT_MIN_LENGTH = 5
     DEFAULT_MAX_LENGTH = 50
+
+
+class RecIFVideoAllFormatter(RecIFVideoFormatter):
+    USE_ALL_USERS_IN_PROCESSOR = True
+    SPLIT_RATIO = 0.9
+
+
+class RecIFVideoLargeAllFormatter(RecIFVideoLargeFormatter):
+    USE_ALL_USERS_IN_PROCESSOR = True
+    SPLIT_RATIO = 0.9
+
+class RecIFVideoXLargeAllFormatter(RecIFVideoXLargeFormatter):
     USE_ALL_USERS_IN_PROCESSOR = True
     SPLIT_RATIO = 0.9
