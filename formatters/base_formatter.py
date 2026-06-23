@@ -10,7 +10,7 @@ from utils.artifact import ArtifactStore
 
 
 class BaseFormatter(abc.ABC):
-    VER = 'v2.3'
+    VER = 'v2.4'
 
     IID_COL: str
     UID_COL: str
@@ -19,7 +19,8 @@ class BaseFormatter(abc.ABC):
     REQUIRE_STRINGIFY: bool
     PROVIDES_TEST_SET = False
     MULTI_ITEM_COL: Optional[str] = None
-    USER_ORDER_SOURCE_DATASET: Optional[str] = None
+    USE_ALL_USERS_IN_PROCESSOR = False
+    SPLIT_RATIO = 0.9
 
     def __init__(self, data_dir=None):
         self.data_dir = data_dir
@@ -89,7 +90,8 @@ class BaseFormatter(abc.ABC):
             'require_stringify': bool(self.REQUIRE_STRINGIFY),
             'provides_test_set': bool(self.PROVIDES_TEST_SET),
             'multi_item_col': self.MULTI_ITEM_COL,
-            'user_order_source_dataset': self.USER_ORDER_SOURCE_DATASET,
+            'use_all_users_in_processor': bool(self.USE_ALL_USERS_IN_PROCESSOR),
+            'split_ratio': float(self.SPLIT_RATIO),
         }
         meta_path.write_text(json.dumps(meta, indent=2) + '\n')
 
@@ -171,7 +173,9 @@ class BaseFormatter(abc.ABC):
                     cached_meta.get('version') == self.VER
                     and bool(cached_meta.get('provides_test_set', False)) == bool(self.PROVIDES_TEST_SET)
                     and cached_meta.get('multi_item_col') == self.MULTI_ITEM_COL
-                    and cached_meta.get('user_order_source_dataset') == self.USER_ORDER_SOURCE_DATASET
+                    and bool(cached_meta.get('use_all_users_in_processor', False))
+                    == bool(self.USE_ALL_USERS_IN_PROCESSOR)
+                    and float(cached_meta.get('split_ratio', -1.0)) == float(self.SPLIT_RATIO)
                 )
             except json.JSONDecodeError:
                 cache_meta_valid = False

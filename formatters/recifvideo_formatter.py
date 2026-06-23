@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 from pigmento import pnt
 from tqdm import tqdm
 
-from formatters.base_formatter import BaseFormatter, BaseMultiTargetFormatter
+from formatters.base_formatter import BaseFormatter
 
 
 class RecIFVideoFormatter(BaseFormatter):
@@ -72,7 +72,8 @@ class RecIFVideoFormatter(BaseFormatter):
             'require_stringify': bool(self.REQUIRE_STRINGIFY),
             'provides_test_set': bool(self.PROVIDES_TEST_SET),
             'multi_item_col': self.MULTI_ITEM_COL,
-            'user_order_source_dataset': self.USER_ORDER_SOURCE_DATASET,
+            'use_all_users_in_processor': bool(self.USE_ALL_USERS_IN_PROCESSOR),
+            'split_ratio': float(self.SPLIT_RATIO),
         }
         meta.update(
             {
@@ -235,66 +236,5 @@ class RecIFVideoXLargeFormatter(RecIFVideoFormatter):
     DEFAULT_N_CORE = 3
     DEFAULT_MIN_LENGTH = 5
     DEFAULT_MAX_LENGTH = 50
-
-
-class RecIFVideoXLargeAlignFormatter(BaseMultiTargetFormatter, RecIFVideoXLargeFormatter):
-    VER = 'v1.2'
-    PROVIDES_TEST_SET = True
-    MULTI_ITEM_COL = 'answer_pids'
-    USER_ORDER_SOURCE_DATASET = 'recifvideoxlarge'
-
-    @staticmethod
-    def _parse_answer_pids(metadata_value):
-        if isinstance(metadata_value, str):
-            try:
-                metadata = json.loads(metadata_value)
-            except json.JSONDecodeError:
-                return []
-        elif isinstance(metadata_value, dict):
-            metadata = metadata_value
-        else:
-            return []
-
-        raw_answer = metadata.get('answer_pid')
-        if raw_answer is None:
-            raw_answer = metadata.get('answer_pids')
-        if isinstance(raw_answer, np.ndarray):
-            raw_answer = raw_answer.tolist()
-        if isinstance(raw_answer, tuple):
-            raw_answer = list(raw_answer)
-        if not isinstance(raw_answer, list):
-            return []
-        return [pid for pid in raw_answer if pid is not None]
-
-    def load_test_users(self) -> pd.DataFrame:
-        self._run_filter_pipeline()
-        final_item_ids = set(cast(pd.DataFrame, self._filtered_items)[self.IID_COL].tolist())
-        pnt(f'loading aligned RecIF video official test from {self.official_video_test_path}')
-        test_users = pd.read_parquet(self.official_video_test_path, columns=['hist_pid', 'metadata'])
-        test_users[self.HIS_COL] = test_users['hist_pid'].apply(self._normalize_history)
-        test_users[self.MULTI_ITEM_COL] = test_users['metadata'].apply(self._parse_answer_pids)
-        test_users[self.UID_COL] = [f'official_test_{index}' for index in range(len(test_users))]
-
-        aligned_histories = []
-        aligned_answers = []
-        kept_uids = []
-        iterator = zip(
-            test_users[self.UID_COL].tolist(),
-            test_users[self.HIS_COL].tolist(),
-            test_users[self.MULTI_ITEM_COL].tolist(),
-        )
-        for uid, history, answer_pids in tqdm(iterator, total=len(test_users), desc='align-official-test'):
-            filtered_history = [pid for pid in history if pid in final_item_ids]
-            filtered_answers = [pid for pid in answer_pids if pid in final_item_ids]
-            filtered_history = self._tail_history(filtered_history)
-            if len(filtered_history) < self.min_length or not filtered_answers:
-                continue
-            kept_uids.append(uid)
-            aligned_histories.append(filtered_history)
-            aligned_answers.append(filtered_answers)
-
-        official_test = pd.DataFrame(
-            {self.UID_COL: kept_uids, self.HIS_COL: aligned_histories, self.MULTI_ITEM_COL: aligned_answers}
-        )
-        pnt(f'aligned official test users kept={len(official_test)} from raw={len(test_users)}')
-        return official_test
+    USE_ALL_USERS_IN_PROCESSOR = True
+    SPLIT_RATIO = 0.9
