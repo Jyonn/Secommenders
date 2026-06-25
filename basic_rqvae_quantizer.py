@@ -2,6 +2,7 @@ import importlib
 import json
 import random
 import sys
+import types
 from argparse import Namespace
 from pathlib import Path
 
@@ -51,10 +52,21 @@ def _import_basic_rqvae():
     if not configured_root.is_absolute():
         configured_root = (rqvae_file.parent / configured_root).resolve()
 
-    root = configured_root
-    if not root.exists():
+    candidates = [configured_root, configured_root / 'RQ-VAE']
+    root = None
+    for candidate in candidates:
+        if (
+            candidate.exists()
+            and (candidate / 'trainer.py').exists()
+            and (candidate / 'datasets.py').exists()
+            and (candidate / 'models' / 'rqvae.py').exists()
+        ):
+            root = candidate
+            break
+    if root is None:
         raise FileNotFoundError(
-            f'basic-rqvae source directory not found: {root}. '
+            'basic-rqvae source directory not found. '
+            f'Tried: {candidates}. '
             f'Configured by {rqvae_file} -> {raw_root}'
         )
 
@@ -62,6 +74,15 @@ def _import_basic_rqvae():
     for name in list(sys.modules):
         if name == 'utils' or name == 'datasets' or name == 'trainer' or name == 'structure' or name == 'models' or name.startswith('models.'):
             sys.modules.pop(name, None)
+
+    models_root = root / 'models'
+    models_package = types.ModuleType('models')
+    models_package.__path__ = [str(models_root)]
+    models_package.__package__ = 'models'
+    init_path = models_root / '__init__.py'
+    if init_path.exists():
+        models_package.__file__ = str(init_path)
+    sys.modules['models'] = models_package
 
     dataset_module = importlib.import_module('datasets')
     trainer_module = importlib.import_module('trainer')
