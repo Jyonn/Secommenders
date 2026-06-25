@@ -37,9 +37,28 @@ def _parse_list(value, cast, name: str):
 
 
 def _import_basic_rqvae():
-    root = Path(__file__).resolve().parent.parent / 'basic-rq-vae' / 'RQ-VAE'
+    rqvae_file = Path(__file__).resolve().parent / '.rqvae'
+    if not rqvae_file.exists():
+        raise FileNotFoundError(
+            f'basic-rqvae locator file not found: {rqvae_file}. '
+            'Please create .rqvae with the path to the basic-rqvae repository or its RQ-VAE subdirectory.'
+        )
+    raw_root = rqvae_file.read_text().strip()
+    if not raw_root:
+        raise ValueError(f'basic-rqvae locator file is empty: {rqvae_file}')
+
+    configured_root = Path(raw_root).expanduser()
+    if not configured_root.is_absolute():
+        configured_root = (rqvae_file.parent / configured_root).resolve()
+
+    root = configured_root
+    if root.name != 'RQ-VAE':
+        root = root / 'RQ-VAE'
     if not root.exists():
-        raise FileNotFoundError(f'basic-rq-vae source directory not found: {root}')
+        raise FileNotFoundError(
+            f'basic-rqvae source directory not found: {root}. '
+            f'Configured by {rqvae_file} -> {raw_root}'
+        )
 
     sys.path.insert(0, str(root))
     for name in list(sys.modules):
