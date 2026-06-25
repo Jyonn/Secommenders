@@ -283,6 +283,7 @@ class BasicRQVAEQuantizer:
         self.config = config
         self.rqvae_root = _resolve_basic_rqvae_root()
         self.python_executable = sys.executable
+        self.repo_root = Path(__file__).resolve().parent
 
         self.processor = load_processor(self.data)
         self.processor.load()
@@ -311,6 +312,11 @@ class BasicRQVAEQuantizer:
         self.device = self._resolve_device()
         self.embeddings = None
         self.item_ids = None
+
+    def _absolute(self, path: Path) -> Path:
+        if path.is_absolute():
+            return path
+        return (self.repo_root / path).resolve()
 
     def _resolve_device(self):
         device = getattr(self.config.trainer, 'device', None)
@@ -374,7 +380,7 @@ class BasicRQVAEQuantizer:
             'learner': str(self.config.trainer.learner),
             'lr_scheduler_type': str(self.config.trainer.lr_scheduler_type),
             'warmup_epochs': int(self.config.trainer.warmup_epochs),
-            'data_path': str(self.embedding_path),
+            'data_path': str(self._absolute(self.embedding_path)),
             'weight_decay': float(self.config.trainer.weight_decay),
             'dropout_prob': float(self.config.model.dropout_prob),
             'bn': bool(self.config.model.bn),
@@ -390,7 +396,7 @@ class BasicRQVAEQuantizer:
             'beta': float(self.config.model.beta),
             'layers': _parse_list(self.config.model.layers, int, 'model.layers'),
             'save_limit': int(self.config.trainer.save_limit),
-            'ckpt_dir': str(self.output_dir / 'checkpoints'),
+            'ckpt_dir': str(self._absolute(self.output_dir / 'checkpoints')),
             'seed': int(getattr(self.config.trainer, 'seed', 2024)),
         }
 
@@ -419,11 +425,11 @@ class BasicRQVAEQuantizer:
 
         result_path = self.output_dir / 'basic_rqvae_train_result.json'
         payload = {
-            'embedding_path': str(self.embedding_path),
+            'embedding_path': str(self._absolute(self.embedding_path)),
             'model_args': self._model_args(),
             'trainer_args': self._trainer_args(),
             'seed': int(getattr(self.config.trainer, 'seed', 2024)),
-            'result_path': str(result_path),
+            'result_path': str(self._absolute(result_path)),
         }
         self._run_external_python(EXTERNAL_TRAIN_CODE, payload, 'basic-rqvae-train')
         if not result_path.exists():
@@ -446,14 +452,14 @@ class BasicRQVAEQuantizer:
         payload = {
             'dataset': self.data,
             'embedding_model': self.embedding_model,
-            'embedding_path': str(self.embedding_path),
-            'embedding_meta_path': str(self.embedding_meta_path),
-            'item_ids_path': str(item_ids_path),
+            'embedding_path': str(self._absolute(self.embedding_path)),
+            'embedding_meta_path': str(self._absolute(self.embedding_meta_path)),
+            'item_ids_path': str(self._absolute(item_ids_path)),
             'item_col': self.processor.IID_COL,
-            'processed_items_path': str(self.store.processed_dir() / 'items.parquet'),
-            'trainer_output_dir': str(self.output_dir),
-            'export_dir': str(self.export_dir),
-            'checkpoint_path': str(checkpoint_path),
+            'processed_items_path': str(self._absolute(self.store.processed_dir() / 'items.parquet')),
+            'trainer_output_dir': str(self._absolute(self.output_dir)),
+            'export_dir': str(self._absolute(self.export_dir)),
+            'checkpoint_path': str(self._absolute(checkpoint_path)),
             'device': self.device,
             'model_args': self._model_args(),
             'trainer_args': self._trainer_args(),
