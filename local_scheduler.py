@@ -3,7 +3,7 @@ from pathlib import Path
 from utils import Schedule
 
 
-DATASETS = ['mind', 'recifvideo', 'recifvideolarge', 'recifvideoxlarge']
+DATASETS = ['mind', 'recifvideo', 'recifvideolarge', 'recifvideoxlarge', 'recifvideoxlargeall']
 LLM_MODELS = ['llama3', 'qwen35th9b', 'qwen35th4b', 'qwen35th08b']
 SCRATCH_MODELS = ['scratch']
 SOURCE_MODELS = ['llama3', 'qwen3embedding06b']
@@ -28,7 +28,7 @@ def build_basic_schedule(dataset: str):
         .grid(
             'basic_llm',
             datasets=[dataset],
-            models= ['llama3', 'qwen35th08b'],
+            models= ['qwen35th08b'],
             targets=['uid'],
             histories=LLM_HISTORIES,
             source_models=SOURCE_MODELS
@@ -36,7 +36,7 @@ def build_basic_schedule(dataset: str):
         .grid(
             'basic_llm',
             datasets=[dataset],
-            models=['llama3', 'qwen35th08b'],
+            models=['qwen35th08b'],
             targets=['sid'],
             histories=LLM_HISTORIES,
             source_models=['llama3']
@@ -82,5 +82,6 @@ def build_simple_schedule():
 
 
 if __name__ == '__main__':
-    build_simple_schedule()
-    build_basic_schedules()
+    # build_simple_schedule()
+    # build_basic_schedules()
+    build_basic_schedule('recifvideoxlargeall')

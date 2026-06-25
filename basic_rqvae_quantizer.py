@@ -52,8 +52,6 @@ def _import_basic_rqvae():
         configured_root = (rqvae_file.parent / configured_root).resolve()
 
     root = configured_root
-    if root.name != 'RQ-VAE':
-        root = root / 'RQ-VAE'
     if not root.exists():
         raise FileNotFoundError(
             f'basic-rqvae source directory not found: {root}. '
