@@ -139,7 +139,7 @@ model = RQVAE(
     sk_iters=model_args["sk_iters"],
     use_linear=model_args["use_linear"],
 )
-checkpoint = torch.load(cfg["checkpoint_path"], map_location=device)
+checkpoint = torch.load(cfg["checkpoint_path"], map_location=device, weights_only=False)
 model.load_state_dict(checkpoint["state_dict"])
 model = model.to(device)
 model.eval()
