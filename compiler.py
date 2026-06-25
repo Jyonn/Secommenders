@@ -43,7 +43,7 @@ class Compiler:
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'hash', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'hash', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
-    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae', 'opqvae', 'lsh', 'simhash', 'pcahash', 'itq')
+    SUPPORTED_QUANTIZERS = ('rqvae', 'pqvae', 'opqvae', 'basic-rqvae', 'lsh', 'simhash', 'pcahash', 'itq')
 
     def __init__(self, config: CompileConfig):
         self.config = config
@@ -624,6 +624,12 @@ class Compiler:
 
         export_ready = _export_ready(export_dir)
         if not export_ready:
+            if quantizer_name == 'basic-rqvae':
+                raise FileNotFoundError(
+                    'basic-rqvae export not found. '
+                    f'Expected: {export_dir}. '
+                    f'Please run `python basic_rqvae_quantizer.py --data {self.config.data} --model {model_name}` first.'
+                )
             ensure_quantized(self.config.data, model_name, quantizer_name)
             export_ready = _export_ready(export_dir)
         if not export_ready:
@@ -1256,7 +1262,7 @@ if __name__ == '__main__':
     parser.add_argument('--repr.type', dest='repr_type', default=None, help='Representation types, such as uid, text, or uid+text. Defaults to task.type.')
     parser.add_argument('--repr.source-model', dest='repr_source_model', default=None, help='External representation source model, such as bertbase.')
     parser.add_argument('--sid.export', dest='sid_export', default=None, help='Export tag for SID codes, such as coll.')
-    parser.add_argument('--sid.coder', dest='sid_coder', default=None, help='Coder name for SID exports, such as rqvae, pqvae, or opqvae.')
+    parser.add_argument('--sid.coder', dest='sid_coder', default=None, help='Coder name for SID exports, such as rqvae, pqvae, opqvae, or basic-rqvae.')
     parser.add_argument('--hash.coder', dest='hash_coder', default=None, help='Coder/indexer name for hash exports, such as lsh, simhash, pcahash, or itq.')
     parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
     parser.add_argument('--model.maxlen', dest='model_max_length', type=int, default=0, help='Optional override for backbone max length, e.g. 2048.')

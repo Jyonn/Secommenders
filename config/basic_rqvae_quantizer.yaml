@@ -1,0 +1,30 @@
+model:
+  num_emb_list: ${num_emb_list:256,256,256}$
+  e_dim: ${e_dim:32}$
+  layers: ${layers:2048,1024,512,256,128,64}$
+  dropout_prob: ${dropout_prob:0.0}$
+  bn: ${bn:false}$
+  loss_type: ${loss_type:mse}
+  quant_loss_weight: ${quant_loss_weight:1.0}$
+  beta: ${beta:0.25}$
+  kmeans_init: ${kmeans_init:true}$
+  kmeans_iters: ${kmeans_iters:100}$
+  sk_epsilons: ${sk_epsilons:0.0,0.0,0.003}$
+  sk_iters: ${sk_iters:50}$
+  use_linear: ${use_linear:0}$
+
+trainer:
+  output_dir: artifacts/quantized/${data}/${model}/basic-rqvae
+  lr: ${lr:0.001}$
+  epochs: ${epoch:5000}$
+  batch_size: ${batch_size:2048}$
+  num_workers: ${num_workers:4}$
+  eval_step: ${eval_step:50}$
+  learner: ${learner:AdamW}
+  lr_scheduler_type: ${lr_scheduler_type:constant}
+  warmup_epochs: ${warmup_epochs:50}$
+  weight_decay: ${weight_decay:0.0}$
+  save_limit: ${save_limit:5}$
+  device: ${device:auto}$
+  seed: ${seed:2024}$
+  load_ckpt: ${load_ckpt:null}
