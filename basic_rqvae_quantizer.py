@@ -19,6 +19,7 @@ from utils.pipeline import ensure_embedded
 
 EXTERNAL_TRAIN_CODE = r"""
 import json
+import logging
 import random
 import sys
 from argparse import Namespace
@@ -35,6 +36,8 @@ from trainer import Trainer
 config_path = Path(sys.argv[1])
 cfg = json.loads(config_path.read_text())
 
+logging.basicConfig(level=logging.INFO)
+
 seed = int(cfg["seed"])
 random.seed(seed)
 np.random.seed(seed)
@@ -46,6 +49,7 @@ torch.backends.cudnn.benchmark = False
 
 args = Namespace(**cfg["trainer_args"])
 data = EmbDataset(cfg["embedding_path"])
+print(f"[basic-rqvae-train] loading embeddings from {cfg['embedding_path']}", flush=True)
 model = RQVAE(
     in_dim=data.dim,
     num_emb_list=cfg["model_args"]["num_emb_list"],
@@ -68,6 +72,11 @@ dataloader = DataLoader(
     batch_size=int(args.batch_size),
     shuffle=True,
     pin_memory=str(args.device).startswith("cuda"),
+)
+print(
+    f"[basic-rqvae-train] start training items={len(data)} batch_size={args.batch_size} "
+    f"device={args.device} ckpt_dir={args.ckpt_dir}",
+    flush=True,
 )
 trainer = Trainer(args, model, len(dataloader))
 best_loss, best_collision_rate = trainer.fit(dataloader)
@@ -154,6 +163,7 @@ loader = DataLoader(
 
 codebook_indices = []
 quantized_latents = []
+print(f"[basic-rqvae-export] exporting {len(embeddings)} embeddings to {cfg['export_dir']}", flush=True)
 with torch.no_grad():
     for (batch,) in tqdm(loader, total=len(loader)):
         batch = batch.to(device)
@@ -224,6 +234,7 @@ meta = {
     },
 }
 meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+print(f"[basic-rqvae-export] wrote export files under {export_dir}", flush=True)
 """
 
 
