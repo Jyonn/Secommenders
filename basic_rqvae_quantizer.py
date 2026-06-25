@@ -33,6 +33,11 @@ from models.rqvae import RQVAE
 from trainer import Trainer
 
 
+class SafeNamespace(Namespace):
+    def __getattr__(self, name):
+        return False
+
+
 config_path = Path(sys.argv[1])
 cfg = json.loads(config_path.read_text())
 
@@ -45,7 +50,7 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-args = Namespace(**cfg["trainer_args"])
+args = SafeNamespace(**cfg["trainer_args"])
 data = EmbDataset(cfg["embedding_path"])
 model = RQVAE(
     in_dim=data.dim,
@@ -396,6 +401,7 @@ class BasicRQVAEQuantizer:
             'beta': float(self.config.model.beta),
             'layers': _parse_list(self.config.model.layers, int, 'model.layers'),
             'save_limit': int(self.config.trainer.save_limit),
+            'verbose': bool(getattr(self.config.trainer, 'verbose', False)),
             'ckpt_dir': str(self._absolute(self.output_dir / 'checkpoints')),
             'seed': int(getattr(self.config.trainer, 'seed', 2024)),
         }
