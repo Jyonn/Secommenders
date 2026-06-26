@@ -12,7 +12,7 @@ from utils.stable_random import stable_shuffle
 
 
 class Processor:
-    VER = 'v2.4'
+    VER = 'v2.5'
 
     NUM_TEST = 5_000
     NUM_FINETUNE = 40_000
@@ -38,6 +38,7 @@ class Processor:
         self.multi_item_col: Optional[str] = None
         self.use_all_users_in_processor = False
         self.split_ratio = 0.9
+        self.user_order_seed: Optional[str] = None
 
         self.items: Optional[pd.DataFrame] = None
         self.users: Optional[pd.DataFrame] = None
@@ -99,6 +100,7 @@ class Processor:
         self.multi_item_col = meta.get('multi_item_col')
         self.use_all_users_in_processor = bool(meta.get('use_all_users_in_processor', False))
         self.split_ratio = float(meta.get('split_ratio', 0.9))
+        self.user_order_seed = str(meta.get('user_order_seed') or f'{self.get_name()}:user-order')
 
     def _load_formatted_meta(self):
         path = self._formatted_paths()['meta']
@@ -186,12 +188,9 @@ class Processor:
 
     def _load_user_order(self):
         path = self._paths()['user_order']
-        if path.exists():
-            return [line.strip() for line in path.read_text().splitlines() if line.strip()]
-
         users = self.users[self.UID_COL].unique().tolist()
         users = sorted(users, key=lambda value: str(value))
-        user_order = stable_shuffle(users, seed=f'{self.get_name()}:user-order')
+        user_order = stable_shuffle(users, seed=str(self.user_order_seed or f'{self.get_name()}:user-order'))
         path.write_text(''.join(f'{user}\n' for user in user_order))
         return user_order
 
@@ -242,6 +241,7 @@ class Processor:
             and processed_meta.get('formatted_version') == formatted_meta.get('version')
             and counts_match
             and float(processed_meta.get('valid_ratio', -1)) == float(self.VALID_RATIO)
+            and str(processed_meta.get('user_order_seed') or '') == str(self.user_order_seed or '')
         )
 
     def load_formatted(self):
@@ -302,6 +302,7 @@ class Processor:
             'num_test': int(self.num_test),
             'num_finetune': int(self.num_finetune),
             'valid_ratio': float(self.VALID_RATIO),
+            'user_order_seed': self.user_order_seed,
             'item_col': self.IID_COL,
             'user_col': self.UID_COL,
             'history_col': self.HIS_COL,
@@ -363,23 +364,29 @@ class Processor:
         iterator = self._iterator(users_order, self.users)
 
         if self.use_all_users_in_processor:
-            if self.provides_test_set:
-                raise ValueError(
-                    f'{self.get_name()} cannot combine use_all_users_in_processor with formatter-provided test sets'
-                )
             ordered_users = self._split(iterator, len(users_order)).reset_index(drop=True)
             finetune_count = self._resolve_finetune_count_from_ratio(len(ordered_users))
             raw_test_set = ordered_users.iloc[finetune_count:].reset_index(drop=True)
             self.finetune_set = ordered_users.iloc[:finetune_count].reset_index(drop=True)
             self.valid_set, self.test_set = self._split_valid_from_test(raw_test_set)
+            if self.provides_test_set:
+                self.test_set = self.formatted_test_set.reset_index(drop=True)
             self.valid_set.to_parquet(paths['valid'], index=False)
             self.test_set.to_parquet(paths['test'], index=False)
             self.finetune_set.to_parquet(paths['finetune'], index=False)
-            pnt(
-                f'generated full-user splits for {self.get_name()} '
-                f'total={len(ordered_users)} split_ratio={self.split_ratio:g} '
-                f'finetune={len(self.finetune_set)} valid={len(self.valid_set)} test={len(self.test_set)}'
-            )
+            if self.provides_test_set:
+                pnt(
+                    f'generated full-user train/valid splits for {self.get_name()} '
+                    f'total={len(ordered_users)} split_ratio={self.split_ratio:g} '
+                    f'finetune={len(self.finetune_set)} valid={len(self.valid_set)} '
+                    f'test=official({len(self.test_set)})'
+                )
+            else:
+                pnt(
+                    f'generated full-user splits for {self.get_name()} '
+                    f'total={len(ordered_users)} split_ratio={self.split_ratio:g} '
+                    f'finetune={len(self.finetune_set)} valid={len(self.valid_set)} test={len(self.test_set)}'
+                )
         elif self.provides_test_set:
             if self.valid_set_required:
                 self.valid_set = self._split(iterator, self.num_test)

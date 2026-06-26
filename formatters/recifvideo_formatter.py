@@ -13,7 +13,7 @@ from formatters.base_formatter import BaseFormatter
 
 
 class RecIFVideoFormatter(BaseFormatter):
-    VER = 'v1.0'
+    VER = 'v1.1'
 
     IID_COL = 'pid'
     UID_COL = 'uid'
@@ -64,6 +64,7 @@ class RecIFVideoFormatter(BaseFormatter):
             'version': self.VER,
             'stage': 'formatted',
             'dataset': self.get_name(),
+            'user_order_seed': self.get_seed(),
             'data_dir': self.data_dir,
             'item_col': self.IID_COL,
             'user_col': self.UID_COL,
@@ -225,6 +226,40 @@ class RecIFVideoFormatter(BaseFormatter):
         self._run_filter_pipeline()
         return self._filtered_users
 
+    def _load_official_video_test_users(self) -> pd.DataFrame:
+        self._run_filter_pipeline()
+        final_item_set = set(cast(pd.DataFrame, self._filtered_items)[self.IID_COL].tolist())
+        test_frame = pd.read_parquet(self.official_video_test_path, columns=['hist_pid', 'metadata'])
+
+        records = []
+        for index, row in tqdm(test_frame.iterrows(), total=len(test_frame), desc='official-video-test'):
+            history = self._normalize_history(row['hist_pid'])
+            history = [pid for pid in history if pid in final_item_set]
+            history = self._tail_history(history)
+            if not history:
+                continue
+
+            metadata = row['metadata']
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            elif not isinstance(metadata, dict):
+                metadata = {}
+            answer_pids = self._normalize_history(metadata.get('answer_pid'))
+            answer_pids = [pid for pid in answer_pids if pid in final_item_set]
+            if not answer_pids:
+                continue
+
+            records.append(
+                {
+                    self.UID_COL: f'official-video-test-{index}',
+                    self.HIS_COL: history,
+                    'answer_pids': answer_pids,
+                }
+            )
+        if not records:
+            raise ValueError('No official RecIF video test samples survived item filtering')
+        return pd.DataFrame(records)
+
 
 class RecIFVideoLargeFormatter(RecIFVideoFormatter):
     DEFAULT_N_CORE = 10
@@ -250,3 +285,17 @@ class RecIFVideoLargeAllFormatter(RecIFVideoLargeFormatter):
 class RecIFVideoXLargeAllFormatter(RecIFVideoXLargeFormatter):
     USE_ALL_USERS_IN_PROCESSOR = True
     SPLIT_RATIO = 0.9
+
+
+class RecIFVideoXLargeAllOfficialFormatter(RecIFVideoXLargeFormatter):
+    PROVIDES_TEST_SET = True
+    MULTI_ITEM_COL = 'answer_pids'
+    USE_ALL_USERS_IN_PROCESSOR = True
+    SPLIT_RATIO = 0.9
+
+    @classmethod
+    def get_seed(cls):
+        return RecIFVideoXLargeAllFormatter.get_seed()
+
+    def load_test_users(self) -> pd.DataFrame:
+        return self._load_official_video_test_users()

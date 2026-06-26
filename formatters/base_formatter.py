@@ -10,7 +10,7 @@ from utils.artifact import ArtifactStore
 
 
 class BaseFormatter(abc.ABC):
-    VER = 'v2.4'
+    VER = 'v2.5'
 
     IID_COL: str
     UID_COL: str
@@ -40,6 +40,10 @@ class BaseFormatter(abc.ABC):
 
     @classmethod
     def get_name(cls):
+        return cls.__name__.replace('Formatter', '').lower()
+
+    @classmethod
+    def get_seed(cls):
         return cls.__name__.replace('Formatter', '').lower()
 
     @abc.abstractmethod
@@ -82,6 +86,7 @@ class BaseFormatter(abc.ABC):
             'version': self.VER,
             'stage': 'formatted',
             'dataset': self.get_name(),
+            'user_order_seed': self.get_seed(),
             'data_dir': self.data_dir,
             'item_col': self.IID_COL,
             'user_col': self.UID_COL,
