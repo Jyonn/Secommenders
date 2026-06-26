@@ -42,9 +42,6 @@ METRIC_SPECS = {
     'pair_cos_spearman': dict(title='Pair Cos Spearman ↑', better='max', kind='float4'),
     'subset_knn_recall@20': dict(title='Subset KNN R@20 ↑', better='max', kind='pct2'),
     'subset_knn_recall@50': dict(title='Subset KNN R@50 ↑', better='max', kind='pct2'),
-    'rmse': dict(title='RMSE ↓', better='min', kind='float4'),
-    'cosine_mean': dict(title='Mean Cosine ↑', better='max', kind='float4'),
-    'relative_l2': dict(title='Rel L2 ↓', better='min', kind='float4'),
     'unique_code_ratio': dict(title='Unique Code Ratio ↑', better='max', kind='pct2'),
     'collision_rate': dict(title='Collision Rate ↓', better='min', kind='pct2'),
     'collided_item_ratio': dict(title='Collided Item Ratio ↓', better='min', kind='pct2'),
@@ -252,26 +249,6 @@ def compute_code_metrics(codes: np.ndarray, meta: dict):
     }
 
 
-def compute_direct_metrics(source_embeddings: np.ndarray, quantized: np.ndarray):
-    if source_embeddings.shape[1] != quantized.shape[1]:
-        return {
-            'rmse': float('nan'),
-            'cosine_mean': float('nan'),
-            'relative_l2': float('nan'),
-        }
-    delta = quantized - source_embeddings
-    source_norm = np.linalg.norm(source_embeddings, axis=1)
-    quantized_norm = l2_normalize(quantized)
-    source_unit = l2_normalize(source_embeddings)
-    relative_l2 = np.linalg.norm(delta, axis=1) / np.clip(source_norm, EPS, None)
-    cosine_mean = np.sum(source_unit * quantized_norm, axis=1).mean()
-    return {
-        'rmse': float(np.sqrt(np.mean(np.square(delta)))),
-        'cosine_mean': float(cosine_mean),
-        'relative_l2': float(np.mean(relative_l2)),
-    }
-
-
 def format_value(value, kind: str):
     if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
         return 'N/A'
@@ -339,7 +316,7 @@ def render_table(title: str, rows: list[dict], metric_names: list[str]):
 def render_method_manifest(rows: list[dict]):
     print()
     print('Methods')
-    headers = ['Method', 'Items', 'Codes', 'Quantized Dim', 'Direct Recon', 'Export Dir']
+    headers = ['Method', 'Items', 'Codes', 'Quantized Dim', 'Export Dir']
     body = []
     for row in rows:
         body.append([
@@ -347,7 +324,6 @@ def render_method_manifest(rows: list[dict]):
             str(row['item_count']),
             f"{row['num_slots']} x {row['slot_size_hint']}",
             str(row['quantized_dim']),
-            'yes' if row['direct_recon_available'] else 'no',
             row['export_dir'],
         ])
 
@@ -420,7 +396,6 @@ def main():
         subset_quantized_norm = quantized_norm_common[subset_indices]
 
         metrics = {}
-        metrics.update(compute_direct_metrics(source_common, quantized_common))
         metrics.update(compute_code_metrics(loaded.codes[common_export_indices], loaded.meta))
         metrics['pair_cos_pearson'] = corrcoef_safe(source_pair_cos, pair_quantized_cos)
         metrics['pair_cos_spearman'] = corrcoef_safe(rank_array(source_pair_cos), rank_array(pair_quantized_cos))
@@ -436,7 +411,6 @@ def main():
             'num_slots': int(loaded.codes.shape[1]),
             'slot_size_hint': slot_size_hint,
             'quantized_dim': int(loaded.quantized.shape[1]),
-            'direct_recon_available': bool(source_common.shape[1] == loaded.quantized.shape[1]),
         }
         row.update(metrics)
         rows.append(row)
@@ -446,18 +420,12 @@ def main():
     print(f'Common items: {len(common_item_ids)} / {len(source_item_ids)}')
     print(f'Pair samples: {len(pair_left)}')
     print(f'Subset items for KNN: {subset_size}')
-    print('Notes: direct reconstruction metrics are only available when quantized_dim == source embedding dim.')
 
     render_method_manifest(rows)
     render_table(
         'Geometry and Structure',
         rows,
         ['pair_cos_pearson', 'pair_cos_spearman', 'subset_knn_recall@20', 'subset_knn_recall@50'],
-    )
-    render_table(
-        'Direct Reconstruction',
-        rows,
-        ['rmse', 'cosine_mean', 'relative_l2'],
     )
     render_table(
         'Code Quality',
