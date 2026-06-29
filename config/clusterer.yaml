@@ -5,7 +5,7 @@ data:
 word2vec:
   vector_size: ${cluster_vector_size:64}$
   window: ${cluster_window:5}$
-  epochs: ${cluster_epochs:5}$
+  patience: ${cluster_patience:5}$
   sg: ${cluster_sg:1}$
   negative: ${cluster_negative:5}$
   min_count: ${cluster_min_count:1}$

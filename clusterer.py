@@ -6,9 +6,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from gensim.models import Word2Vec
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from pigmento import pnt
 from sklearn.cluster import MiniBatchKMeans
+from tqdm import tqdm
 
 from processors.base_processor import Processor
 from utils.artifact import ArtifactStore
@@ -16,6 +19,7 @@ from utils.compile import short_config_hash
 from utils.config_init import ConfigInit
 from utils.data import get_data_dir
 from utils.function import load_processor
+from utils.gpu import GPU
 from utils.logging import setup_logging
 from utils.uid_hierarchy import format_uid_cluster_levels, resolve_uid_cluster_levels
 
@@ -26,7 +30,7 @@ class ClustererConfig:
     levels_spec: str
     vector_size: int
     window: int
-    epochs: int
+    patience: int
     sg: int
     negative: int
     min_count: int
@@ -43,7 +47,7 @@ class ClustererConfig:
             levels_spec=str(configurations.config.data.levels).strip().lower(),
             vector_size=int(configurations.config.word2vec.vector_size),
             window=int(configurations.config.word2vec.window),
-            epochs=int(configurations.config.word2vec.epochs),
+            patience=int(configurations.config.word2vec.patience),
             sg=int(configurations.config.word2vec.sg),
             negative=int(configurations.config.word2vec.negative),
             min_count=int(configurations.config.word2vec.min_count),
@@ -55,27 +59,75 @@ class ClustererConfig:
         )
 
 
-class _HistoryCorpus:
-    def __init__(self, histories):
-        self.histories = histories
+class _SkipGramNegativeSampling(nn.Module):
+    def __init__(self, vocab_size: int, embedding_dim: int):
+        super().__init__()
+        self.input_embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.output_embedding = nn.Embedding(vocab_size, embedding_dim)
+        nn.init.normal_(self.input_embedding.weight, mean=0.0, std=0.02)
+        nn.init.zeros_(self.output_embedding.weight)
 
-    def __iter__(self):
-        for history in self.histories:
-            yield [str(item) for item in history]
+    def forward(self, center_ids: torch.Tensor, positive_ids: torch.Tensor, negative_ids: torch.Tensor):
+        center_vectors = self.input_embedding(center_ids)
+        positive_vectors = self.output_embedding(positive_ids)
+        negative_vectors = self.output_embedding(negative_ids)
+
+        positive_logits = (center_vectors * positive_vectors).sum(dim=-1)
+        negative_logits = torch.einsum('bd,bkd->bk', center_vectors, negative_vectors)
+
+        positive_loss = F.logsigmoid(positive_logits)
+        negative_loss = F.logsigmoid(-negative_logits).sum(dim=-1)
+        return -(positive_loss + negative_loss).mean()
+
+    def export_embeddings(self):
+        return self.input_embedding.weight.detach().cpu().numpy().astype(np.float32)
 
 
 class Clusterer:
-    VER = 'v1.0'
+    VER = 'v2.0'
+
+    WORD2VEC_MAX_EPOCHS = 100
+    WORD2VEC_BATCH_SIZE = 8192
+    WORD2VEC_VALID_BATCH_SIZE = 16384
+    WORD2VEC_LEARNING_RATE = 3e-3
+    WORD2VEC_MIN_DELTA = 1e-4
 
     def __init__(self, config: ClustererConfig):
         self.config = config
+        if self.config.vector_size <= 0:
+            raise ValueError(f'word2vec.vector_size must be positive, got {self.config.vector_size}')
+        if self.config.window <= 0:
+            raise ValueError(f'word2vec.window must be positive, got {self.config.window}')
+        if self.config.sg != 1:
+            raise ValueError(f'PyTorch clusterer only supports skip-gram (word2vec.sg=1), got {self.config.sg}')
+        if self.config.min_count != 1:
+            raise ValueError(
+                f'PyTorch clusterer currently expects word2vec.min_count=1 to preserve the processed item vocabulary, '
+                f'got {self.config.min_count}'
+            )
+        if self.config.patience <= 0:
+            raise ValueError(f'word2vec.patience must be positive, got {self.config.patience}')
+        if self.config.negative <= 0:
+            raise ValueError(f'word2vec.negative must be positive, got {self.config.negative}')
+
+        torch.manual_seed(self.config.seed)
+        np.random.seed(self.config.seed)
+        torch.set_num_threads(max(1, self.config.workers))
+
+        self.device = torch.device(GPU.auto_choose(torch_format=True))
         self.processor: Processor = load_processor(self.config.data, data_dir=get_data_dir(self.config.data))
         self.processor.load()
 
         self.item_ids = [str(item_id) for item_id in self.processor.items[self.processor.IID_COL].tolist()]
         self.item_index = {item_id: index for index, item_id in enumerate(self.item_ids)}
-        self.histories = self._load_histories()
-        self.item_frequency = self._count_item_frequency(self.histories)
+
+        self.train_histories = self._load_histories(self.processor.finetune_set, split_name='finetune')
+        self.valid_histories = self._load_histories(self.processor.valid_set, split_name='valid')
+        self.item_frequency = self._count_item_frequency(self.train_histories)
+        self.seen_train_items = self._collect_seen_items(self.train_histories)
+        self.train_pair_count = self._count_positive_pairs(self.train_histories, window=self.config.window)
+        self.valid_pair_count = self._count_positive_pairs(self.valid_histories, window=self.config.window)
+
         self.resolved_levels = resolve_uid_cluster_levels(self.config.levels_spec, len(self.item_ids))
         self.prepare_id = self._build_prepare_id()
         self.output_dir = ArtifactStore(self.config.data).clustered_dir(self.prepare_id)
@@ -89,24 +141,51 @@ class Clusterer:
         self.node_meta_path = self.output_dir / 'node_meta.parquet'
         self.child_nodes_path = self.output_dir / 'child_nodes.parquet'
         self.leaf_items_path = self.output_dir / 'leaf_items.parquet'
+        self.word2vec_summary = None
 
-    def _load_histories(self):
-        # Keep the hierarchy assets train-only to avoid leaking validation/test
-        # interaction sequences into the hierarchical uid decoder.
-        frame = self.processor.finetune_set
+    def _load_histories(self, frame: pd.DataFrame | None, split_name: str):
+        if frame is None or frame.empty:
+            raise ValueError(f'No processed {split_name} set found for {self.config.data}')
+
         histories = []
-        if frame is not None:
-            histories.extend(frame[self.processor.HIS_COL].tolist())
+        dropped_short = 0
+        for history in frame[self.processor.HIS_COL].tolist():
+            tokenized = [self.item_index[str(item)] for item in history if str(item) in self.item_index]
+            if len(tokenized) < 2:
+                dropped_short += 1
+                continue
+            histories.append(tokenized)
+
         if not histories:
-            raise ValueError(f'No processed histories found for {self.config.data}')
+            raise ValueError(f'No usable {split_name} histories with length >= 2 found for {self.config.data}')
+        if dropped_short:
+            pnt(f'dropped {dropped_short} {split_name} histories with length < 2')
         return histories
 
     @staticmethod
-    def _count_item_frequency(histories):
+    def _collect_seen_items(histories: list[list[int]]):
+        seen = set()
+        for history in histories:
+            seen.update(history)
+        return seen
+
+    def _count_item_frequency(self, histories: list[list[int]]):
         counter = Counter()
         for history in histories:
-            counter.update(str(item) for item in history)
+            for item_index in history:
+                counter[self.item_ids[item_index]] += 1
         return counter
+
+    @staticmethod
+    def _count_positive_pairs(histories: list[list[int]], window: int | None = None):
+        if window is None:
+            raise ValueError('window is required')
+        total = 0
+        for history in histories:
+            history_length = len(history)
+            for center_pos in range(history_length):
+                total += min(window, center_pos) + min(window, history_length - center_pos - 1)
+        return total
 
     @property
     def hierarchy_depth(self):
@@ -115,10 +194,11 @@ class Clusterer:
     def _build_prepare_id(self):
         payload = asdict(self.config).copy()
         payload['resolved_levels'] = self.resolved_levels
+        payload['version'] = self.VER
         payload_hash = short_config_hash(payload)
         return (
-            f'w2v__lv{format_uid_cluster_levels(self.resolved_levels)}'
-            f'__d{self.config.vector_size}__w{self.config.window}__e{self.config.epochs}'
+            f'ptw2v__lv{format_uid_cluster_levels(self.resolved_levels)}'
+            f'__d{self.config.vector_size}__w{self.config.window}__p{self.config.patience}'
             f'__h{payload_hash}'
         )
 
@@ -146,32 +226,199 @@ class Clusterer:
             and int(meta.get('item_count', -1)) == len(self.item_ids)
         )
 
+    def _iter_pair_batches(self, histories: list[list[int]], batch_size: int, shuffle: bool, seed_offset: int):
+        order = np.arange(len(histories))
+        if shuffle:
+            rng = np.random.default_rng(self.config.seed + seed_offset)
+            rng.shuffle(order)
+
+        center_buffer: list[int] = []
+        positive_buffer: list[int] = []
+
+        for history_index in order.tolist():
+            history = histories[history_index]
+            history_length = len(history)
+            for center_pos, center_item in enumerate(history):
+                left = max(0, center_pos - self.config.window)
+                right = min(history_length, center_pos + self.config.window + 1)
+                for context_pos in range(left, right):
+                    if context_pos == center_pos:
+                        continue
+                    center_buffer.append(center_item)
+                    positive_buffer.append(history[context_pos])
+                    if len(center_buffer) >= batch_size:
+                        yield (
+                            np.asarray(center_buffer, dtype=np.int64),
+                            np.asarray(positive_buffer, dtype=np.int64),
+                        )
+                        center_buffer.clear()
+                        positive_buffer.clear()
+
+        if center_buffer:
+            yield (
+                np.asarray(center_buffer, dtype=np.int64),
+                np.asarray(positive_buffer, dtype=np.int64),
+            )
+
+    def _make_negative_ids(self, batch_size: int, generator: torch.Generator):
+        negatives = torch.randint(
+            low=0,
+            high=len(self.item_ids),
+            size=(batch_size, self.config.negative),
+            generator=generator,
+            device='cpu',
+        )
+        return negatives.to(self.device, non_blocking=self.device.type == 'cuda')
+
+    def _run_word2vec_epoch(
+            self,
+            model: _SkipGramNegativeSampling,
+            histories: list[list[int]],
+            pair_count: int,
+            batch_size: int,
+            epoch_index: int,
+            mode: str,
+            optimizer: torch.optim.Optimizer | None,
+    ):
+        if pair_count <= 0:
+            raise ValueError(f'No positive pairs available for word2vec {mode}')
+
+        is_train = mode == 'train'
+        model.train(is_train)
+        generator = torch.Generator(device='cpu')
+        generator.manual_seed(self.config.seed + (epoch_index if is_train else 0) + (0 if is_train else 100_000))
+
+        total_loss = 0.0
+        total_pairs = 0
+        progress = tqdm(
+            total=pair_count,
+            desc=f'w2v-{mode}@{epoch_index}',
+            leave=False,
+        )
+
+        context = torch.enable_grad if is_train else torch.no_grad
+        with context():
+            for center_ids_np, positive_ids_np in self._iter_pair_batches(
+                    histories=histories,
+                    batch_size=batch_size,
+                    shuffle=is_train,
+                    seed_offset=epoch_index,
+            ):
+                batch_pairs = int(len(center_ids_np))
+                center_ids = torch.from_numpy(center_ids_np).to(self.device, non_blocking=self.device.type == 'cuda')
+                positive_ids = torch.from_numpy(positive_ids_np).to(self.device, non_blocking=self.device.type == 'cuda')
+                negative_ids = self._make_negative_ids(batch_pairs, generator)
+
+                if is_train:
+                    optimizer.zero_grad(set_to_none=True)
+                loss = model(center_ids, positive_ids, negative_ids)
+                if is_train:
+                    loss.backward()
+                    optimizer.step()
+
+                total_loss += float(loss.item()) * batch_pairs
+                total_pairs += batch_pairs
+                progress.update(batch_pairs)
+                progress.set_postfix(loss=f'{loss.item():.4f}')
+
+        progress.close()
+        return total_loss / max(total_pairs, 1)
+
     def _fit_word2vec(self):
         pnt(
-            f'training word2vec on {len(self.histories)} histories '
-            f'for {self.config.data} with vector_size={self.config.vector_size}'
+            f'training PyTorch word2vec on {len(self.train_histories)} finetune histories '
+            f'and validating on {len(self.valid_histories)} valid histories '
+            f'for {self.config.data} with vector_size={self.config.vector_size} window={self.config.window} '
+            f'device={self.device} patience={self.config.patience}'
         )
-        corpus = _HistoryCorpus(self.histories)
-        model = Word2Vec(
-            sentences=corpus,
-            vector_size=self.config.vector_size,
-            window=self.config.window,
-            min_count=self.config.min_count,
-            sg=self.config.sg,
-            negative=self.config.negative,
-            workers=self.config.workers,
-            epochs=self.config.epochs,
-            seed=self.config.seed,
+        pnt(
+            f'word2vec pairs train={self.train_pair_count} valid={self.valid_pair_count} '
+            f'batch_size={self.WORD2VEC_BATCH_SIZE} valid_batch_size={self.WORD2VEC_VALID_BATCH_SIZE}'
         )
-        embeddings = np.zeros((len(self.item_ids), self.config.vector_size), dtype=np.float32)
-        missing = 0
-        for index, item_id in enumerate(self.item_ids):
-            if item_id in model.wv:
-                embeddings[index] = model.wv[item_id]
+
+        model = _SkipGramNegativeSampling(
+            vocab_size=len(self.item_ids),
+            embedding_dim=self.config.vector_size,
+        ).to(self.device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=self.WORD2VEC_LEARNING_RATE)
+
+        best_state = None
+        best_epoch = 0
+        best_valid_loss = float('inf')
+        stale_epochs = 0
+
+        for epoch_index in range(1, self.WORD2VEC_MAX_EPOCHS + 1):
+            train_loss = self._run_word2vec_epoch(
+                model=model,
+                histories=self.train_histories,
+                pair_count=self.train_pair_count,
+                batch_size=self.WORD2VEC_BATCH_SIZE,
+                epoch_index=epoch_index,
+                mode='train',
+                optimizer=optimizer,
+            )
+            valid_loss = self._run_word2vec_epoch(
+                model=model,
+                histories=self.valid_histories,
+                pair_count=self.valid_pair_count,
+                batch_size=self.WORD2VEC_VALID_BATCH_SIZE,
+                epoch_index=epoch_index,
+                mode='valid',
+                optimizer=None,
+            )
+
+            improved = valid_loss < (best_valid_loss - self.WORD2VEC_MIN_DELTA)
+            if improved:
+                best_valid_loss = valid_loss
+                best_epoch = epoch_index
+                stale_epochs = 0
+                best_state = {
+                    key: value.detach().cpu().clone()
+                    for key, value in model.state_dict().items()
+                }
             else:
+                stale_epochs += 1
+
+            pnt(
+                f'word2vec epoch {epoch_index}/{self.WORD2VEC_MAX_EPOCHS} '
+                f'train_loss={train_loss:.4f} valid_loss={valid_loss:.4f} '
+                f'best_valid_loss={best_valid_loss:.4f} stale={stale_epochs}/{self.config.patience}'
+            )
+
+            if stale_epochs >= self.config.patience:
+                pnt(f'word2vec early stop triggered at epoch {epoch_index}, best_epoch={best_epoch}')
+                break
+
+        if best_state is None:
+            raise RuntimeError('word2vec training did not produce a checkpoint')
+
+        model.load_state_dict(best_state)
+        embeddings = model.export_embeddings()
+
+        missing = 0
+        for item_index in range(len(self.item_ids)):
+            if item_index not in self.seen_train_items:
+                embeddings[item_index] = 0.0
                 missing += 1
         if missing:
-            pnt(f'word2vec missing vectors for {missing} items, filled with zeros')
+            pnt(f'word2vec unseen train items for {missing} items, filled with zeros')
+
+        self.word2vec_summary = {
+            'algorithm': 'pytorch-sgns',
+            'device': str(self.device),
+            'max_epochs': self.WORD2VEC_MAX_EPOCHS,
+            'patience': self.config.patience,
+            'learning_rate': self.WORD2VEC_LEARNING_RATE,
+            'batch_size': self.WORD2VEC_BATCH_SIZE,
+            'valid_batch_size': self.WORD2VEC_VALID_BATCH_SIZE,
+            'min_delta': self.WORD2VEC_MIN_DELTA,
+            'best_epoch': best_epoch,
+            'best_valid_loss': best_valid_loss,
+            'train_history_count': len(self.train_histories),
+            'valid_history_count': len(self.valid_histories),
+            'train_pair_count': self.train_pair_count,
+            'valid_pair_count': self.valid_pair_count,
+        }
         return embeddings
 
     def _new_node(self, node_levels, node_parents, level: int, parent_node_id: int):
@@ -292,14 +539,16 @@ class Clusterer:
             'item_count': len(self.item_ids),
             'embedding_dim': int(embeddings.shape[1]),
             'word2vec': {
+                'algorithm': 'pytorch-sgns',
                 'vector_size': self.config.vector_size,
                 'window': self.config.window,
-                'epochs': self.config.epochs,
+                'patience': self.config.patience,
                 'sg': self.config.sg,
                 'negative': self.config.negative,
                 'min_count': self.config.min_count,
                 'workers': self.config.workers,
                 'seed': self.config.seed,
+                'summary': self.word2vec_summary,
             },
             'cluster': {
                 'batch_size': self.config.cluster_batch_size,

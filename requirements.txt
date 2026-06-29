@@ -8,7 +8,6 @@ autoencoders[text,torch]
 
 pandas>=2.0,<3
 sentence-transformers>=3,<6
-gensim>=4,<5
 scikit-learn>=1.4,<2
 pyyaml>=6,<7
 requests>=2,<3
