@@ -73,66 +73,18 @@ def _format_sid_sequence(pids: Iterable[int], sid_map: dict[int, tuple[int, int,
     return ''.join(tokens)
 
 
-def _infer_history_id_mode(
-        test_frame: pd.DataFrame,
-        history_col: str,
-        answer_col: str | None,
-        pid_set: set[int],
-        item_count: int,
-) -> str:
-    observed_values = set()
-    for history in test_frame[history_col].tolist():
-        observed_values.update(_normalize_int_list(history))
-    if answer_col and answer_col in test_frame.columns:
-        for answers in test_frame[answer_col].tolist():
-            observed_values.update(_normalize_int_list(answers))
-    if not observed_values:
-        raise ValueError('No item ids found in processed test set')
-
-    all_in_pid_set = all(value in pid_set for value in observed_values)
-    all_in_row_range = all(0 <= value < item_count for value in observed_values)
-
-    if all_in_pid_set and any(value >= item_count for value in observed_values):
-        return 'pid'
-    if all_in_row_range and not all_in_pid_set:
-        return 'row-index'
-    if all_in_pid_set:
-        return 'pid'
-    if all_in_row_range:
-        return 'row-index'
-
-    sample_values = sorted(list(observed_values))[:10]
-    raise ValueError(
-        'Unable to infer history id mode from processed test set. '
-        f'Observed sample ids: {sample_values}. '
-        'Please rerun with --history-id-mode pid or --history-id-mode row-index.'
-    )
-
-
 def _convert_sequence_to_pids(
         values,
-        mode: str,
         pid_by_row_index: list[int],
-        pid_set: set[int],
 ) -> list[int]:
     sequence = _normalize_int_list(values)
-    if mode == 'pid':
-        missing = [value for value in sequence if value not in pid_set]
-        if missing:
-            raise ValueError(
-                f'Processed sequence claims to use raw pid mode, but {len(missing)} value(s) are missing from items.parquet; '
-                f'first missing value: {missing[0]}'
-            )
-        return sequence
-    if mode == 'row-index':
-        invalid = [value for value in sequence if value < 0 or value >= len(pid_by_row_index)]
-        if invalid:
-            raise ValueError(
-                f'Processed sequence claims to use row-index mode, but {len(invalid)} value(s) are out of range; '
-                f'first invalid value: {invalid[0]}'
-            )
-        return [int(pid_by_row_index[value]) for value in sequence]
-    raise ValueError(f'Unknown history id mode: {mode}')
+    invalid = [value for value in sequence if value < 0 or value >= len(pid_by_row_index)]
+    if invalid:
+        raise ValueError(
+            f'Processed sequence contains {len(invalid)} out-of-range item row index value(s); '
+            f'first invalid value: {invalid[0]}'
+        )
+    return [int(pid_by_row_index[value]) for value in sequence]
 
 
 def _build_messages(history_sid_text: str, system_prompt: str, user_suffix: str) -> str:
@@ -168,12 +120,6 @@ def main():
         '--output_root',
         default=None,
         help='Benchmark-style output root. Defaults to artifacts/openonerec_eval/<data>.',
-    )
-    parser.add_argument(
-        '--history_id_mode',
-        choices=['auto', 'pid', 'row-index'],
-        default='auto',
-        help='How processed histories are encoded: raw pid, row index into items.parquet, or auto detect.',
     )
     parser.add_argument(
         '--system_prompt',
@@ -243,18 +189,7 @@ def main():
     }
 
     pid_by_row_index = [int(pid) for pid in items['pid'].tolist()]
-    pid_set = set(pid_by_row_index)
-    if args.history_id_mode == 'auto':
-        history_id_mode = _infer_history_id_mode(
-            test_frame=test_frame,
-            history_col=history_col,
-            answer_col=answer_col if isinstance(answer_col, str) else None,
-            pid_set=pid_set,
-            item_count=len(pid_by_row_index),
-        )
-    else:
-        history_id_mode = args.history_id_mode
-    pnt(f'processed test history id mode resolved to {history_id_mode}')
+    pnt('processed test history id mode fixed to row-index -> items.parquet.pid')
 
     user_order_index = {}
     if user_order_path.exists():
@@ -268,18 +203,14 @@ def main():
         uid_value = row[uid_col]
         sequence_pids = _convert_sequence_to_pids(
             values=row[history_col],
-            mode=history_id_mode,
             pid_by_row_index=pid_by_row_index,
-            pid_set=pid_set,
         )
 
         if answer_col and answer_col in row and _normalize_int_list(row[answer_col]):
             history_pids = sequence_pids
             answer_pids = _convert_sequence_to_pids(
                 values=row[answer_col],
-                mode=history_id_mode,
                 pid_by_row_index=pid_by_row_index,
-                pid_set=pid_set,
             )
         else:
             if len(sequence_pids) < 2:
@@ -325,7 +256,7 @@ def main():
         'items_path': str(items_path),
         'test_path': str(test_path),
         'sid_map_path': str(sid_map_path),
-        'history_id_mode': history_id_mode,
+        'history_id_mode': 'row-index',
         'history_col': history_col,
         'uid_col': uid_col,
         'multi_item_col': answer_col,
