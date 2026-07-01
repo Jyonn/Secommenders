@@ -75,16 +75,16 @@ def _format_sid_sequence(pids: Iterable[int], sid_map: dict[int, tuple[int, int,
 
 def _convert_sequence_to_pids(
         values,
-        pid_by_row_index: list[int],
+        pid_set: set[int],
 ) -> list[int]:
     sequence = _normalize_int_list(values)
-    invalid = [value for value in sequence if value < 0 or value >= len(pid_by_row_index)]
-    if invalid:
+    missing = [value for value in sequence if value not in pid_set]
+    if missing:
         raise ValueError(
-            f'Processed sequence contains {len(invalid)} out-of-range item row index value(s); '
-            f'first invalid value: {invalid[0]}'
+            f'Processed sequence contains {len(missing)} pid value(s) missing from items.parquet; '
+            f'first missing pid: {missing[0]}'
         )
-    return [int(pid_by_row_index[value]) for value in sequence]
+    return sequence
 
 
 def _build_messages(history_sid_text: str, system_prompt: str, user_suffix: str) -> str:
@@ -192,8 +192,8 @@ def main():
     for row in sid_iterator:
         sid_map[int(row.pid)] = _parse_sid_triplet(row.sid)
 
-    pid_by_row_index = [int(pid) for pid in items['pid'].tolist()]
-    pnt('processed test history id mode fixed to row-index -> items.parquet.pid')
+    pid_set = {int(pid) for pid in items['pid'].tolist()}
+    pnt('processed test history id mode fixed to raw pid')
 
     user_order_index = {}
     if user_order_path.exists():
@@ -208,14 +208,14 @@ def main():
         uid_value = row[uid_col]
         sequence_pids = _convert_sequence_to_pids(
             values=row[history_col],
-            pid_by_row_index=pid_by_row_index,
+            pid_set=pid_set,
         )
 
         if answer_col and answer_col in row and _normalize_int_list(row[answer_col]):
             history_pids = sequence_pids
             answer_pids = _convert_sequence_to_pids(
                 values=row[answer_col],
-                pid_by_row_index=pid_by_row_index,
+                pid_set=pid_set,
             )
         else:
             if len(sequence_pids) < 2:
@@ -265,7 +265,7 @@ def main():
         'items_path': str(items_path),
         'test_path': str(test_path),
         'sid_map_path': str(sid_map_path),
-        'history_id_mode': 'row-index',
+        'history_id_mode': 'pid',
         'history_col': history_col,
         'uid_col': uid_col,
         'multi_item_col': answer_col,
