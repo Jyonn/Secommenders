@@ -101,6 +101,14 @@ def _build_messages(history_sid_text: str, system_prompt: str, user_suffix: str)
     return json.dumps(messages, ensure_ascii=False)
 
 
+def _refresh_symlink(link_path: Path, target_path: Path) -> None:
+    if not target_path.exists():
+        raise FileNotFoundError(f'Symlink target not found: {target_path}')
+    if link_path.exists() or link_path.is_symlink():
+        link_path.unlink()
+    link_path.symlink_to(target_path)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Export Secommenders processed RecIF video test split to an OpenOneRec benchmark-compatible parquet.'
@@ -149,11 +157,19 @@ def main():
         sid_map_path = Path(data_root) / 'video_ad_pid2sid.parquet'
     if not sid_map_path.exists():
         raise FileNotFoundError(f'SID mapping file not found: {sid_map_path}')
+    if not data_root:
+        raise ValueError(
+            f'Cannot resolve data root for {data}; please add it to .data so sid2pid.json can be linked.'
+        )
+    sid2pid_source_path = Path(data_root) / 'benchmark_data' / 'sid2pid.json'
+    if not sid2pid_source_path.exists():
+        raise FileNotFoundError(f'sid2pid source file not found: {sid2pid_source_path}')
 
     output_root = Path(args.output_root or f'artifacts/openonerec_eval/{data}')
     output_path = output_root / 'video' / 'video_test.parquet'
     export_meta_path = output_root / 'video' / 'meta.json'
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    sid2pid_link_path = output_root / 'sid2pid.json'
 
     items_path = processed_dir / 'items.parquet'
     test_path = processed_dir / 'test.parquet'
@@ -259,12 +275,15 @@ def main():
 
     output_frame = pd.DataFrame(records)
     output_frame.to_parquet(output_path, index=False)
+    _refresh_symlink(sid2pid_link_path, sid2pid_source_path.resolve())
     export_meta = {
         'source_dataset': data,
         'processed_dir': str(processed_dir),
         'items_path': str(items_path),
         'test_path': str(test_path),
         'sid_map_path': str(sid_map_path),
+        'sid2pid_path': str(sid2pid_link_path),
+        'sid2pid_source_path': str(sid2pid_source_path),
         'history_id_mode': 'pid',
         'history_col': history_col,
         'uid_col': uid_col,
@@ -277,6 +296,7 @@ def main():
     export_meta_path.write_text(json.dumps(export_meta, indent=2, ensure_ascii=False) + '\n')
 
     pnt(f'exported OpenOneRec-style video test file to {output_path}')
+    pnt(f'linked sid2pid mapping to {sid2pid_link_path} -> {sid2pid_source_path}')
     pnt(
         f'samples={len(output_frame)} skipped_short={skipped_short} '
         f'items={len(items)} sid_map={len(sid_map)}'
