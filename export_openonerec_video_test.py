@@ -183,10 +183,14 @@ def main():
     sid_frame = pd.read_parquet(sid_map_path)
     if 'pid' not in sid_frame.columns or 'sid' not in sid_frame.columns:
         raise ValueError(f'Expected sid mapping parquet to contain pid and sid columns, got {sid_frame.columns.tolist()}')
-    sid_map = {
-        int(row['pid']): _parse_sid_triplet(row['sid'])
-        for _, row in sid_frame.iterrows()
-    }
+    sid_map = {}
+    sid_iterator = tqdm(
+        sid_frame.itertuples(index=False),
+        total=len(sid_frame),
+        desc='sid-map',
+    )
+    for row in sid_iterator:
+        sid_map[int(row.pid)] = _parse_sid_triplet(row.sid)
 
     pid_by_row_index = [int(pid) for pid in items['pid'].tolist()]
     pnt('processed test history id mode fixed to row-index -> items.parquet.pid')
@@ -199,7 +203,8 @@ def main():
 
     records = []
     skipped_short = 0
-    for _, row in tqdm(test_frame.iterrows(), total=len(test_frame), desc='export-video-test'):
+    export_iterator = tqdm(test_frame.iterrows(), total=len(test_frame), desc='export-video-test')
+    for _, row in export_iterator:
         uid_value = row[uid_col]
         sequence_pids = _convert_sequence_to_pids(
             values=row[history_col],
@@ -215,6 +220,8 @@ def main():
         else:
             if len(sequence_pids) < 2:
                 skipped_short += 1
+                if skipped_short == 1 or skipped_short % 1000 == 0:
+                    export_iterator.set_postfix(exported=len(records), skipped=skipped_short)
                 continue
             history_pids = sequence_pids[:-1]
             answer_pids = [sequence_pids[-1]]
@@ -244,6 +251,8 @@ def main():
                 ),
             }
         )
+        if len(records) == 1 or len(records) % 1000 == 0:
+            export_iterator.set_postfix(exported=len(records), skipped=skipped_short)
 
     if not records:
         raise ValueError(f'No exportable test samples were produced from {test_path}')
