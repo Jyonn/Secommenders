@@ -21,6 +21,11 @@ from core import CompiledArtifacts, SequentialRecModel, TrainConfig
 from core.dataset import CompiledFinetuneTrajectoryDataset, CompiledTestSampleDataset, CompiledValidSampleDataset
 from utils import function
 from utils.artifact import ArtifactStore
+from utils.artifact_identity import (
+    register_trained_artifact,
+    resolve_trained_run_dir,
+    trained_artifact_identity,
+)
 from utils.config_init import ConfigInit
 from utils.gpu import GPU
 from utils.logging import attach_run_log, setup_logging
@@ -36,7 +41,7 @@ class Trainer:
         self.world_size = int(os.environ.get('WORLD_SIZE', '1'))
         self.distributed = self.world_size > 1
         self._init_distributed()
-        self.run_dir = ArtifactStore(config.data).trained_dir(config.run_id)
+        self.run_dir = resolve_trained_run_dir(config)
         self._prepare_uid_hierarchy_if_needed()
         self.compiled = CompiledArtifacts(config).load()
         self.device = self._resolve_device()
@@ -367,6 +372,7 @@ class Trainer:
             'world_size': self.world_size,
             'status': 'finished',
             'finished_at': _utc_now_iso(),
+            'artifact_identity': trained_artifact_identity(self.config, self.run_dir),
         })
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote trainer meta to {self.meta_path}')
@@ -387,6 +393,7 @@ class Trainer:
             'world_size': self.world_size,
             'status': 'valid_only_finished',
             'finished_at': _utc_now_iso(),
+            'artifact_identity': trained_artifact_identity(self.config, self.run_dir),
         })
         meta.pop('test_metrics', None)
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
@@ -413,6 +420,7 @@ class Trainer:
             'world_size': self.world_size,
             'status': 'test_only_finished',
             'finished_at': _utc_now_iso(),
+            'artifact_identity': trained_artifact_identity(self.config, self.run_dir),
         })
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote test-only meta to {self.meta_path}')
@@ -649,7 +657,7 @@ def _command_string():
 
 
 def _run_dir_for_config(config: TrainConfig):
-    return ArtifactStore(config.data).trained_dir(config.run_id)
+    return resolve_trained_run_dir(config)
 
 
 def _write_pid_record(run_dir: Path, config: TrainConfig):
@@ -686,8 +694,10 @@ def _write_initial_meta(run_dir: Path, config: TrainConfig):
         'status': 'running',
         'started_at': _utc_now_iso(),
         'log_path': str(run_dir / 'train.log'),
+        'artifact_identity': trained_artifact_identity(config, run_dir),
     }
     (run_dir / 'meta.json').write_text(json.dumps(meta, indent=2) + '\n')
+    register_trained_artifact(config, run_dir)
 
 
 def _setup_run_artifacts(config: TrainConfig):

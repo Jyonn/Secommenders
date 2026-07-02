@@ -16,6 +16,7 @@ import yaml
 from notificator import Notificator
 
 from core.train_config import TrainConfig
+from utils.artifact_identity import resolve_trained_run_dir
 from utils.compile import short_config_hash
 from utils.config_init import ConfigInit
 from utils.server import Server
@@ -230,7 +231,7 @@ def trainer_command_from_args(args: dict):
 
 def run_dir_for_args(args: dict):
     config = build_train_config(args)
-    return ROOT / 'artifacts' / 'trained' / config.data / config.run_id
+    return resolve_trained_run_dir(config, root=ROOT)
 
 
 def run_dir_completed(run_dir: Path):

@@ -82,6 +82,25 @@ python trainer.py ... \
 
 This is useful when training succeeds but final test evaluation needs a smaller batch size or safer decoding settings.
 
+### Trained Artifact Registry
+
+Trained runs are resolved through a dataset-level registry before a new run directory is created:
+
+```text
+artifacts/trained/<dataset>/.index.json
+```
+
+This lets newer config signatures reuse older folders when a signature schema changes but the old run can be migrated by filling in default hyperparameters.
+
+Initialize or inspect the registry for existing runs with:
+
+```bash
+python scripts/init_artifact_registry.py --stage trained
+python scripts/init_artifact_registry.py --stage trained --apply
+```
+
+The dry run reports unresolved folders. A folder is only migrated when its `meta.json` contains enough `config` information to rebuild the current trained artifact spec.
+
 ### Hierarchical UID Decoding
 
 Enable hierarchical UID decoding with:
@@ -171,7 +190,7 @@ The current scheduler uses these rules:
   - `64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1`
 - if training succeeds but final test OOMs:
   - the scheduler retries with `--test_only true --load_ckpt ...`
-- if `artifacts/trained/<dataset>/<run_id>/meta.json` already contains `test_metrics`,
+- if the resolved trained run directory's `meta.json` already contains `test_metrics`,
   - the experiment is skipped as an existing completed run
 
 ### Scheduler Outputs
