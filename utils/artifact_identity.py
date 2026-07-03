@@ -7,7 +7,7 @@ from typing import Any
 from utils.compile import CompileConfig, short_config_hash
 
 
-TRAINED_SPEC_VERSION = 'trained.v1'
+TRAINED_SPEC_VERSION = 'trained.v2'
 TRAINED_INDEX_NAME = '.index.json'
 LEGACY_RUN_HASH_RE = re.compile(r'__h([0-9a-fA-F]{6,64})$')
 
@@ -81,6 +81,23 @@ def trained_index_path(data: str, root: Path | str | None = None):
     return trained_dataset_dir(data, root=root) / TRAINED_INDEX_NAME
 
 
+def trained_seed(config: Any):
+    return int(_config_get(config, 'seed', 42))
+
+
+def trained_seed_dir_name(config: Any):
+    return str(trained_seed(config))
+
+
+def trained_mode(config: Any):
+    if bool(_config_get(config, 'test_only', False)):
+        return 'test'
+    valid_only = _config_get(config, 'valid_only', 0)
+    if valid_only:
+        return 'valid'
+    return 'train'
+
+
 def load_trained_index(data: str, root: Path | str | None = None):
     path = trained_index_path(data, root=root)
     if not path.exists():
@@ -120,19 +137,20 @@ def _config_data(config: Any):
 def _compile_config_from_config(config: Any):
     if not isinstance(config, dict) and hasattr(config, 'compile_config'):
         return config.compile_config
+    defaults = TRAIN_CONFIG_DEFAULTS
     return CompileConfig(
         data=_config_get(config, 'data'),
         model=_config_get(config, 'model'),
         repr_type=_config_get(config, 'repr_type'),
-        repr_source_model=_config_get(config, 'repr_source_model'),
-        sid_export=_config_get(config, 'sid_export'),
-        sid_coder=_config_get(config, 'sid_coder'),
-        hash_coder=_config_get(config, 'hash_coder'),
+        repr_source_model=_config_get(config, 'repr_source_model', defaults['repr_source_model']),
+        sid_export=_config_get(config, 'sid_export', defaults['sid_export']),
+        sid_coder=_config_get(config, 'sid_coder', defaults['sid_coder']),
+        hash_coder=_config_get(config, 'hash_coder', defaults['hash_coder']),
         task_type=_config_get(config, 'task_type'),
-        maxitems=int(_config_get(config, 'maxitems')),
-        model_max_length=_config_get(config, 'model_max_length'),
-        item_text_max_tokens=int(_config_get(config, 'item_text_max_tokens')),
-        repr_combine=_config_get(config, 'repr_combine'),
+        maxitems=int(_config_get(config, 'maxitems', defaults['maxitems'])),
+        model_max_length=_config_get(config, 'model_max_length', defaults['model_max_length']),
+        item_text_max_tokens=int(_config_get(config, 'item_text_max_tokens', defaults['item_text_max_tokens'])),
+        repr_combine=_config_get(config, 'repr_combine', defaults['repr_combine']),
     )
 
 
@@ -140,8 +158,23 @@ def _config_sign_payload(config: Any):
     if not isinstance(config, dict) and hasattr(config, 'sign_payload'):
         return config.sign_payload
 
-    payload = {key: _config_get(config, key) for key in TRAIN_CONFIG_FIELD_NAMES if key in config}
+    normalized = deepcopy(TRAIN_CONFIG_DEFAULTS)
+    if isinstance(config, dict):
+        normalized.update({key: value for key, value in config.items() if key in TRAIN_CONFIG_FIELD_NAMES})
+    else:
+        normalized.update({key: _config_get(config, key) for key in TRAIN_CONFIG_FIELD_NAMES})
+    payload = {key: normalized.get(key) for key in TRAIN_CONFIG_FIELD_NAMES if key in normalized}
     payload.pop('device', None)
+    batch_size = int(payload.get('batch_size') or TRAIN_CONFIG_DEFAULTS['batch_size'])
+    accumulate_batch = int(payload.get('accumulate_batch') or TRAIN_CONFIG_DEFAULTS['accumulate_batch'])
+    payload['effective_batch_size'] = batch_size * accumulate_batch
+    payload.pop('seed', None)
+    payload.pop('batch_size', None)
+    payload.pop('accumulate_batch', None)
+    payload.pop('valid_only', None)
+    payload.pop('test_only', None)
+    payload.pop('load_ckpt', None)
+    payload.pop('code_beam_chunk_size', None)
     compile_config = _compile_config_from_config(payload)
     used_views = compile_config.used_views
     if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
@@ -185,6 +218,11 @@ def trained_signature_from_config(config: Any):
     return short_config_hash(trained_spec_from_config(config), length=16)
 
 
+def canonical_trained_run_dir(config: Any, root: Path | str | None = None):
+    signature = trained_signature_from_config(config)
+    return trained_dataset_dir(_config_data(config), root=root) / signature / trained_seed_dir_name(config)
+
+
 def _resolve_alias(index: dict, signature: str):
     seen = set()
     cursor = signature
@@ -206,14 +244,20 @@ def resolve_trained_run_dir(config: Any, root: Path | str | None = None):
     dataset_dir = trained_dataset_dir(data, root=root)
     index = load_trained_index(data, root=root)
     _, entry = _resolve_alias(index, signature)
+    seed_name = trained_seed_dir_name(config)
     if isinstance(entry, dict) and entry.get('folder'):
-        candidate = dataset_dir / str(entry['folder'])
+        candidate = dataset_dir / str(entry['folder']) / seed_name
         if candidate.exists():
             return candidate
-    run_id = _config_get(config, 'run_id')
-    if not run_id:
-        raise ValueError('train config run_id is required when no registry entry is available')
-    return dataset_dir / str(run_id)
+    return canonical_trained_run_dir(config, root=root)
+
+
+def trained_setting_folder_from_run_dir(config: Any, run_dir: Path):
+    run_dir = Path(run_dir)
+    seed_name = trained_seed_dir_name(config)
+    if run_dir.name == seed_name:
+        return run_dir.parent.name
+    return run_dir.name
 
 
 def _dedupe(values):
@@ -235,7 +279,7 @@ def trained_artifact_identity(
     migration_status: str = 'current',
 ):
     signature = trained_signature_from_config(config)
-    folder = Path(run_dir).name
+    folder = trained_setting_folder_from_run_dir(config, Path(run_dir))
     original_signature = legacy_signature_from_folder(folder)
     alias_values = _dedupe([*(aliases or []), original_signature])
     return {
@@ -243,6 +287,8 @@ def trained_artifact_identity(
         'schema_version': TRAINED_SPEC_VERSION,
         'signature': signature,
         'folder': folder,
+        'seed': trained_seed(config),
+        'mode': trained_mode(config),
         'aliases': alias_values,
         'migration_status': migration_status,
         'spec': trained_spec_from_config(config),
@@ -257,7 +303,7 @@ def register_trained_artifact(
     root: Path | str | None = None,
 ):
     signature = trained_signature_from_config(config)
-    folder = Path(run_dir).name
+    folder = trained_setting_folder_from_run_dir(config, Path(run_dir))
     data = _config_data(config)
     index = load_trained_index(data, root=root)
     alias_values = _dedupe([*(aliases or []), legacy_signature_from_folder(folder)])

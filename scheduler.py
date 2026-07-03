@@ -16,7 +16,7 @@ import yaml
 from notificator import Notificator
 
 from core.train_config import TrainConfig
-from utils.artifact_identity import resolve_trained_run_dir
+from utils.artifact_identity import resolve_trained_run_dir, trained_signature_from_config
 from utils.compile import short_config_hash
 from utils.config_init import ConfigInit
 from utils.server import Server
@@ -229,6 +229,37 @@ def trainer_command_from_args(args: dict):
     return command
 
 
+REPORT_RUNTIME_ARG_KEYS = {
+    'seed',
+    'batch_size',
+    'accumulate_batch',
+    'device',
+    'num_gpus',
+    'valid_only',
+    'test_only',
+    'load_ckpt',
+    'code_beam_chunk_size',
+}
+
+
+def canonical_report_args(args: dict, *, effective_batch_size: int):
+    canonical = deepcopy(args)
+    for key in REPORT_RUNTIME_ARG_KEYS:
+        canonical.pop(key, None)
+    canonical['effective_batch_size'] = int(effective_batch_size)
+    return canonical
+
+
+def report_command_from_args(args: dict):
+    command = [sys.executable, 'trainer.py']
+    for key in sorted(args):
+        value = args[key]
+        if value is None:
+            continue
+        command.extend([f'--{key}', str(value).lower() if isinstance(value, bool) else str(value)])
+    return ' '.join(shlex.quote(part) for part in command)
+
+
 def run_dir_for_args(args: dict):
     config = build_train_config(args)
     return resolve_trained_run_dir(config, root=ROOT)
@@ -428,23 +459,32 @@ class Scheduler:
             phase='train',
         )
         config = build_train_config(logical_args)
-        command = raw_exp.get('command')
-        if command:
-            report_command = ' '.join(command.strip().split())
-        else:
-            report_command = ' '.join(shlex.quote(part) for part in trainer_command_from_args(logical_args))
+        canonical_base_args = canonical_report_args(base_args, effective_batch_size=self.effective_batch_size)
+        canonical_logical_args = canonical_report_args(
+            logical_args,
+            effective_batch_size=self.effective_batch_size,
+        )
+        report_command = report_command_from_args(canonical_logical_args)
+        identity_payload = {
+            'effective_batch_size': self.effective_batch_size,
+            'logical_train_args': canonical_logical_args,
+            'trained_signature': trained_signature_from_config(config),
+            'compile_prepare_id': config.compile_config.prepare_id,
+        }
         payload = {
             'plan_name': self.plan_name,
             'plan_path': str(self.plan_path),
             'experiment_index': index,
             'experiment_name': raw_exp.get('name') or f'exp{index:03d}',
+            'signature_payload': identity_payload,
             'effective_batch_size': self.effective_batch_size,
-            'base_args': base_args,
-            'logical_train_args': logical_args,
+            'base_args': canonical_base_args,
+            'logical_train_args': canonical_logical_args,
             'run_id': config.run_id,
+            'trained_signature': trained_signature_from_config(config),
             'compile_prepare_id': config.compile_config.prepare_id,
         }
-        signature = short_config_hash(payload, length=16)
+        signature = short_config_hash(identity_payload, length=16)
         seed = int(base_args.get('seed', getattr(config, 'seed', 42)))
         return {
             'report_signature': signature,

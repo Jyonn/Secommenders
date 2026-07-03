@@ -55,6 +55,10 @@ class TrainConfig:
     num_heads: int
     dropout: float
 
+    @property
+    def effective_batch_size(self):
+        return int(self.batch_size) * int(self.accumulate_batch)
+
     @classmethod
     def from_refconfig(cls, configurations):
         data_config = configurations.config.data
@@ -172,8 +176,7 @@ class TrainConfig:
         parts = [
             self.model,
             f'{self.repr_type}2{self.task_type}',
-            f'bs{self.batch_size}',
-            f'acc{self.accumulate_batch}' if self.accumulate_batch != 1 else None,
+            f'ebs{self.effective_batch_size}',
             (
                 'validonly'
                 if self.valid_only == -1
@@ -202,12 +205,8 @@ class TrainConfig:
             parts.append(f'cd-{self.code_decoding}')
         if self.task_type == 'sid' and self.code_beam_width != 20:
             parts.append(f'cb{self.code_beam_width}')
-        if self.task_type == 'sid' and self.code_beam_chunk_size != self.batch_size:
-            parts.append(f'cbc{self.code_beam_chunk_size}')
         if self.task_type in {'sid', 'hash'} and self.code_collision_loss_weight != 0.1:
             parts.append(f'ccw{compact_float(self.code_collision_loss_weight)}')
-        if self.test_only and self.load_ckpt:
-            parts.append(f'ck{short_config_hash({"load_ckpt": self.load_ckpt})}')
         if is_llm:
             parts.extend(
                 [
@@ -225,6 +224,14 @@ class TrainConfig:
     def sign_payload(self):
         payload = asdict(self)
         payload.pop('device', None)
+        payload['effective_batch_size'] = self.effective_batch_size
+        payload.pop('seed', None)
+        payload.pop('batch_size', None)
+        payload.pop('accumulate_batch', None)
+        payload.pop('valid_only', None)
+        payload.pop('test_only', None)
+        payload.pop('load_ckpt', None)
+        payload.pop('code_beam_chunk_size', None)
         used_views = self.compile_config.used_views
         if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
             payload.pop('repr_source_model', None)
@@ -248,6 +255,4 @@ class TrainConfig:
             payload.pop('code_collision_loss_weight', None)
         if self.repr_combine == 'add' or len(self.compile_config.repr_types) <= 1:
             payload.pop('alignment_weight', None)
-        if not self.test_only:
-            payload.pop('load_ckpt', None)
         return payload

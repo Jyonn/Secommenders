@@ -77,14 +77,22 @@ python trainer.py ... --valid_only true
 ```bash
 python trainer.py ... \
   --test_only true \
-  --load_ckpt artifacts/trained/<dataset>/<run_id>/best.pt
+  --load_ckpt artifacts/trained/<dataset>/<trained_signature>/<seed>/best.pt
 ```
 
 This is useful when training succeeds but final test evaluation needs a smaller batch size or safer decoding settings.
 
 ### Trained Artifact Registry
 
-Trained runs are resolved through a dataset-level registry before a new run directory is created:
+Trained checkpoints are stored by evaluation setting first and seed second:
+
+```text
+artifacts/trained/<dataset>/<trained_signature>/<seed>/
+```
+
+The trained signature intentionally excludes `seed`, `batch_size`, and `accumulate_batch`. It includes their product as `effective_batch_size`, so `batch_size=64, accumulate_batch=1` and `batch_size=32, accumulate_batch=2` resolve to the same trained setting.
+
+Trained runs are also resolved through a dataset-level registry before a new run directory is created:
 
 ```text
 artifacts/trained/<dataset>/.index.json
@@ -99,7 +107,13 @@ python scripts/init_artifact_registry.py --stage trained
 python scripts/init_artifact_registry.py --stage trained --apply
 ```
 
-The dry run reports unresolved folders. A folder is only migrated when its `meta.json` contains enough `config` information to rebuild the current trained artifact spec.
+The dry run reports unresolved folders and delete candidates. A folder is only migrated when its `meta.json` contains enough `config` information to rebuild the current trained artifact spec.
+
+If you have reviewed the dry-run output and want to remove train-mode setting folders that have no `best.pt` and look failed or abandoned, pass the explicit deletion flag:
+
+```bash
+python scripts/init_artifact_registry.py --stage trained --apply --delete-abnormal-empty
+```
 
 ### Hierarchical UID Decoding
 
@@ -192,6 +206,8 @@ The current scheduler uses these rules:
   - the scheduler retries with `--test_only true --load_ckpt ...`
 - if the resolved trained run directory's `meta.json` already contains `test_metrics`,
   - the experiment is skipped as an existing completed run
+- multiple seeds of the same setting share the same remote evaluation signature
+  - each seed remains a separate experiment under that evaluation
 
 ### Scheduler Outputs
 

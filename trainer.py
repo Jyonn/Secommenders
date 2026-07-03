@@ -683,7 +683,8 @@ def _write_initial_meta(run_dir: Path, config: TrainConfig):
     world_size = int(os.environ.get('WORLD_SIZE', '1'))
     if rank != 0:
         return
-    meta = {
+    meta = _read_json_if_exists(run_dir / 'meta.json') or {}
+    meta.update({
         'config': asdict(config),
         'run_dir': str(run_dir),
         'compiled_dir': str(ArtifactStore(config.data).compiled_dir(config.compile_config.prepare_id)),
@@ -695,7 +696,7 @@ def _write_initial_meta(run_dir: Path, config: TrainConfig):
         'started_at': _utc_now_iso(),
         'log_path': str(run_dir / 'train.log'),
         'artifact_identity': trained_artifact_identity(config, run_dir),
-    }
+    })
     (run_dir / 'meta.json').write_text(json.dumps(meta, indent=2) + '\n')
     register_trained_artifact(config, run_dir)
 
