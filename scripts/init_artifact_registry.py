@@ -175,6 +175,46 @@ def summarize_run_dir(run_dir: Path):
     return summary
 
 
+def compact_json(value):
+    if value in (None, {}, []):
+        return '-'
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
+def print_run_summary(label: str, summary: dict):
+    print(
+        f'    {label}: status={summary.get("status") or "-"} mode={summary.get("mode") or "-"} '
+        f'seed={summary.get("seed") if summary.get("seed") is not None else "-"} '
+        f'ckpt={summary.get("has_checkpoint")} pid={summary.get("has_pid")} '
+        f'best={summary.get("best_valid_metric") if summary.get("best_valid_metric") is not None else "-"} '
+        f'test={compact_json(summary.get("test_metrics"))}'
+    )
+    print(f'      path={summary.get("path")}')
+    if summary.get('checkpoint_mtime'):
+        print(
+            f'      checkpoint size={summary.get("checkpoint_size_bytes")} '
+            f'mtime={summary.get("checkpoint_mtime")}'
+        )
+    if summary.get('config_brief'):
+        print(f'      config={compact_json(summary.get("config_brief"))}')
+    if summary.get('error') or summary.get('failed_at') or summary.get('meta_error'):
+        print(
+            f'      error={summary.get("error") or "-"} failed_at={summary.get("failed_at") or "-"} '
+            f'meta_error={summary.get("meta_error") or "-"}'
+        )
+
+
+def conflict_report(data: str, folder: str, signature: str, source_dir: Path, target_dir: Path, *, error: str):
+    return {
+        'data': data,
+        'folder': folder,
+        'signature': signature,
+        'error': error,
+        'source': summarize_run_dir(source_dir),
+        'target': summarize_run_dir(target_dir),
+    }
+
+
 def backup_existing_target(target_run_dir: Path):
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     backup = target_run_dir.with_name(f'{target_run_dir.name}.conflict-{timestamp}')
@@ -272,12 +312,25 @@ def init_trained_registry(
                     'meta_path': str(meta_path),
                 }
             )
+            if not apply and meta_path.parent != target_run_dir and target_run_dir.exists():
+                conflict = {
+                    'data': dataset,
+                    'folder': folder,
+                    'signature': signature,
+                    'seed': trained_seed(config),
+                    'source': summarize_run_dir(meta_path.parent),
+                    'target': summarize_run_dir(target_run_dir),
+                    'resolution': 'dry-run',
+                    'error': f'target run dir already exists: {target_run_dir}',
+                }
+                conflicts.append(conflict)
             if apply:
                 try:
                     final_meta_path = meta_path
                     if meta_path.parent != target_run_dir:
+                        existing_target_conflict = None
                         if target_run_dir.exists():
-                            conflict = {
+                            existing_target_conflict = {
                                 'data': dataset,
                                 'folder': folder,
                                 'signature': signature,
@@ -287,8 +340,8 @@ def init_trained_registry(
                                 'resolution': resolve_conflict,
                             }
                             if resolve_conflict == 'report':
-                                conflict['error'] = f'target run dir already exists: {target_run_dir}'
-                                conflicts.append(conflict)
+                                existing_target_conflict['error'] = f'target run dir already exists: {target_run_dir}'
+                                conflicts.append(existing_target_conflict)
                                 continue
                             if resolve_conflict == 'keep-existing':
                                 register_trained_artifact(
@@ -297,14 +350,14 @@ def init_trained_registry(
                                     aliases=identity.get('aliases'),
                                     root=root,
                                 )
-                                conflict['action'] = 'kept existing target and skipped source'
-                                conflicts.append(conflict)
+                                existing_target_conflict['action'] = 'kept existing target and skipped source'
+                                conflicts.append(existing_target_conflict)
                                 continue
                             if resolve_conflict == 'keep-source':
                                 backup = backup_existing_target(target_run_dir)
-                                conflict['action'] = 'backed up existing target and moved source'
-                                conflict['target_backup'] = str(backup)
-                                conflicts.append(conflict)
+                                existing_target_conflict['action'] = 'backed up existing target and moved source'
+                                existing_target_conflict['target_backup'] = str(backup)
+                                conflicts.append(existing_target_conflict)
                             else:
                                 raise ValueError(f'unsupported conflict resolution: {resolve_conflict}')
                         old_run_dir = meta_path.parent
@@ -321,7 +374,20 @@ def init_trained_registry(
                                 'to': str(target_run_dir),
                             }
                         )
-                    register_trained_artifact(config, target_run_dir, aliases=identity.get('aliases'), root=root)
+                    try:
+                        register_trained_artifact(config, target_run_dir, aliases=identity.get('aliases'), root=root)
+                    except ValueError as exc:
+                        conflicts.append(
+                            conflict_report(
+                                dataset,
+                                folder,
+                                signature,
+                                meta_path.parent,
+                                target_run_dir,
+                                error=str(exc),
+                            )
+                        )
+                        continue
                     final_meta = read_json(final_meta_path)
                     final_meta['run_dir'] = str(target_run_dir)
                     final_meta['artifact_identity'] = trained_artifact_identity(
@@ -333,12 +399,14 @@ def init_trained_registry(
                     write_json(final_meta_path, final_meta)
                 except ValueError as exc:
                     conflicts.append(
-                        {
-                            'data': dataset,
-                            'folder': folder,
-                            'signature': signature,
-                            'error': str(exc),
-                        }
+                        conflict_report(
+                            dataset,
+                            folder,
+                            signature,
+                            meta_path.parent,
+                            target_run_dir,
+                            error=str(exc),
+                        )
                     )
         except Exception as exc:
             unresolved.append(
@@ -438,21 +506,21 @@ def main():
         source = item.get('source') or {}
         target = item.get('target') or {}
         if source or target:
+            print_run_summary('source', source)
+            print_run_summary('target', target)
             print(
-                '    source: '
-                f'status={source.get("status")} ckpt={source.get("has_checkpoint")} '
-                f'best={source.get("best_valid_metric")} test={source.get("test_metrics")} path={source.get("path")}'
-            )
-            print(
-                '    target: '
-                f'status={target.get("status")} ckpt={target.get("has_checkpoint")} '
-                f'best={target.get("best_valid_metric")} test={target.get("test_metrics")} path={target.get("path")}'
+                '    choose: --resolve-conflict keep-existing to keep target, '
+                'or --resolve-conflict keep-source to back up target and move source'
             )
     for item in report['moved'][:20]:
         print(f'  moved {item["from"]} -> {item["to"]}')
+    deleted_paths = {item.get('path') for item in report.get('deleted', [])}
     for item in report['delete_candidates'][:20]:
         reasons = ','.join(item['reasons'])
-        print(f'  delete-candidate {item["data"]}/{item["folder"]}: {reasons}')
+        marker = 'deleted' if item.get('path') in deleted_paths else 'not deleted'
+        print(f'  delete-candidate ({marker}) {item["data"]}/{item["folder"]}: {reasons}')
+    if report['delete_candidate_count'] and not report['deleted_count']:
+        print('  note: delete candidates are only reported by default; add --apply --delete-abnormal-empty to delete them.')
 
 
 if __name__ == '__main__':
