@@ -2,6 +2,7 @@ import argparse
 import json
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -95,6 +96,96 @@ def checkpoint_exists(setting_dir: Path):
     return any(path.name == 'best.pt' for path in setting_dir.rglob('best.pt'))
 
 
+def summarize_metrics(metrics: dict | None):
+    if not isinstance(metrics, dict):
+        return {}
+    summary = {}
+    for key in sorted(metrics):
+        value = metrics[key]
+        if isinstance(value, (int, float, str)):
+            summary[key] = value
+    return summary
+
+
+def summarize_run_dir(run_dir: Path):
+    run_dir = Path(run_dir)
+    meta_path = run_dir / 'meta.json'
+    pid_path = run_dir / 'pid.json'
+    checkpoint_path = run_dir / 'best.pt'
+    summary = {
+        'path': str(run_dir),
+        'exists': run_dir.exists(),
+        'has_meta': meta_path.exists(),
+        'has_checkpoint': checkpoint_path.exists(),
+        'has_pid': pid_path.exists(),
+    }
+    if checkpoint_path.exists():
+        summary['checkpoint_size_bytes'] = checkpoint_path.stat().st_size
+        summary['checkpoint_mtime'] = datetime.fromtimestamp(
+            checkpoint_path.stat().st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+    if not meta_path.exists():
+        return summary
+    try:
+        meta = read_json(meta_path)
+    except ValueError as exc:
+        summary['meta_error'] = str(exc)
+        return summary
+    if not isinstance(meta, dict):
+        summary['meta_error'] = 'meta root is not a dict'
+        return summary
+    identity = meta.get('artifact_identity') if isinstance(meta.get('artifact_identity'), dict) else {}
+    config = meta.get('config') if isinstance(meta.get('config'), dict) else {}
+    summary.update(
+        {
+            'status': meta.get('status'),
+            'mode': identity.get('mode'),
+            'seed': identity.get('seed') if identity.get('seed') is not None else config.get('seed'),
+            'signature': identity.get('signature'),
+            'schema_version': identity.get('schema_version'),
+            'aliases': identity.get('aliases') or [],
+            'best_epoch': meta.get('best_epoch'),
+            'main_metric': meta.get('main_metric'),
+            'best_valid_metric': meta.get('best_valid_metric'),
+            'finished_at': meta.get('finished_at'),
+            'started_at': meta.get('started_at'),
+            'error': meta.get('error'),
+            'failed_at': meta.get('failed_at'),
+            'test_metrics': summarize_metrics(meta.get('test_metrics')),
+            'valid_metrics': summarize_metrics(meta.get('valid_metrics')),
+        }
+    )
+    if config:
+        summary['config_brief'] = {
+            key: config.get(key)
+            for key in (
+                'data',
+                'model',
+                'repr_type',
+                'task_type',
+                'seed',
+                'batch_size',
+                'accumulate_batch',
+                'learning_rate',
+                'weight_decay',
+            )
+            if key in config
+        }
+    return summary
+
+
+def backup_existing_target(target_run_dir: Path):
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    backup = target_run_dir.with_name(f'{target_run_dir.name}.conflict-{timestamp}')
+    suffix = 1
+    while backup.exists():
+        backup = target_run_dir.with_name(f'{target_run_dir.name}.conflict-{timestamp}-{suffix}')
+        suffix += 1
+    shutil.move(str(target_run_dir), str(backup))
+    return backup
+
+
 def collect_delete_candidates(root: Path, data: str | None = None):
     base = root / 'artifacts' / 'trained'
     dataset_dirs = [base / data.lower()] if data else sorted(path for path in base.glob('*') if path.is_dir())
@@ -145,6 +236,7 @@ def init_trained_registry(
     data: str | None,
     apply: bool,
     delete_abnormal_empty: bool = False,
+    resolve_conflict: str = 'report',
 ):
     resolved = []
     unresolved = []
@@ -185,7 +277,36 @@ def init_trained_registry(
                     final_meta_path = meta_path
                     if meta_path.parent != target_run_dir:
                         if target_run_dir.exists():
-                            raise ValueError(f'target run dir already exists: {target_run_dir}')
+                            conflict = {
+                                'data': dataset,
+                                'folder': folder,
+                                'signature': signature,
+                                'seed': trained_seed(config),
+                                'source': summarize_run_dir(meta_path.parent),
+                                'target': summarize_run_dir(target_run_dir),
+                                'resolution': resolve_conflict,
+                            }
+                            if resolve_conflict == 'report':
+                                conflict['error'] = f'target run dir already exists: {target_run_dir}'
+                                conflicts.append(conflict)
+                                continue
+                            if resolve_conflict == 'keep-existing':
+                                register_trained_artifact(
+                                    config,
+                                    target_run_dir,
+                                    aliases=identity.get('aliases'),
+                                    root=root,
+                                )
+                                conflict['action'] = 'kept existing target and skipped source'
+                                conflicts.append(conflict)
+                                continue
+                            if resolve_conflict == 'keep-source':
+                                backup = backup_existing_target(target_run_dir)
+                                conflict['action'] = 'backed up existing target and moved source'
+                                conflict['target_backup'] = str(backup)
+                                conflicts.append(conflict)
+                            else:
+                                raise ValueError(f'unsupported conflict resolution: {resolve_conflict}')
                         old_run_dir = meta_path.parent
                         old_setting_dir = old_run_dir.parent
                         target_run_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -275,6 +396,12 @@ def main():
         action='store_true',
         help='With --apply, delete train-mode setting folders that have no best.pt and look failed/running.',
     )
+    parser.add_argument(
+        '--resolve-conflict',
+        choices=['report', 'keep-existing', 'keep-source'],
+        default='report',
+        help='How to handle migration conflicts when the canonical seed directory already exists.',
+    )
     parser.add_argument('--json', action='store_true', help='Print the full report as JSON.')
     args = parser.parse_args()
 
@@ -283,6 +410,7 @@ def main():
         data=args.data,
         apply=bool(args.apply),
         delete_abnormal_empty=bool(args.delete_abnormal_empty),
+        resolve_conflict=str(args.resolve_conflict),
     )
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -306,7 +434,20 @@ def main():
     if len(report['unresolved']) > 20:
         print(f'  ... {len(report["unresolved"]) - 20} more unresolved')
     for item in report['conflicts'][:20]:
-        print(f'  conflict {item["data"]}/{item["folder"]}: {item["error"]}')
+        print(f'  conflict {item["data"]}/{item["folder"]}: {item.get("error") or item.get("action")}')
+        source = item.get('source') or {}
+        target = item.get('target') or {}
+        if source or target:
+            print(
+                '    source: '
+                f'status={source.get("status")} ckpt={source.get("has_checkpoint")} '
+                f'best={source.get("best_valid_metric")} test={source.get("test_metrics")} path={source.get("path")}'
+            )
+            print(
+                '    target: '
+                f'status={target.get("status")} ckpt={target.get("has_checkpoint")} '
+                f'best={target.get("best_valid_metric")} test={target.get("test_metrics")} path={target.get("path")}'
+            )
     for item in report['moved'][:20]:
         print(f'  moved {item["from"]} -> {item["to"]}')
     for item in report['delete_candidates'][:20]:

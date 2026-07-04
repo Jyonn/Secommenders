@@ -109,6 +109,22 @@ python scripts/init_artifact_registry.py --stage trained --apply
 
 The dry run reports unresolved folders and delete candidates. A folder is only migrated when its `meta.json` contains enough `config` information to rebuild the current trained artifact spec.
 
+If migration reports a conflict, the old folder and canonical target folder both contain results for the same trained signature and seed. Inspect both sides first:
+
+```bash
+python scripts/init_artifact_registry.py --stage trained --apply --json
+```
+
+Then choose one explicitly:
+
+```bash
+# Keep the canonical target and leave the old source folder untouched.
+python scripts/init_artifact_registry.py --stage trained --apply --resolve-conflict keep-existing
+
+# Back up the existing canonical target as *.conflict-<timestamp>, then move the old source into place.
+python scripts/init_artifact_registry.py --stage trained --apply --resolve-conflict keep-source
+```
+
 If you have reviewed the dry-run output and want to remove train-mode setting folders that have no `best.pt` and look failed or abandoned, pass the explicit deletion flag:
 
 ```bash
