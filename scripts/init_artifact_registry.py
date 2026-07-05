@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from utils.artifact_identity import (  # noqa: E402
     TRAINED_INDEX_NAME,
     TRAINED_PHASES,
+    TrainedArtifactRegistryConflict,
     canonical_trained_run_dir,
     legacy_signature_from_folder,
     load_trained_index,
@@ -405,6 +406,51 @@ def conflict_report(data: str, folder: str, signature: str, source_dir: Path, ta
     }
 
 
+def registry_folder_run_dir(dataset_dir: Path, folder: str | None, config):
+    if not folder:
+        return None
+    folder_dir = dataset_dir / str(folder)
+    seed_name = str(trained_seed(config))
+    phase_name = trained_mode(config)
+    for candidate in (
+        folder_dir / seed_name / phase_name,
+        folder_dir / seed_name,
+        folder_dir,
+    ):
+        if candidate.exists():
+            return candidate
+    meta_paths = sorted(folder_dir.glob('*/meta.json')) + sorted(folder_dir.glob('*/*/meta.json'))
+    if meta_paths:
+        return meta_paths[0].parent
+    return folder_dir
+
+
+def registry_conflict_report(
+    data: str,
+    folder: str,
+    signature: str,
+    source_dir: Path,
+    target_dir: Path,
+    *,
+    dataset_dir: Path,
+    config,
+    error: Exception,
+):
+    display_target = target_dir
+    if isinstance(error, TrainedArtifactRegistryConflict):
+        registry_target = registry_folder_run_dir(dataset_dir, error.existing_folder, config)
+        if registry_target is not None:
+            display_target = registry_target
+    return conflict_report(
+        data,
+        folder,
+        signature,
+        source_dir,
+        display_target,
+        error=str(error),
+    )
+
+
 def choose_conflict_resolution(conflict: dict):
     print_conflict_summary(conflict)
     print_choice_help(conflict)
@@ -647,13 +693,15 @@ def init_trained_registry(
                         register_trained_artifact(config, target_run_dir, aliases=identity.get('aliases'), root=root)
                     except ValueError as exc:
                         conflicts.append(
-                            conflict_report(
+                            registry_conflict_report(
                                 dataset,
                                 folder,
                                 signature,
                                 source_run_dir,
                                 target_run_dir,
-                                error=str(exc),
+                                dataset_dir=dataset_dir,
+                                config=config,
+                                error=exc,
                             )
                         )
                         continue
@@ -668,13 +716,15 @@ def init_trained_registry(
                     write_json(final_meta_path, final_meta)
                 except ValueError as exc:
                     conflicts.append(
-                        conflict_report(
+                        registry_conflict_report(
                             dataset,
                             folder,
                             signature,
                             source_run_dir,
                             target_run_dir,
-                            error=str(exc),
+                            dataset_dir=dataset_dir,
+                            config=config,
+                            error=exc,
                         )
                     )
         except Exception as exc:
