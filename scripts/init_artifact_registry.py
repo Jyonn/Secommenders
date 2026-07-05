@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -23,6 +24,37 @@ from utils.artifact_identity import (  # noqa: E402
     trained_seed,
     trained_signature_from_config,
 )
+
+
+ANSI = {
+    'reset': '\033[0m',
+    'bold': '\033[1m',
+    'dim': '\033[2m',
+    'red': '\033[31m',
+    'green': '\033[32m',
+    'yellow': '\033[33m',
+    'blue': '\033[34m',
+    'magenta': '\033[35m',
+    'cyan': '\033[36m',
+    'gray': '\033[90m',
+}
+
+
+def use_color():
+    if 'NO_COLOR' in os.environ:
+        return False
+    return sys.stdout.isatty() or os.environ.get('FORCE_COLOR') == '1'
+
+
+def paint(text: str, *styles: str):
+    if not use_color():
+        return str(text)
+    prefix = ''.join(ANSI[style] for style in styles if style in ANSI)
+    return f'{prefix}{text}{ANSI["reset"]}' if prefix else str(text)
+
+
+def badge(text: str, color: str):
+    return paint(f'[{text}]', 'bold', color)
 
 
 def read_json(path: Path):
@@ -181,37 +213,115 @@ def compact_json(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
+def fmt_value(value):
+    if value is None or value == '':
+        return '-'
+    if isinstance(value, float):
+        return f'{value:.6g}'
+    return str(value)
+
+
+def status_badge(status):
+    key = str(status or 'unknown').lower()
+    if key in {'finished', 'valid_only_finished', 'test_only_finished', 'completed', 'done'}:
+        return badge(key, 'green')
+    if key in {'failed', 'error'}:
+        return badge(key, 'red')
+    if key in {'running'}:
+        return badge(key, 'yellow')
+    return badge(key, 'gray')
+
+
+def bool_badge(value, true_text='yes', false_text='no'):
+    return badge(true_text, 'green') if value else badge(false_text, 'gray')
+
+
+def section_rule(title: str, color: str = 'cyan', width: int = 96):
+    label = f' {title} '
+    line_len = max(2, width - len(label))
+    left = line_len // 2
+    right = line_len - left
+    return paint('=' * left, color) + paint(label, 'bold', color) + paint('=' * right, color)
+
+
+def kv_line(key: str, value, indent: int = 6):
+    print(f'{" " * indent}{paint(key.rjust(14), "dim")}: {value}')
+
+
 def print_run_summary(label: str, summary: dict):
-    print(
-        f'    {label}: status={summary.get("status") or "-"} mode={summary.get("mode") or "-"} '
-        f'seed={summary.get("seed") if summary.get("seed") is not None else "-"} '
-        f'ckpt={summary.get("has_checkpoint")} pid={summary.get("has_pid")} '
-        f'best={summary.get("best_valid_metric") if summary.get("best_valid_metric") is not None else "-"} '
-        f'test={compact_json(summary.get("test_metrics"))}'
-    )
-    print(f'      path={summary.get("path")}')
+    color = 'blue' if label == 'source' else 'magenta'
+    title = f'{label.upper()} run'
+    print(f'    {paint("+-- " + title + " " + "-" * max(1, 76 - len(title)), color)}')
+    kv_line('status', status_badge(summary.get('status')), indent=6)
+    kv_line('mode', fmt_value(summary.get('mode')), indent=6)
+    kv_line('seed', fmt_value(summary.get('seed')), indent=6)
+    kv_line('checkpoint', bool_badge(summary.get('has_checkpoint')), indent=6)
+    kv_line('pid record', bool_badge(summary.get('has_pid')), indent=6)
+    kv_line('best valid', fmt_value(summary.get('best_valid_metric')), indent=6)
+    kv_line('best epoch', fmt_value(summary.get('best_epoch')), indent=6)
+    kv_line('finished at', fmt_value(summary.get('finished_at')), indent=6)
     if summary.get('checkpoint_mtime'):
-        print(
-            f'      checkpoint size={summary.get("checkpoint_size_bytes")} '
+        checkpoint_text = (
+            f'{summary.get("checkpoint_size_bytes")} bytes, '
             f'mtime={summary.get("checkpoint_mtime")}'
         )
+        kv_line('ckpt file', checkpoint_text, indent=6)
     if summary.get('config_brief'):
-        print(f'      config={compact_json(summary.get("config_brief"))}')
+        kv_line('config', compact_json(summary.get('config_brief')), indent=6)
+    if summary.get('test_metrics'):
+        kv_line('test metrics', compact_json(summary.get('test_metrics')), indent=6)
+    if summary.get('valid_metrics'):
+        kv_line('valid metrics', compact_json(summary.get('valid_metrics')), indent=6)
     if summary.get('error') or summary.get('failed_at') or summary.get('meta_error'):
-        print(
-            f'      error={summary.get("error") or "-"} failed_at={summary.get("failed_at") or "-"} '
+        error_text = (
+            f'error={summary.get("error") or "-"}; '
+            f'failed_at={summary.get("failed_at") or "-"}; '
             f'meta_error={summary.get("meta_error") or "-"}'
         )
+        kv_line('problem', paint(error_text, 'red'), indent=6)
+    kv_line('path', paint(summary.get('path') or '-', 'dim'), indent=6)
+    print(f'    {paint("`--" + "-" * 80, color)}')
+
+
+def print_metric_comparison(source: dict, target: dict):
+    source_metrics = source.get('test_metrics') or {}
+    target_metrics = target.get('test_metrics') or {}
+    metric_names = sorted(set(source_metrics) | set(target_metrics))
+    if not metric_names:
+        return
+    print(f'    {paint("+-- TEST METRIC COMPARISON " + "-" * 55, "cyan")}')
+    print(f'      {paint("metric", "bold"):<24} {paint("source", "bold"):<16} {paint("target", "bold"):<16}')
+    print(f'      {"-" * 58}')
+    for metric in metric_names:
+        source_value = fmt_value(source_metrics.get(metric))
+        target_value = fmt_value(target_metrics.get(metric))
+        print(f'      {metric:<24} {source_value:<16} {target_value:<16}')
+    print(f'    {paint("`--" + "-" * 80, "cyan")}')
+
+
+def print_choice_help():
+    print(f'    {paint("Interactive choices", "bold", "yellow")}')
+    print(f'      {badge("t", "magenta")} keep target  : leave canonical target in place; source is not moved')
+    print(f'      {badge("s", "blue")} keep source  : back up target as *.conflict-<timestamp>, then move source')
+    print(f'      {badge("k", "gray")} skip         : leave both directories unchanged')
+    print(f'      {badge("q", "red")} quit         : stop migration immediately')
 
 
 def print_conflict_summary(conflict: dict):
     message = conflict.get('error') or conflict.get('action') or 'target run dir already exists'
-    print(f'  conflict {conflict["data"]}/{conflict["folder"]}: {message}')
+    print()
+    print(section_rule('TRAINED ARTIFACT CONFLICT'))
+    print(f'    {paint("setting", "dim")}: {conflict["data"]}/{conflict["folder"]}')
+    print(f'    {paint("signature", "dim")}: {conflict.get("signature") or "-"}')
+    if conflict.get('seed') is not None:
+        print(f'    {paint("seed", "dim")}: {conflict.get("seed")}')
+    print(f'    {paint("reason", "dim")}: {paint(message, "yellow")}')
     source = conflict.get('source') or {}
     target = conflict.get('target') or {}
     if source or target:
         print_run_summary('source', source)
         print_run_summary('target', target)
+        print_metric_comparison(source, target)
 
 
 def conflict_report(data: str, folder: str, signature: str, source_dir: Path, target_dir: Path, *, error: str):
@@ -238,9 +348,9 @@ def backup_existing_target(target_run_dir: Path):
 
 def choose_conflict_resolution(conflict: dict):
     print_conflict_summary(conflict)
-    print('    options: [t] keep target, [s] keep source, [k] skip, [q] quit')
+    print_choice_help()
     while True:
-        choice = input('    choose conflict resolution: ').strip().lower()
+        choice = input(paint('    choose [t/s/k/q]: ', 'bold', 'yellow')).strip().lower()
         if choice in {'t', 'target'}:
             return 'target'
         if choice in {'s', 'source'}:
@@ -249,7 +359,7 @@ def choose_conflict_resolution(conflict: dict):
             return 'report'
         if choice in {'q', 'quit', 'exit'}:
             raise KeyboardInterrupt('user quit interactive conflict resolution')
-        print('    please enter t, s, k, or q')
+        print(paint('    please enter t, s, k, or q', 'yellow'))
 
 
 def collect_delete_candidates(root: Path, data: str | None = None):
