@@ -241,10 +241,10 @@ def choose_conflict_resolution(conflict: dict):
     print('    options: [t] keep target, [s] keep source, [k] skip, [q] quit')
     while True:
         choice = input('    choose conflict resolution: ').strip().lower()
-        if choice in {'t', 'target', 'keep-target', 'keep-existing'}:
-            return 'keep-existing'
-        if choice in {'s', 'source', 'keep-source'}:
-            return 'keep-source'
+        if choice in {'t', 'target'}:
+            return 'target'
+        if choice in {'s', 'source'}:
+            return 'source'
         if choice in {'k', 'skip', ''}:
             return 'report'
         if choice in {'q', 'quit', 'exit'}:
@@ -302,7 +302,6 @@ def init_trained_registry(
     data: str | None,
     apply: bool,
     delete_abnormal_empty: bool = False,
-    resolve_conflict: str = 'report',
     interactive: bool = False,
 ):
     resolved = []
@@ -364,31 +363,31 @@ def init_trained_registry(
                                 'seed': trained_seed(config),
                                 'source': summarize_run_dir(meta_path.parent),
                                 'target': summarize_run_dir(target_run_dir),
-                                'resolution': 'interactive' if interactive else resolve_conflict,
+                                'resolution': 'interactive' if interactive else 'report',
                             }
                             resolution = (
                                 choose_conflict_resolution(existing_target_conflict)
                                 if interactive
-                                else resolve_conflict
+                                else 'report'
                             )
                             existing_target_conflict['resolution'] = resolution
                             if resolution == 'report':
                                 existing_target_conflict['error'] = f'target run dir already exists: {target_run_dir}'
                                 conflicts.append(existing_target_conflict)
                                 continue
-                            if resolution == 'keep-existing':
+                            if resolution == 'target':
                                 register_trained_artifact(
                                     config,
                                     target_run_dir,
                                     aliases=identity.get('aliases'),
                                     root=root,
                                 )
-                                existing_target_conflict['action'] = 'kept existing target and skipped source'
+                                existing_target_conflict['action'] = 'kept target and skipped source'
                                 conflicts.append(existing_target_conflict)
                                 continue
-                            if resolution == 'keep-source':
+                            if resolution == 'source':
                                 backup = backup_existing_target(target_run_dir)
-                                existing_target_conflict['action'] = 'backed up existing target and moved source'
+                                existing_target_conflict['action'] = 'backed up target and moved source'
                                 existing_target_conflict['target_backup'] = str(backup)
                                 conflicts.append(existing_target_conflict)
                             else:
@@ -498,12 +497,6 @@ def main():
         help='With --apply, delete train-mode setting folders that have no best.pt and look failed/running.',
     )
     parser.add_argument(
-        '--resolve-conflict',
-        choices=['report', 'keep-existing', 'keep-source'],
-        default='report',
-        help='How to handle migration conflicts when the canonical seed directory already exists.',
-    )
-    parser.add_argument(
         '--interactive',
         action='store_true',
         help='With --apply, prompt for each conflict and immediately apply the selected resolution.',
@@ -518,7 +511,6 @@ def main():
         data=args.data,
         apply=bool(args.apply),
         delete_abnormal_empty=bool(args.delete_abnormal_empty),
-        resolve_conflict=str(args.resolve_conflict),
         interactive=bool(args.interactive),
     )
     if args.json:
@@ -547,11 +539,10 @@ def main():
         target = item.get('target') or {}
         if source or target:
             print_conflict_summary(item)
-            print(
-                '    choose: --resolve-conflict keep-existing to keep target, '
-                '--resolve-conflict keep-source to back up target and move source, '
-                'or --interactive to decide one by one'
-            )
+            if not item.get('action'):
+                print(
+                    '    choose: rerun with --apply --interactive to decide and execute this conflict'
+                )
         else:
             print(f'  conflict {item["data"]}/{item["folder"]}: {item.get("error") or item.get("action")}')
     for item in report['moved'][:20]:
