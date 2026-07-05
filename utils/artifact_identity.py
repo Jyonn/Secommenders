@@ -319,20 +319,34 @@ def register_trained_artifact(
     signature = trained_signature_from_config(config)
     folder = trained_setting_folder_from_run_dir(config, Path(run_dir))
     data = _config_data(config)
+    dataset_dir = trained_dataset_dir(data, root=root)
     index = load_trained_index(data, root=root)
     alias_values = _dedupe([*(aliases or []), legacy_signature_from_folder(folder)])
 
+    def same_or_stale_primary(entry: dict):
+        primary_folder = entry.get('folder')
+        if not primary_folder:
+            return False
+        if primary_folder == folder:
+            return True
+        return not (dataset_dir / str(primary_folder)).exists()
+
     existing = index.get(signature)
-    if isinstance(existing, dict) and existing.get('folder') and existing.get('folder') != folder:
+    if isinstance(existing, dict) and existing.get('folder') and not same_or_stale_primary(existing):
         raise ValueError(
             f'trained artifact signature conflict for {signature}: '
             f'{existing.get("folder")} vs {folder}'
         )
     if isinstance(existing, dict) and existing.get('alias_of') and existing.get('alias_of') != signature:
-        raise ValueError(
-            f'trained artifact signature conflict for {signature}: '
-            f'already aliases {existing.get("alias_of")}'
-        )
+        existing_alias_of = str(existing.get('alias_of'))
+        existing_primary = index.get(existing_alias_of)
+        if isinstance(existing_primary, dict) and same_or_stale_primary(existing_primary):
+            alias_values = _dedupe([*alias_values, existing_alias_of])
+        else:
+            raise ValueError(
+                f'trained artifact signature conflict for {signature}: '
+                f'already aliases {existing.get("alias_of")}'
+            )
 
     index[signature] = {
         'folder': folder,
@@ -347,7 +361,7 @@ def register_trained_artifact(
             alias_of = existing_alias.get('alias_of')
             if alias_of and alias_of != signature:
                 raise ValueError(f'trained artifact alias conflict for {alias}: {alias_of} vs {signature}')
-            if existing_alias.get('folder') and alias != signature:
+            if existing_alias.get('folder') and not same_or_stale_primary(existing_alias):
                 raise ValueError(f'trained artifact alias conflict for {alias}: already registered as primary')
         index[alias] = {'alias_of': signature}
     save_trained_index(data, index, root=root)
