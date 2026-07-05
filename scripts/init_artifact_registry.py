@@ -204,6 +204,16 @@ def print_run_summary(label: str, summary: dict):
         )
 
 
+def print_conflict_summary(conflict: dict):
+    message = conflict.get('error') or conflict.get('action') or 'target run dir already exists'
+    print(f'  conflict {conflict["data"]}/{conflict["folder"]}: {message}')
+    source = conflict.get('source') or {}
+    target = conflict.get('target') or {}
+    if source or target:
+        print_run_summary('source', source)
+        print_run_summary('target', target)
+
+
 def conflict_report(data: str, folder: str, signature: str, source_dir: Path, target_dir: Path, *, error: str):
     return {
         'data': data,
@@ -224,6 +234,22 @@ def backup_existing_target(target_run_dir: Path):
         suffix += 1
     shutil.move(str(target_run_dir), str(backup))
     return backup
+
+
+def choose_conflict_resolution(conflict: dict):
+    print_conflict_summary(conflict)
+    print('    options: [t] keep target, [s] keep source, [k] skip, [q] quit')
+    while True:
+        choice = input('    choose conflict resolution: ').strip().lower()
+        if choice in {'t', 'target', 'keep-target', 'keep-existing'}:
+            return 'keep-existing'
+        if choice in {'s', 'source', 'keep-source'}:
+            return 'keep-source'
+        if choice in {'k', 'skip', ''}:
+            return 'report'
+        if choice in {'q', 'quit', 'exit'}:
+            raise KeyboardInterrupt('user quit interactive conflict resolution')
+        print('    please enter t, s, k, or q')
 
 
 def collect_delete_candidates(root: Path, data: str | None = None):
@@ -277,6 +303,7 @@ def init_trained_registry(
     apply: bool,
     delete_abnormal_empty: bool = False,
     resolve_conflict: str = 'report',
+    interactive: bool = False,
 ):
     resolved = []
     unresolved = []
@@ -337,13 +364,19 @@ def init_trained_registry(
                                 'seed': trained_seed(config),
                                 'source': summarize_run_dir(meta_path.parent),
                                 'target': summarize_run_dir(target_run_dir),
-                                'resolution': resolve_conflict,
+                                'resolution': 'interactive' if interactive else resolve_conflict,
                             }
-                            if resolve_conflict == 'report':
+                            resolution = (
+                                choose_conflict_resolution(existing_target_conflict)
+                                if interactive
+                                else resolve_conflict
+                            )
+                            existing_target_conflict['resolution'] = resolution
+                            if resolution == 'report':
                                 existing_target_conflict['error'] = f'target run dir already exists: {target_run_dir}'
                                 conflicts.append(existing_target_conflict)
                                 continue
-                            if resolve_conflict == 'keep-existing':
+                            if resolution == 'keep-existing':
                                 register_trained_artifact(
                                     config,
                                     target_run_dir,
@@ -353,13 +386,13 @@ def init_trained_registry(
                                 existing_target_conflict['action'] = 'kept existing target and skipped source'
                                 conflicts.append(existing_target_conflict)
                                 continue
-                            if resolve_conflict == 'keep-source':
+                            if resolution == 'keep-source':
                                 backup = backup_existing_target(target_run_dir)
                                 existing_target_conflict['action'] = 'backed up existing target and moved source'
                                 existing_target_conflict['target_backup'] = str(backup)
                                 conflicts.append(existing_target_conflict)
                             else:
-                                raise ValueError(f'unsupported conflict resolution: {resolve_conflict}')
+                                raise ValueError(f'unsupported conflict resolution: {resolution}')
                         old_run_dir = meta_path.parent
                         old_setting_dir = old_run_dir.parent
                         target_run_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -470,8 +503,15 @@ def main():
         default='report',
         help='How to handle migration conflicts when the canonical seed directory already exists.',
     )
+    parser.add_argument(
+        '--interactive',
+        action='store_true',
+        help='With --apply, prompt for each conflict and immediately apply the selected resolution.',
+    )
     parser.add_argument('--json', action='store_true', help='Print the full report as JSON.')
     args = parser.parse_args()
+    if args.interactive and not args.apply:
+        parser.error('--interactive requires --apply because choices are executed immediately')
 
     report = init_trained_registry(
         Path(args.root),
@@ -479,6 +519,7 @@ def main():
         apply=bool(args.apply),
         delete_abnormal_empty=bool(args.delete_abnormal_empty),
         resolve_conflict=str(args.resolve_conflict),
+        interactive=bool(args.interactive),
     )
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -502,16 +543,17 @@ def main():
     if len(report['unresolved']) > 20:
         print(f'  ... {len(report["unresolved"]) - 20} more unresolved')
     for item in report['conflicts'][:20]:
-        print(f'  conflict {item["data"]}/{item["folder"]}: {item.get("error") or item.get("action")}')
         source = item.get('source') or {}
         target = item.get('target') or {}
         if source or target:
-            print_run_summary('source', source)
-            print_run_summary('target', target)
+            print_conflict_summary(item)
             print(
                 '    choose: --resolve-conflict keep-existing to keep target, '
-                'or --resolve-conflict keep-source to back up target and move source'
+                '--resolve-conflict keep-source to back up target and move source, '
+                'or --interactive to decide one by one'
             )
+        else:
+            print(f'  conflict {item["data"]}/{item["folder"]}: {item.get("error") or item.get("action")}')
     for item in report['moved'][:20]:
         print(f'  moved {item["from"]} -> {item["to"]}')
     deleted_paths = {item.get('path') for item in report.get('deleted', [])}

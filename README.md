@@ -118,12 +118,17 @@ python scripts/init_artifact_registry.py --stage trained --apply --json
 Then choose one explicitly:
 
 ```bash
+# Prompt for each conflict, apply the choice immediately, then continue to the next conflict.
+python scripts/init_artifact_registry.py --stage trained --apply --interactive
+
 # Keep the canonical target and leave the old source folder untouched.
 python scripts/init_artifact_registry.py --stage trained --apply --resolve-conflict keep-existing
 
 # Back up the existing canonical target as *.conflict-<timestamp>, then move the old source into place.
 python scripts/init_artifact_registry.py --stage trained --apply --resolve-conflict keep-source
 ```
+
+`keep-existing` means "target wins"; `keep-source` means "source wins after backing up the existing target".
 
 If you have reviewed the dry-run output and want to remove train-mode setting folders that have no `best.pt` and look failed or abandoned, pass the explicit deletion flag:
 
