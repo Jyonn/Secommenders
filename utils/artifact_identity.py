@@ -364,9 +364,27 @@ def register_trained_artifact(
             return True
         return not folder_has_run_artifacts(str(primary_folder))
 
-    def alias_target_is_stale(alias_of: str):
-        primary = index.get(str(alias_of))
-        return not isinstance(primary, dict) or same_or_stale_primary(primary)
+    def resolve_alias_target(alias_of: str):
+        seen = set()
+        cursor = str(alias_of)
+        chain = []
+        while cursor and cursor not in seen:
+            seen.add(cursor)
+            chain.append(cursor)
+            entry = index.get(cursor)
+            if not isinstance(entry, dict):
+                return 'stale', None, chain
+            if entry.get('folder'):
+                if same_or_stale_primary(entry):
+                    return 'stale', str(entry.get('folder')), chain
+                return 'conflict', str(entry.get('folder')), chain
+            next_alias = entry.get('alias_of')
+            if not next_alias:
+                return 'stale', None, chain
+            if str(next_alias) == signature:
+                return 'current', folder, chain
+            cursor = str(next_alias)
+        return 'stale', None, chain
 
     existing = index.get(signature)
     if isinstance(existing, dict) and existing.get('folder') and not same_or_stale_primary(existing):
@@ -379,13 +397,10 @@ def register_trained_artifact(
         )
     if isinstance(existing, dict) and existing.get('alias_of') and existing.get('alias_of') != signature:
         existing_alias_of = str(existing.get('alias_of'))
-        if alias_target_is_stale(existing_alias_of):
-            alias_values = _dedupe([*alias_values, existing_alias_of])
+        status, existing_folder, chain = resolve_alias_target(existing_alias_of)
+        if status in {'current', 'stale'}:
+            alias_values = _dedupe([*alias_values, *chain])
         else:
-            existing_primary = index.get(existing_alias_of)
-            existing_folder = None
-            if isinstance(existing_primary, dict) and existing_primary.get('folder'):
-                existing_folder = str(existing_primary.get('folder'))
             raise TrainedArtifactRegistryConflict(
                 f'trained artifact signature conflict for {signature}: '
                 f'already aliases {existing.get("alias_of")}',
@@ -405,15 +420,18 @@ def register_trained_artifact(
         if isinstance(existing_alias, dict):
             alias_of = existing_alias.get('alias_of')
             if alias_of and alias_of != signature:
-                if alias_target_is_stale(str(alias_of)):
-                    alias_values = _dedupe([*alias_values, str(alias_of)])
+                status, existing_folder, chain = resolve_alias_target(str(alias_of))
+                if status == 'stale':
+                    alias_values = _dedupe([*alias_values, *chain])
+                elif status == 'current':
+                    alias_values = _dedupe([*alias_values, *chain])
                 else:
                     raise TrainedArtifactRegistryConflict(
                         f'trained artifact alias conflict for {alias}: {alias_of} vs {signature}',
                         signature=signature,
                         folder=folder,
                         alias=alias,
-                        existing_folder=str(alias_of),
+                        existing_folder=existing_folder,
                     )
             if existing_alias.get('folder') and not same_or_stale_primary(existing_alias):
                 raise TrainedArtifactRegistryConflict(
