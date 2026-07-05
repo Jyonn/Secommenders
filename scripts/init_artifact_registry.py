@@ -690,7 +690,12 @@ def init_trained_registry(
                             }
                         )
                     try:
-                        register_trained_artifact(config, target_run_dir, aliases=identity.get('aliases'), root=root)
+                        registered_artifact = register_trained_artifact(
+                            config,
+                            target_run_dir,
+                            aliases=identity.get('aliases'),
+                            root=root,
+                        )
                     except ValueError as exc:
                         conflicts.append(
                             registry_conflict_report(
@@ -710,7 +715,7 @@ def init_trained_registry(
                     final_meta['artifact_identity'] = trained_artifact_identity(
                         config,
                         target_run_dir,
-                        aliases=identity.get('aliases'),
+                        aliases=registered_artifact.get('aliases') or identity.get('aliases'),
                         migration_status='migrated',
                     )
                     write_json(final_meta_path, final_meta)

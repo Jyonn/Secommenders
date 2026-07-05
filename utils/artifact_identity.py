@@ -340,13 +340,29 @@ def register_trained_artifact(
     index = load_trained_index(data, root=root)
     alias_values = _dedupe([*(aliases or []), legacy_signature_from_folder(folder)])
 
+    def folder_has_run_artifacts(primary_folder: str):
+        folder_dir = dataset_dir / str(primary_folder)
+        if not folder_dir.exists():
+            return False
+        for pattern in (
+            'meta.json',
+            '*/meta.json',
+            '*/*/meta.json',
+            'best.pt',
+            '*/best.pt',
+            '*/*/best.pt',
+        ):
+            if next(folder_dir.glob(pattern), None) is not None:
+                return True
+        return False
+
     def same_or_stale_primary(entry: dict):
         primary_folder = entry.get('folder')
         if not primary_folder:
             return False
         if primary_folder == folder:
             return True
-        return not (dataset_dir / str(primary_folder)).exists()
+        return not folder_has_run_artifacts(str(primary_folder))
 
     existing = index.get(signature)
     if isinstance(existing, dict) and existing.get('folder') and not same_or_stale_primary(existing):
@@ -375,25 +391,27 @@ def register_trained_artifact(
                 existing_folder=existing_folder,
             )
 
-    index[signature] = {
-        'folder': folder,
-        'schema_version': TRAINED_SPEC_VERSION,
-        'aliases': alias_values,
-    }
-    for alias in alias_values:
+    alias_index = 0
+    while alias_index < len(alias_values):
+        alias = alias_values[alias_index]
+        alias_index += 1
         if alias == signature:
             continue
         existing_alias = index.get(alias)
         if isinstance(existing_alias, dict):
             alias_of = existing_alias.get('alias_of')
             if alias_of and alias_of != signature:
-                raise TrainedArtifactRegistryConflict(
-                    f'trained artifact alias conflict for {alias}: {alias_of} vs {signature}',
-                    signature=signature,
-                    folder=folder,
-                    alias=alias,
-                    existing_folder=str(alias_of),
-                )
+                existing_primary = index.get(str(alias_of))
+                if isinstance(existing_primary, dict) and same_or_stale_primary(existing_primary):
+                    alias_values = _dedupe([*alias_values, str(alias_of)])
+                else:
+                    raise TrainedArtifactRegistryConflict(
+                        f'trained artifact alias conflict for {alias}: {alias_of} vs {signature}',
+                        signature=signature,
+                        folder=folder,
+                        alias=alias,
+                        existing_folder=str(alias_of),
+                    )
             if existing_alias.get('folder') and not same_or_stale_primary(existing_alias):
                 raise TrainedArtifactRegistryConflict(
                     f'trained artifact alias conflict for {alias}: already registered as primary',
@@ -403,6 +421,11 @@ def register_trained_artifact(
                     existing_folder=str(existing_alias.get('folder')),
                 )
         index[alias] = {'alias_of': signature}
+    index[signature] = {
+        'folder': folder,
+        'schema_version': TRAINED_SPEC_VERSION,
+        'aliases': alias_values,
+    }
     save_trained_index(data, index, root=root)
     return index[signature]
 
