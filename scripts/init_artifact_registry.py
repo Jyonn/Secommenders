@@ -381,44 +381,59 @@ def collect_delete_candidates(root: Path, data: str | None = None):
     base = root / 'artifacts' / 'trained'
     dataset_dirs = [base / data.lower()] if data else sorted(path for path in base.glob('*') if path.is_dir())
     candidates = []
+    seen_paths = set()
     for dataset_dir in dataset_dirs:
         if not dataset_dir.exists():
             continue
-        for setting_dir in sorted(path for path in dataset_dir.iterdir() if path.is_dir()):
-            if checkpoint_exists(setting_dir):
+        meta_paths = sorted(dataset_dir.glob('*/meta.json')) + sorted(dataset_dir.glob('*/*/meta.json'))
+        for meta_path in meta_paths:
+            run_dir = meta_path.parent
+            run_dir_key = str(run_dir)
+            if run_dir_key in seen_paths:
                 continue
-            meta_paths = sorted(setting_dir.glob('*/meta.json')) + sorted([setting_dir / 'meta.json'])
-            train_like = False
+            seen_paths.add(run_dir_key)
             abnormal_reasons = []
-            for meta_path in meta_paths:
-                if not meta_path.exists():
-                    continue
+            try:
+                meta = read_json(meta_path)
+            except ValueError as exc:
+                abnormal_reasons.append(str(exc))
+                meta = {}
+            identity = meta.get('artifact_identity') if isinstance(meta, dict) else None
+            mode = identity.get('mode') if isinstance(identity, dict) else None
+            if mode is None and isinstance(meta.get('config'), dict):
                 try:
-                    meta = read_json(meta_path)
-                except ValueError as exc:
-                    abnormal_reasons.append(str(exc))
-                    continue
-                identity = meta.get('artifact_identity') if isinstance(meta, dict) else None
-                mode = identity.get('mode') if isinstance(identity, dict) else None
-                if mode is None and isinstance(meta.get('config'), dict):
-                    try:
-                        mode = trained_mode(migrate_train_config_dict(meta['config']))
-                    except ValueError:
-                        mode = None
-                train_like = train_like or mode == 'train'
-                status = str(meta.get('status') or '').lower() if isinstance(meta, dict) else ''
-                if status in {'failed', 'running'} or meta.get('error') or meta.get('failed_at'):
-                    abnormal_reasons.append(f'status={status or "unknown"}')
-            if train_like and abnormal_reasons:
+                    mode = trained_mode(migrate_train_config_dict(meta['config']))
+                except ValueError:
+                    mode = None
+            status = str(meta.get('status') or '').lower() if isinstance(meta, dict) else ''
+            if status in {'failed', 'running'} or meta.get('error') or meta.get('failed_at'):
+                abnormal_reasons.append(f'status={status or "unknown"}')
+
+            reasons = []
+            if mode == 'valid':
+                reasons.append('mode=valid/precheck')
+                if status:
+                    reasons.append(f'status={status}')
+            elif mode == 'train' and not checkpoint_exists(run_dir) and abnormal_reasons:
+                reasons.extend(abnormal_reasons)
+
+            if reasons:
                 candidates.append(
                     {
                         'data': dataset_dir.name,
-                        'folder': setting_dir.name,
-                        'path': str(setting_dir),
-                        'reasons': sorted(set(abnormal_reasons)),
+                        'folder': run_dir.name,
+                        'path': str(run_dir),
+                        'reasons': sorted(set(reasons)),
                     }
                 )
     return candidates
+
+
+def prune_empty_trained_parents(path: Path, dataset_dir: Path):
+    parent = path.parent
+    while parent != dataset_dir and parent.exists() and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
 
 
 def init_trained_registry(
@@ -594,6 +609,7 @@ def init_trained_registry(
             path = Path(candidate['path'])
             if path.exists():
                 shutil.rmtree(path)
+                prune_empty_trained_parents(path, root / 'artifacts' / 'trained' / candidate['data'])
                 deleted.append(candidate)
 
     return {
@@ -625,7 +641,7 @@ def main():
     parser.add_argument(
         '--delete-abnormal-empty',
         action='store_true',
-        help='With --apply, delete train-mode setting folders that have no best.pt and look failed/running.',
+        help='With --apply, delete all precheck/valid-only runs and abnormal train runs without best.pt.',
     )
     parser.add_argument(
         '--interactive',
