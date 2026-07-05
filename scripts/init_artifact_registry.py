@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from utils.artifact_identity import (  # noqa: E402
     TRAINED_INDEX_NAME,
+    TRAINED_PHASES,
     canonical_trained_run_dir,
     legacy_signature_from_folder,
     load_trained_index,
@@ -72,19 +73,60 @@ def iter_trained_meta_paths(root: Path, data: str | None = None):
     base = root / 'artifacts' / 'trained'
     if data:
         dataset_dir = base / data.lower()
-        paths = sorted(dataset_dir.glob('*/meta.json')) + sorted(dataset_dir.glob('*/*/meta.json'))
+        paths = (
+            sorted(dataset_dir.glob('*/meta.json'))
+            + sorted(dataset_dir.glob('*/*/meta.json'))
+            + sorted(dataset_dir.glob('*/*/*/meta.json'))
+        )
         yield from paths
         return
-    paths = sorted(base.glob('*/*/meta.json')) + sorted(base.glob('*/*/*/meta.json'))
+    paths = (
+        sorted(base.glob('*/*/meta.json'))
+        + sorted(base.glob('*/*/*/meta.json'))
+        + sorted(base.glob('*/*/*/*/meta.json'))
+    )
     yield from paths
 
 
-def is_nested_trained_meta(root: Path, meta_path: Path):
+def parse_trained_meta_location(root: Path, meta_path: Path):
     try:
         relative = meta_path.relative_to(root / 'artifacts' / 'trained')
     except ValueError:
+        return None
+    parts = relative.parts
+    if len(parts) == 3:
+        return {
+            'layout': 'legacy-flat',
+            'data': parts[0],
+            'folder': parts[1],
+            'run_dir': meta_path.parent,
+        }
+    if len(parts) == 4:
+        return {
+            'layout': 'seed-root',
+            'data': parts[0],
+            'folder': parts[1],
+            'seed': parts[2],
+            'run_dir': meta_path.parent,
+        }
+    if len(parts) == 5:
+        return {
+            'layout': 'phase-root',
+            'data': parts[0],
+            'folder': parts[1],
+            'seed': parts[2],
+            'phase': parts[3],
+            'run_dir': meta_path.parent,
+        }
+    return None
+
+
+def is_relative_to(path: Path, parent: Path):
+    try:
+        Path(path).resolve().relative_to(Path(parent).resolve())
+        return True
+    except ValueError:
         return False
-    return len(relative.parts) == 4
 
 
 def collect_existing_identity_aliases(meta: dict):
@@ -173,6 +215,7 @@ def summarize_run_dir(run_dir: Path):
         {
             'status': meta.get('status'),
             'mode': identity.get('mode'),
+            'phase': identity.get('phase') or identity.get('mode'),
             'seed': identity.get('seed') if identity.get('seed') is not None else config.get('seed'),
             'signature': identity.get('signature'),
             'schema_version': identity.get('schema_version'),
@@ -254,6 +297,7 @@ def print_run_summary(label: str, summary: dict):
     print(f'    {paint("+-- " + title + " " + "-" * max(1, 76 - len(title)), color)}')
     kv_line('status', status_badge(summary.get('status')), indent=6)
     kv_line('mode', fmt_value(summary.get('mode')), indent=6)
+    kv_line('phase', fmt_value(summary.get('phase')), indent=6)
     kv_line('seed', fmt_value(summary.get('seed')), indent=6)
     kv_line('checkpoint', bool_badge(summary.get('has_checkpoint')), indent=6)
     kv_line('pid record', bool_badge(summary.get('has_pid')), indent=6)
@@ -385,8 +429,15 @@ def collect_delete_candidates(root: Path, data: str | None = None):
     for dataset_dir in dataset_dirs:
         if not dataset_dir.exists():
             continue
-        meta_paths = sorted(dataset_dir.glob('*/meta.json')) + sorted(dataset_dir.glob('*/*/meta.json'))
+        meta_paths = (
+            sorted(dataset_dir.glob('*/meta.json'))
+            + sorted(dataset_dir.glob('*/*/meta.json'))
+            + sorted(dataset_dir.glob('*/*/*/meta.json'))
+        )
         for meta_path in meta_paths:
+            location = parse_trained_meta_location(root, meta_path)
+            if location is None:
+                continue
             run_dir = meta_path.parent
             run_dir_key = str(run_dir)
             if run_dir_key in seen_paths:
@@ -410,7 +461,7 @@ def collect_delete_candidates(root: Path, data: str | None = None):
                 abnormal_reasons.append(f'status={status or "unknown"}')
 
             reasons = []
-            if mode == 'valid':
+            if mode in {'valid', 'precheck'}:
                 reasons.append('mode=valid/precheck')
                 if status:
                     reasons.append(f'status={status}')
@@ -421,7 +472,7 @@ def collect_delete_candidates(root: Path, data: str | None = None):
                 candidates.append(
                     {
                         'data': dataset_dir.name,
-                        'folder': run_dir.name,
+                        'folder': str(location.get('folder') or run_dir.name),
                         'path': str(run_dir),
                         'reasons': sorted(set(reasons)),
                     }
@@ -434,6 +485,53 @@ def prune_empty_trained_parents(path: Path, dataset_dir: Path):
     while parent != dataset_dir and parent.exists() and parent.is_dir() and not any(parent.iterdir()):
         parent.rmdir()
         parent = parent.parent
+
+
+def move_run_dir(source_dir: Path, target_dir: Path, dataset_dir: Path):
+    source_dir = Path(source_dir)
+    target_dir = Path(target_dir)
+    if source_dir == target_dir:
+        return
+    if target_dir.parent == source_dir:
+        target_dir.mkdir(parents=True, exist_ok=False)
+        for child in list(source_dir.iterdir()):
+            if child == target_dir:
+                continue
+            if child.is_dir() and child.name in TRAINED_PHASES:
+                continue
+            shutil.move(str(child), str(target_dir / child.name))
+        return
+
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source_dir), str(target_dir))
+    prune_empty_trained_parents(source_dir, dataset_dir)
+
+
+def delete_run_dir(run_dir: Path, dataset_dir: Path):
+    run_dir = Path(run_dir)
+    if not run_dir.exists():
+        return
+    shutil.rmtree(run_dir)
+    prune_empty_trained_parents(run_dir, dataset_dir)
+
+
+def delete_source_for_target(source_dir: Path, target_dir: Path, dataset_dir: Path):
+    source_dir = Path(source_dir)
+    target_dir = Path(target_dir)
+    if not source_dir.exists() or source_dir == target_dir:
+        return
+    if is_relative_to(target_dir, source_dir):
+        for child in list(source_dir.iterdir()):
+            if child == target_dir:
+                continue
+            if child.is_dir() and child.name in TRAINED_PHASES:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        return
+    delete_run_dir(source_dir, dataset_dir)
 
 
 def init_trained_registry(
@@ -452,19 +550,19 @@ def init_trained_registry(
     for meta_path in iter_trained_meta_paths(root, data=data):
         if not meta_path.exists():
             continue
-        dataset = meta_path.parent.parent.name
-        if is_nested_trained_meta(root, meta_path):
-            dataset = meta_path.parent.parent.parent.name
-        folder = meta_path.parent.name
+        location = parse_trained_meta_location(root, meta_path)
+        dataset = str(location.get('data') if location else meta_path.parent.parent.name)
+        folder = str(location.get('folder') if location else meta_path.parent.name)
+        source_run_dir = Path(location.get('run_dir') if location else meta_path.parent)
+        dataset_dir = root / 'artifacts' / 'trained' / dataset
         try:
             meta = read_json(meta_path)
             config = migrate_train_config_dict(meta.get('config'))
             signature = trained_signature_from_config(config)
             aliases = []
-            if not is_nested_trained_meta(root, meta_path):
-                legacy_signature = legacy_signature_from_folder(meta_path.parent.name)
-                if legacy_signature:
-                    aliases.append(legacy_signature)
+            legacy_signature = legacy_signature_from_folder(folder)
+            if legacy_signature:
+                aliases.append(legacy_signature)
             identity = update_trained_meta(meta_path, config, apply=False, aliases=aliases)
             target_run_dir = canonical_trained_run_dir(config, root=root)
             resolved.append(
@@ -473,18 +571,19 @@ def init_trained_registry(
                     'folder': folder,
                     'signature': signature,
                     'seed': trained_seed(config),
+                    'phase': target_run_dir.name,
                     'target_run_dir': str(target_run_dir),
                     'aliases': identity.get('aliases') or [],
                     'meta_path': str(meta_path),
                 }
             )
-            if not apply and meta_path.parent != target_run_dir and target_run_dir.exists():
+            if not apply and source_run_dir != target_run_dir and target_run_dir.exists():
                 conflict = {
                     'data': dataset,
                     'folder': folder,
                     'signature': signature,
                     'seed': trained_seed(config),
-                    'source': summarize_run_dir(meta_path.parent),
+                    'source': summarize_run_dir(source_run_dir),
                     'target': summarize_run_dir(target_run_dir),
                     'resolution': 'dry-run',
                     'error': f'target run dir already exists: {target_run_dir}',
@@ -493,7 +592,7 @@ def init_trained_registry(
             if apply:
                 try:
                     final_meta_path = meta_path
-                    if meta_path.parent != target_run_dir:
+                    if source_run_dir != target_run_dir:
                         existing_target_conflict = None
                         if target_run_dir.exists():
                             existing_target_conflict = {
@@ -501,7 +600,7 @@ def init_trained_registry(
                                 'folder': folder,
                                 'signature': signature,
                                 'seed': trained_seed(config),
-                                'source': summarize_run_dir(meta_path.parent),
+                                'source': summarize_run_dir(source_run_dir),
                                 'target': summarize_run_dir(target_run_dir),
                                 'resolution': 'interactive' if interactive else 'report',
                             }
@@ -522,28 +621,20 @@ def init_trained_registry(
                                     aliases=identity.get('aliases'),
                                     root=root,
                                 )
-                                old_run_dir = meta_path.parent
-                                old_setting_dir = old_run_dir.parent
-                                shutil.rmtree(old_run_dir)
-                                if old_setting_dir.exists() and not any(old_setting_dir.iterdir()):
-                                    old_setting_dir.rmdir()
+                                delete_source_for_target(source_run_dir, target_run_dir, dataset_dir)
                                 existing_target_conflict['action'] = 'kept target and deleted source'
-                                existing_target_conflict['deleted'] = str(old_run_dir)
+                                existing_target_conflict['deleted'] = str(source_run_dir)
                                 conflicts.append(existing_target_conflict)
                                 continue
                             if resolution == 'source':
-                                shutil.rmtree(target_run_dir)
+                                delete_run_dir(target_run_dir, dataset_dir)
                                 existing_target_conflict['action'] = 'kept source and deleted target'
                                 existing_target_conflict['deleted'] = str(target_run_dir)
                                 conflicts.append(existing_target_conflict)
                             else:
                                 raise ValueError(f'unsupported conflict resolution: {resolution}')
-                        old_run_dir = meta_path.parent
-                        old_setting_dir = old_run_dir.parent
-                        target_run_dir.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(old_run_dir), str(target_run_dir))
-                        if old_setting_dir.exists() and not any(old_setting_dir.iterdir()):
-                            old_setting_dir.rmdir()
+                        old_run_dir = source_run_dir
+                        move_run_dir(old_run_dir, target_run_dir, dataset_dir)
                         final_meta_path = target_run_dir / 'meta.json'
                         moved.append(
                             {
@@ -560,7 +651,7 @@ def init_trained_registry(
                                 dataset,
                                 folder,
                                 signature,
-                                meta_path.parent,
+                                source_run_dir,
                                 target_run_dir,
                                 error=str(exc),
                             )
@@ -581,7 +672,7 @@ def init_trained_registry(
                             dataset,
                             folder,
                             signature,
-                            meta_path.parent,
+                            source_run_dir,
                             target_run_dir,
                             error=str(exc),
                         )

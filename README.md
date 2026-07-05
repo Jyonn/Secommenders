@@ -77,18 +77,20 @@ python trainer.py ... --valid_only true
 ```bash
 python trainer.py ... \
   --test_only true \
-  --load_ckpt artifacts/trained/<dataset>/<trained_signature>/<seed>/best.pt
+  --load_ckpt artifacts/trained/<dataset>/<trained_signature>/<seed>/train/best.pt
 ```
 
 This is useful when training succeeds but final test evaluation needs a smaller batch size or safer decoding settings.
 
 ### Trained Artifact Registry
 
-Trained checkpoints are stored by evaluation setting first and seed second:
+Trained artifacts are stored by evaluation setting, seed, and execution phase:
 
 ```text
-artifacts/trained/<dataset>/<trained_signature>/<seed>/
+artifacts/trained/<dataset>/<trained_signature>/<seed>/<phase>/
 ```
+
+`phase` is one of `precheck`, `train`, or `test`. `valid_only` smoke runs write to `precheck/`, full training writes checkpoints and final metrics to `train/`, and test-only fallback runs write to `test/`.
 
 The trained signature intentionally excludes `seed`, `batch_size`, and `accumulate_batch`. It includes their product as `effective_batch_size`, so `batch_size=64, accumulate_batch=1` and `batch_size=32, accumulate_batch=2` resolve to the same trained setting.
 
@@ -108,6 +110,8 @@ python scripts/init_artifact_registry.py --stage trained --apply
 ```
 
 The dry run reports unresolved folders and delete candidates. A folder is only migrated when its `meta.json` contains enough `config` information to rebuild the current trained artifact spec.
+
+The same script is also the migration path from older trained layouts. It upgrades both legacy flat folders and the previous `<trained_signature>/<seed>/` layout into the current `<trained_signature>/<seed>/<phase>/` layout, so it is safe to rerun after an earlier registry initialization.
 
 If migration reports a conflict, the old folder and canonical target folder both contain results for the same trained signature and seed. Inspect both sides first:
 

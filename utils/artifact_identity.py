@@ -10,6 +10,7 @@ from utils.compile import CompileConfig, short_config_hash
 TRAINED_SPEC_VERSION = 'trained.v2'
 TRAINED_INDEX_NAME = '.index.json'
 LEGACY_RUN_HASH_RE = re.compile(r'__h([0-9a-fA-F]{6,64})$')
+TRAINED_PHASES = {'precheck', 'train', 'test'}
 
 
 TRAIN_CONFIG_DEFAULTS = {
@@ -94,8 +95,12 @@ def trained_mode(config: Any):
         return 'test'
     valid_only = _config_get(config, 'valid_only', 0)
     if valid_only:
-        return 'valid'
+        return 'precheck'
     return 'train'
+
+
+def trained_phase_dir_name(config: Any):
+    return trained_mode(config)
 
 
 def load_trained_index(data: str, root: Path | str | None = None):
@@ -220,7 +225,12 @@ def trained_signature_from_config(config: Any):
 
 def canonical_trained_run_dir(config: Any, root: Path | str | None = None):
     signature = trained_signature_from_config(config)
-    return trained_dataset_dir(_config_data(config), root=root) / signature / trained_seed_dir_name(config)
+    return (
+        trained_dataset_dir(_config_data(config), root=root)
+        / signature
+        / trained_seed_dir_name(config)
+        / trained_phase_dir_name(config)
+    )
 
 
 def _resolve_alias(index: dict, signature: str):
@@ -245,8 +255,9 @@ def resolve_trained_run_dir(config: Any, root: Path | str | None = None):
     index = load_trained_index(data, root=root)
     _, entry = _resolve_alias(index, signature)
     seed_name = trained_seed_dir_name(config)
+    phase_name = trained_phase_dir_name(config)
     if isinstance(entry, dict) and entry.get('folder'):
-        candidate = dataset_dir / str(entry['folder']) / seed_name
+        candidate = dataset_dir / str(entry['folder']) / seed_name / phase_name
         if candidate.exists():
             return candidate
     return canonical_trained_run_dir(config, root=root)
@@ -255,6 +266,8 @@ def resolve_trained_run_dir(config: Any, root: Path | str | None = None):
 def trained_setting_folder_from_run_dir(config: Any, run_dir: Path):
     run_dir = Path(run_dir)
     seed_name = trained_seed_dir_name(config)
+    if run_dir.name in TRAINED_PHASES and run_dir.parent.name == seed_name:
+        return run_dir.parent.parent.name
     if run_dir.name == seed_name:
         return run_dir.parent.name
     return run_dir.name
@@ -289,6 +302,7 @@ def trained_artifact_identity(
         'folder': folder,
         'seed': trained_seed(config),
         'mode': trained_mode(config),
+        'phase': trained_phase_dir_name(config),
         'aliases': alias_values,
         'migration_status': migration_status,
         'spec': trained_spec_from_config(config),

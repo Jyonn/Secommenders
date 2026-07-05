@@ -563,6 +563,20 @@ class Scheduler:
         exp.setdefault('report_session', None)
         exp.setdefault('report_uploaded_at', None)
         exp.setdefault('report_upload_error', None)
+        if exp.get('run_dir'):
+            try:
+                logical_args = build_args_for_phase(
+                    base_args,
+                    batch_size=int(exp.get('batch_size') or self.effective_batch_size),
+                    effective_batch_size=self.effective_batch_size,
+                    phase=str(exp.get('phase') or 'train'),
+                    load_ckpt=exp.get('ckpt_path'),
+                )
+                phase_run_dir = run_dir_for_args(logical_args)
+                if phase_run_dir.exists() and Path(exp['run_dir']) != phase_run_dir:
+                    exp['run_dir'] = str(phase_run_dir)
+            except Exception:
+                pass
         return exp
 
     def _load_or_initialize_state(self):
