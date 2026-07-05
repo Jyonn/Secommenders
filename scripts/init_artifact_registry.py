@@ -299,10 +299,36 @@ def print_metric_comparison(source: dict, target: dict):
     print(f'    {paint("`--" + "-" * 80, "cyan")}')
 
 
-def print_choice_help():
+def has_result(summary: dict):
+    status = str(summary.get('status') or '').lower()
+    finished_statuses = {'finished', 'valid_only_finished', 'test_only_finished', 'completed', 'done'}
+    return bool(
+        summary.get('has_checkpoint')
+        or summary.get('test_metrics')
+        or summary.get('valid_metrics')
+        or summary.get('best_valid_metric') is not None
+        or status in finished_statuses
+    )
+
+
+def suggested_resolution(conflict: dict):
+    source_has_result = has_result(conflict.get('source') or {})
+    target_has_result = has_result(conflict.get('target') or {})
+    if source_has_result and not target_has_result:
+        return 'source'
+    if target_has_result and not source_has_result:
+        return 'target'
+    return None
+
+
+def print_choice_help(conflict: dict):
+    suggestion = suggested_resolution(conflict)
+    if suggestion:
+        color = 'blue' if suggestion == 'source' else 'magenta'
+        print(f'    {paint("Suggestion", "bold", "yellow")}: choose {badge(suggestion, color)}; only {suggestion} has result')
     print(f'    {paint("Interactive choices", "bold", "yellow")}')
-    print(f'      {badge("t", "magenta")} keep target  : leave canonical target in place; source is not moved')
-    print(f'      {badge("s", "blue")} keep source  : back up target as *.conflict-<timestamp>, then move source')
+    print(f'      {badge("t", "magenta")} keep target  : delete source; keep canonical target in place')
+    print(f'      {badge("s", "blue")} keep source  : delete target; move source into canonical target path')
     print(f'      {badge("k", "gray")} skip         : leave both directories unchanged')
     print(f'      {badge("q", "red")} quit         : stop migration immediately')
 
@@ -335,20 +361,9 @@ def conflict_report(data: str, folder: str, signature: str, source_dir: Path, ta
     }
 
 
-def backup_existing_target(target_run_dir: Path):
-    timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    backup = target_run_dir.with_name(f'{target_run_dir.name}.conflict-{timestamp}')
-    suffix = 1
-    while backup.exists():
-        backup = target_run_dir.with_name(f'{target_run_dir.name}.conflict-{timestamp}-{suffix}')
-        suffix += 1
-    shutil.move(str(target_run_dir), str(backup))
-    return backup
-
-
 def choose_conflict_resolution(conflict: dict):
     print_conflict_summary(conflict)
-    print_choice_help()
+    print_choice_help(conflict)
     while True:
         choice = input(paint('    choose [t/s/k/q]: ', 'bold', 'yellow')).strip().lower()
         if choice in {'t', 'target'}:
@@ -492,13 +507,19 @@ def init_trained_registry(
                                     aliases=identity.get('aliases'),
                                     root=root,
                                 )
-                                existing_target_conflict['action'] = 'kept target and skipped source'
+                                old_run_dir = meta_path.parent
+                                old_setting_dir = old_run_dir.parent
+                                shutil.rmtree(old_run_dir)
+                                if old_setting_dir.exists() and not any(old_setting_dir.iterdir()):
+                                    old_setting_dir.rmdir()
+                                existing_target_conflict['action'] = 'kept target and deleted source'
+                                existing_target_conflict['deleted'] = str(old_run_dir)
                                 conflicts.append(existing_target_conflict)
                                 continue
                             if resolution == 'source':
-                                backup = backup_existing_target(target_run_dir)
-                                existing_target_conflict['action'] = 'backed up target and moved source'
-                                existing_target_conflict['target_backup'] = str(backup)
+                                shutil.rmtree(target_run_dir)
+                                existing_target_conflict['action'] = 'kept source and deleted target'
+                                existing_target_conflict['deleted'] = str(target_run_dir)
                                 conflicts.append(existing_target_conflict)
                             else:
                                 raise ValueError(f'unsupported conflict resolution: {resolution}')

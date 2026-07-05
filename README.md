@@ -122,7 +122,7 @@ Then resolve them interactively:
 python scripts/init_artifact_registry.py --stage trained --apply --interactive
 ```
 
-For each conflict, choose target to keep the canonical target and leave the source untouched, or choose source to back up the existing target as `*.conflict-<timestamp>` and move the source into place.
+For each conflict, choose target to keep the canonical target and delete the source, or choose source to delete the target and move the source into place. If only one side appears to contain results, the prompt suggests that side.
 
 If you have reviewed the dry-run output and want to remove train-mode setting folders that have no `best.pt` and look failed or abandoned, pass the explicit deletion flag:
 
