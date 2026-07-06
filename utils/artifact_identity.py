@@ -678,7 +678,50 @@ def register_generic_artifact(
     data = str(spec['data']).lower()
     index = load_generic_index(stage, data, root=root)
     expected = _generic_schema_version(stage)
+    dataset_dir = generic_dataset_dir(stage, data, root=root)
     alias_values = _dedupe([*(aliases or []), legacy_signature_from_folder(folder)])
+
+    def folder_has_artifacts(primary_folder: str):
+        folder_dir = dataset_dir / str(primary_folder)
+        if not folder_dir.exists():
+            return False
+        for pattern in ('meta.json', '*/meta.json', '*/*/meta.json', 'exports/*/meta.json', '*/exports/*/meta.json'):
+            if next(folder_dir.glob(pattern), None) is not None:
+                return True
+        return False
+
+    def same_or_stale_primary(entry: dict):
+        primary_folder = entry.get('folder')
+        if not primary_folder:
+            return False
+        if primary_folder == folder:
+            return True
+        return not folder_has_artifacts(str(primary_folder))
+
+    def resolve_alias_target(alias_of: str):
+        seen = set()
+        cursor = str(alias_of)
+        chain = []
+        while cursor and cursor not in seen:
+            seen.add(cursor)
+            chain.append(cursor)
+            entry = index.get(cursor)
+            if not isinstance(entry, dict):
+                return 'stale', None, chain
+            entry_version = entry.get('schema_version')
+            if entry_version not in {None, expected}:
+                raise _version_error(stage, cursor, entry_version, expected)
+            if entry.get('folder'):
+                if same_or_stale_primary(entry):
+                    return 'current', str(entry.get('folder')), chain
+                return 'conflict', str(entry.get('folder')), chain
+            next_alias = entry.get('alias_of')
+            if not next_alias:
+                return 'stale', None, chain
+            if str(next_alias) == signature:
+                return 'current', folder, chain
+            cursor = str(next_alias)
+        return 'stale', None, chain
 
     existing = index.get(signature)
     if isinstance(existing, dict):
@@ -686,7 +729,7 @@ def register_generic_artifact(
         if entry_version not in {None, expected}:
             raise _version_error(stage, signature, entry_version, expected)
         if existing.get('folder') and existing.get('folder') != folder:
-            existing_path = generic_dataset_dir(stage, data, root=root) / str(existing.get('folder'))
+            existing_path = dataset_dir / str(existing.get('folder'))
             if existing_path.exists():
                 raise TrainedArtifactRegistryConflict(
                     f'{stage} artifact signature conflict for {signature}: {existing.get("folder")} vs {folder}',
@@ -694,8 +737,23 @@ def register_generic_artifact(
                     folder=folder,
                     existing_folder=str(existing.get('folder')),
                 )
+        if existing.get('alias_of') and existing.get('alias_of') != signature:
+            status, existing_folder, chain = resolve_alias_target(str(existing.get('alias_of')))
+            if status in {'current', 'stale'}:
+                alias_values = _dedupe([*alias_values, *chain])
+            else:
+                raise TrainedArtifactRegistryConflict(
+                    f'{stage} artifact signature conflict for {signature}: already aliases {existing.get("alias_of")}',
+                    signature=signature,
+                    folder=folder,
+                    alias=str(existing.get('alias_of')),
+                    existing_folder=existing_folder,
+                )
 
-    for alias in alias_values:
+    alias_index = 0
+    while alias_index < len(alias_values):
+        alias = alias_values[alias_index]
+        alias_index += 1
         if alias == signature:
             continue
         existing_alias = index.get(alias)
@@ -705,11 +763,24 @@ def register_generic_artifact(
                 raise _version_error(stage, alias, alias_version, expected)
             alias_of = existing_alias.get('alias_of')
             if alias_of and alias_of != signature:
+                status, existing_folder, chain = resolve_alias_target(str(alias_of))
+                if status in {'current', 'stale'}:
+                    alias_values = _dedupe([*alias_values, *chain])
+                else:
+                    raise TrainedArtifactRegistryConflict(
+                        f'{stage} artifact alias conflict for {alias}: {alias_of} vs {signature}',
+                        signature=signature,
+                        folder=folder,
+                        alias=alias,
+                        existing_folder=existing_folder,
+                    )
+            if existing_alias.get('folder') and not same_or_stale_primary(existing_alias):
                 raise TrainedArtifactRegistryConflict(
-                    f'{stage} artifact alias conflict for {alias}: {alias_of} vs {signature}',
+                    f'{stage} artifact alias conflict for {alias}: already registered as primary',
                     signature=signature,
                     folder=folder,
                     alias=alias,
+                    existing_folder=str(existing_alias.get('folder')),
                 )
         index[alias] = {'alias_of': signature, 'schema_version': expected}
 
