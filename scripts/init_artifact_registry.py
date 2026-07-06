@@ -378,8 +378,34 @@ def collect_existing_identity_aliases(meta: dict):
     aliases = []
     raw_aliases = identity.get('aliases') or []
     if isinstance(raw_aliases, list):
-        aliases.extend(str(alias) for alias in raw_aliases)
+            aliases.extend(str(alias) for alias in raw_aliases)
     return aliases
+
+
+def collect_generic_identity_aliases(stage: str, meta: dict, folder: str):
+    aliases = []
+    legacy_folder_signature = legacy_signature_from_folder(folder)
+    if legacy_folder_signature:
+        aliases.append(legacy_folder_signature)
+
+    identity = meta.get('artifact_identity') if isinstance(meta.get('artifact_identity'), dict) else {}
+    identity_spec = identity.get('spec') if isinstance(identity.get('spec'), dict) else {}
+    identity_config = identity_spec.get('config') if isinstance(identity_spec.get('config'), dict) else {}
+    prepare_id = meta.get('prepare_id') or identity_config.get('prepare_id')
+    legacy_prepare_signature = legacy_signature_from_folder(str(prepare_id)) if prepare_id else None
+    if legacy_prepare_signature:
+        aliases.append(legacy_prepare_signature)
+
+    current_schema = GENERIC_SCHEMA_VERSIONS.get(stage)
+    identity_signature = identity.get('signature')
+    if identity_signature and identity.get('schema_version') != current_schema:
+        aliases.append(str(identity_signature))
+
+    trusted_aliases = {alias for alias in (legacy_folder_signature, legacy_prepare_signature) if alias}
+    for alias in collect_existing_identity_aliases(meta):
+        if alias in trusted_aliases:
+            aliases.append(alias)
+    return dedupe(aliases)
 
 
 def update_trained_meta(meta_path: Path, config, *, apply: bool, aliases: list[str] | None = None):
@@ -1110,10 +1136,7 @@ def init_generic_registry(
             run_dir = Path(location['run_dir'])
             identity_meta_path = run_dir / 'meta.json' if stage == 'quantized' else meta_path
             dataset_dir = root / 'artifacts' / stage / meta_data
-            aliases = collect_existing_identity_aliases(meta)
-            legacy_signature = legacy_signature_from_folder(folder)
-            if legacy_signature:
-                aliases.append(legacy_signature)
+            aliases = collect_generic_identity_aliases(stage, meta, folder)
             signature = generic_signature_from_meta(stage, identity_meta)
             target_run_dir = canonical_generic_artifact_dir(stage, meta_data, signature, root=root)
             target_folder = target_run_dir.relative_to(dataset_dir).as_posix()

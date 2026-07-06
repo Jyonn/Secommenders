@@ -732,14 +732,15 @@ def register_generic_artifact(
 
     if allow_version_migration:
         folder_primary_keys = set()
+        legacy_primary_keys = set()
         for key, entry in list(index.items()):
             if not isinstance(entry, dict):
                 continue
-            if entry.get('folder') == folder or (
-                entry.get('folder') and not folder_has_artifacts(str(entry.get('folder')))
-            ):
+            if entry.get('folder') == folder:
                 folder_primary_keys.add(str(key))
-                alias_values = _dedupe([*alias_values, str(key), *(entry.get('aliases') or [])])
+                if str(key) != signature:
+                    legacy_primary_keys.add(str(key))
+                alias_values = _dedupe([*alias_values, str(key)])
         changed = True
         while changed:
             changed = False
@@ -747,7 +748,7 @@ def register_generic_artifact(
                 if not isinstance(entry, dict):
                     continue
                 alias_of = entry.get('alias_of')
-                if alias_of and str(alias_of) in folder_primary_keys and str(key) not in alias_values:
+                if alias_of and str(alias_of) in legacy_primary_keys and str(key) not in alias_values:
                     alias_values = _dedupe([*alias_values, str(key)])
                     changed = True
 
@@ -792,6 +793,8 @@ def register_generic_artifact(
                 status, existing_folder, chain = resolve_alias_target(str(alias_of))
                 if status in {'current', 'stale'}:
                     alias_values = _dedupe([*alias_values, *chain])
+                elif allow_version_migration:
+                    pass
                 else:
                     raise TrainedArtifactRegistryConflict(
                         f'{stage} artifact alias conflict for {alias}: {alias_of} vs {signature}',
@@ -810,6 +813,7 @@ def register_generic_artifact(
                 )
         index[alias] = {'alias_of': signature, 'schema_version': expected}
 
+    alias_values = _dedupe(alias for alias in alias_values if alias != signature)
     index[signature] = {
         'folder': folder,
         'schema_version': expected,
