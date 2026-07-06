@@ -750,6 +750,39 @@ def _completed_run_status(config: TrainConfig, run_dir: Path):
     return complete, status, meta
 
 
+def _format_metric_summary(metrics: dict | None):
+    if not isinstance(metrics, dict) or not metrics:
+        return '-'
+    parts = []
+    for key in sorted(metrics):
+        value = metrics[key]
+        if isinstance(value, float):
+            parts.append(f'{key}={value:.6g}')
+        else:
+            parts.append(f'{key}={value}')
+    return ' '.join(parts)
+
+
+def _print_completed_run_summary(run_dir: Path, status: str, meta: dict):
+    pnt(
+        f'trainer run already complete at {run_dir}; '
+        f'status={status} overwrite=auto, skipping. '
+        'Use --overwrite true to rerun.'
+    )
+    if meta.get('best_epoch') is not None:
+        pnt(
+            f'completed result best_epoch={meta.get("best_epoch")} '
+            f'main_metric={meta.get("main_metric", "-")} '
+            f'best_valid={meta.get("best_valid_metric", "-")}'
+        )
+    if isinstance(meta.get('valid_metrics'), dict):
+        pnt(f'completed valid_metrics {_format_metric_summary(meta.get("valid_metrics"))}')
+    if isinstance(meta.get('test_metrics'), dict):
+        pnt(f'completed test_metrics {_format_metric_summary(meta.get("test_metrics"))}')
+    if isinstance(meta.get('checkpoint_valid_metrics'), dict):
+        pnt(f'completed checkpoint_valid_metrics {_format_metric_summary(meta.get("checkpoint_valid_metrics"))}')
+
+
 def _should_skip_completed_run(config: TrainConfig, run_dir: Path):
     overwrite = str(getattr(config, 'overwrite', 'auto') or 'auto').strip().lower()
     complete, status, meta = _completed_run_status(config, run_dir)
@@ -761,11 +794,7 @@ def _should_skip_completed_run(config: TrainConfig, run_dir: Path):
             'use --overwrite true to rerun'
         )
     if overwrite == 'auto' and complete:
-        pnt(
-            f'trainer run already complete at {run_dir}; '
-            f'status={status} overwrite=auto, skipping. '
-            'Use --overwrite true to rerun.'
-        )
+        _print_completed_run_summary(run_dir, status, meta)
         return True
     if overwrite == 'auto' and run_dir.exists():
         pnt(
@@ -879,7 +908,6 @@ def _update_remote_experiment(run_dir: Path, *, status: str, error_text: str = '
 def _run_trainer(config: TrainConfig):
     run_dir = _run_dir_for_config(config)
     if _should_skip_completed_run(config, run_dir):
-        _update_remote_experiment(run_dir, status='completed')
         return
     run_dir = _setup_run_artifacts(config)
     _register_remote_experiment(run_dir, config)
