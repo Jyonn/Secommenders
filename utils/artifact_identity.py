@@ -4,14 +4,33 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from utils.compile import CompileConfig, short_config_hash
-from utils.experiment_template import build_default_upstreams, used_upstreams_for_config
+from utils.compile import CompileConfig, normalize_model_name, short_config_hash
+from utils.experiment_template import (
+    HASH_QUANTIZER_CONFIG_DEFAULTS,
+    QUANTIZER_TRAINER_DEFAULTS,
+    SID_ENCODER_CONFIG_DEFAULTS,
+    SID_QUANTIZER_CONFIG_DEFAULTS,
+    build_default_upstreams,
+    merge_defaults,
+    normalize_list,
+    used_upstreams_for_config,
+)
 
 
 TRAINED_SPEC_VERSION = 'trained.v2'
+CLUSTERED_SPEC_VERSION = 'clustered.v2'
+COMPILED_SPEC_VERSION = 'compiled.v2'
+QUANTIZED_SPEC_VERSION = 'quantized.v2'
+GENERIC_SPEC_VERSIONS = {
+    'clustered': CLUSTERED_SPEC_VERSION,
+    'compiled': COMPILED_SPEC_VERSION,
+    'quantized': QUANTIZED_SPEC_VERSION,
+}
 TRAINED_INDEX_NAME = '.index.json'
+GENERIC_INDEX_NAME = TRAINED_INDEX_NAME
 LEGACY_RUN_HASH_RE = re.compile(r'__h([0-9a-fA-F]{6,64})$')
 TRAINED_PHASES = {'precheck', 'train', 'test'}
+HASH_INDEXER_NAMES = {'lsh', 'simhash', 'pcahash', 'itq'}
 
 
 TRAIN_CONFIG_DEFAULTS = {
@@ -87,6 +106,10 @@ class TrainedArtifactRegistryConflict(ValueError):
         self.existing_folder = existing_folder
 
 
+class ArtifactRegistryVersionError(RuntimeError):
+    pass
+
+
 def _artifact_root(root: Path | str | None = None):
     return Path(root or '.')
 
@@ -99,6 +122,18 @@ def trained_dataset_dir(data: str, root: Path | str | None = None):
 
 def trained_index_path(data: str, root: Path | str | None = None):
     return trained_dataset_dir(data, root=root) / TRAINED_INDEX_NAME
+
+
+def generic_dataset_dir(stage: str, data: str, root: Path | str | None = None):
+    if stage not in GENERIC_SPEC_VERSIONS:
+        raise ValueError(f'unsupported artifact stage: {stage}')
+    path = _artifact_root(root) / 'artifacts' / stage / str(data).lower()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def generic_index_path(stage: str, data: str, root: Path | str | None = None):
+    return generic_dataset_dir(stage, data, root=root) / GENERIC_INDEX_NAME
 
 
 def trained_seed(config: Any):
@@ -140,6 +175,22 @@ def save_trained_index(data: str, index: dict, root: Path | str | None = None):
     path.write_text(json.dumps(index, indent=2, sort_keys=True) + '\n')
 
 
+def load_generic_index(stage: str, data: str, root: Path | str | None = None):
+    path = generic_index_path(stage, data, root=root)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_generic_index(stage: str, data: str, index: dict, root: Path | str | None = None):
+    path = generic_index_path(stage, data, root=root)
+    path.write_text(json.dumps(index, indent=2, sort_keys=True) + '\n')
+
+
 def legacy_signature_from_folder(folder: str):
     match = LEGACY_RUN_HASH_RE.search(str(folder))
     return match.group(1).lower() if match else None
@@ -156,6 +207,544 @@ def _config_data(config: Any):
     if not data:
         raise ValueError('train config data is required')
     return str(data).lower()
+
+
+def _strip_path_values(value):
+    if isinstance(value, dict):
+        clean = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if (
+                key_text in {'path', 'output_dir'}
+                or key_text.endswith('_path')
+                or key_text.endswith('_dir')
+                or key_text in {'device', 'seed'}
+            ):
+                continue
+            clean[key_text] = _strip_path_values(item)
+        return clean
+    if isinstance(value, list):
+        return [_strip_path_values(item) for item in value]
+    return value
+
+
+def _section_dict(section: Any):
+    if section is None:
+        return {}
+    if isinstance(section, dict):
+        return deepcopy(section)
+    if callable(section):
+        try:
+            value = section()
+            return deepcopy(value) if isinstance(value, dict) else {}
+        except TypeError:
+            pass
+    config_method = getattr(section, 'config', None)
+    if callable(config_method):
+        value = config_method()
+        return deepcopy(value) if isinstance(value, dict) else {}
+    return {}
+
+
+def _section_get(section: Any, key: str, default=None):
+    if isinstance(section, dict):
+        return section.get(key, default)
+    return getattr(section, key, default)
+
+
+def _normalized_hidden_dims(value):
+    dims = normalize_list(value, cast=int)
+    return dims if dims is not None else SID_ENCODER_CONFIG_DEFAULTS['hidden_dims']
+
+
+def _quantizer_trainer_payload(value: dict | None):
+    payload = merge_defaults(QUANTIZER_TRAINER_DEFAULTS, value or {})
+    payload = _strip_path_values(payload)
+    payload.pop('advice', None)
+    payload.pop('show_only_best_epochs', None)
+    payload.pop('display_metrics', None)
+    payload.pop('log_memory', None)
+    save_best_by = normalize_list(payload.get('save_best_by'))
+    if save_best_by is not None:
+        payload['save_best_by'] = save_best_by
+    return payload
+
+
+def quantized_spec_from_config(data: str, embedding_model: str, config: Any):
+    quantizer_section = _section_get(config, 'quantizer')
+    hash_section = _section_get(config, 'hash')
+    encoder_section = _section_get(config, 'encoder')
+    trainer_section = _section_get(config, 'trainer')
+    quantizer_name = str(_section_get(quantizer_section, 'name', '') or '').strip().lower()
+    if not quantizer_name:
+        raise ValueError('quantizer.name is required')
+
+    trainer_payload = _quantizer_trainer_payload(_section_dict(trainer_section))
+    payload = {
+        'embedding_model': normalize_model_name(embedding_model),
+        'quantizer': {
+            'name': quantizer_name,
+        },
+        'trainer': trainer_payload,
+    }
+    if quantizer_name in HASH_INDEXER_NAMES:
+        payload['family'] = 'hash'
+        payload['quantizer']['config'] = merge_defaults(
+            HASH_QUANTIZER_CONFIG_DEFAULTS,
+            _section_dict(_section_get(hash_section, 'config')),
+        )
+        payload['quantizer']['config'].pop('seed', None)
+    else:
+        encoder_config = merge_defaults(
+            SID_ENCODER_CONFIG_DEFAULTS,
+            _section_dict(_section_get(encoder_section, 'config')),
+        )
+        encoder_config['hidden_dims'] = _normalized_hidden_dims(encoder_config.get('hidden_dims'))
+        payload['family'] = 'sid'
+        payload['quantizer']['config'] = merge_defaults(
+            SID_QUANTIZER_CONFIG_DEFAULTS,
+            _section_dict(_section_get(quantizer_section, 'config')),
+        )
+        payload['encoder'] = {
+            'name': str(_section_get(encoder_section, 'name', 'mlp') or 'mlp').strip().lower(),
+            'config': encoder_config,
+        }
+    return {
+        'stage': 'quantized',
+        'schema_version': QUANTIZED_SPEC_VERSION,
+        'data': str(data).lower(),
+        'config': payload,
+    }
+
+
+def quantized_spec_from_upstream(data: str, upstream: dict):
+    quantizer = upstream.get('quantizer') or {}
+    quantizer_name = str(quantizer.get('name') or '').strip().lower()
+    if not quantizer_name:
+        raise ValueError('upstream quantizer.name is required')
+    trainer_payload = _quantizer_trainer_payload(upstream.get('trainer') or {})
+    payload = {
+        'embedding_model': normalize_model_name(upstream.get('embedding_model')),
+        'quantizer': {
+            'name': quantizer_name,
+        },
+        'trainer': trainer_payload,
+    }
+    if quantizer_name in HASH_INDEXER_NAMES:
+        payload['family'] = 'hash'
+        payload['quantizer']['config'] = merge_defaults(
+            HASH_QUANTIZER_CONFIG_DEFAULTS,
+            (quantizer.get('config') or {}),
+        )
+        payload['quantizer']['config'].pop('seed', None)
+    else:
+        encoder = upstream.get('encoder') or {}
+        encoder_config = merge_defaults(SID_ENCODER_CONFIG_DEFAULTS, encoder.get('config') or {})
+        encoder_config['hidden_dims'] = _normalized_hidden_dims(encoder_config.get('hidden_dims'))
+        payload['family'] = 'sid'
+        payload['quantizer']['config'] = merge_defaults(
+            SID_QUANTIZER_CONFIG_DEFAULTS,
+            (quantizer.get('config') or {}),
+        )
+        payload['encoder'] = {
+            'name': str(encoder.get('name') or 'mlp').strip().lower(),
+            'config': encoder_config,
+        }
+    return {
+        'stage': 'quantized',
+        'schema_version': QUANTIZED_SPEC_VERSION,
+        'data': str(data).lower(),
+        'config': payload,
+    }
+
+
+def quantized_spec_from_meta(meta: dict):
+    quantizer_name = str(meta.get('quantizer_model') or meta.get('hash_model') or '').strip().lower()
+    if not quantizer_name:
+        raise ValueError('quantized meta missing quantizer_model/hash_model')
+    trainer_args = meta.get('trainer_args') or {}
+    payload = {
+        'embedding_model': normalize_model_name(meta.get('embedding_model')),
+        'quantizer': {
+            'name': quantizer_name,
+        },
+        'trainer': _quantizer_trainer_payload(trainer_args),
+    }
+    if quantizer_name in HASH_INDEXER_NAMES or meta.get('representation_family') == 'hash':
+        payload['family'] = 'hash'
+        payload['quantizer']['config'] = merge_defaults(
+            HASH_QUANTIZER_CONFIG_DEFAULTS,
+            meta.get('hash_config') or meta.get('quantizer_config') or {},
+        )
+        payload['quantizer']['config'].pop('seed', None)
+    else:
+        encoder_config = merge_defaults(SID_ENCODER_CONFIG_DEFAULTS, meta.get('encoder_config') or {})
+        encoder_config['hidden_dims'] = _normalized_hidden_dims(encoder_config.get('hidden_dims'))
+        payload['family'] = 'sid'
+        payload['quantizer']['config'] = merge_defaults(
+            SID_QUANTIZER_CONFIG_DEFAULTS,
+            meta.get('quantizer_config') or {},
+        )
+        payload['encoder'] = {
+            'name': str(meta.get('encoder_name') or 'mlp').strip().lower(),
+            'config': encoder_config,
+        }
+    return {
+        'stage': 'quantized',
+        'schema_version': QUANTIZED_SPEC_VERSION,
+        'data': str(meta.get('data') or meta.get('dataset')).lower(),
+        'config': payload,
+    }
+
+
+def clustered_spec_from_config(config: Any, resolved_levels: list[int] | None = None):
+    levels = list(resolved_levels or [])
+    payload = {
+        'levels_spec': str(_config_get(config, 'levels_spec')).strip().lower(),
+        'resolved_levels': levels,
+        'word2vec': {
+            'vector_size': int(_config_get(config, 'vector_size')),
+            'window': int(_config_get(config, 'window')),
+            'patience': int(_config_get(config, 'patience')),
+            'sg': int(_config_get(config, 'sg')),
+            'negative': int(_config_get(config, 'negative')),
+            'min_count': int(_config_get(config, 'min_count')),
+        },
+        'cluster': {
+            'batch_size': int(_config_get(config, 'cluster_batch_size')),
+            'max_iter': int(_config_get(config, 'cluster_max_iter')),
+            'n_init': int(_config_get(config, 'cluster_n_init')),
+        },
+    }
+    return {
+        'stage': 'clustered',
+        'schema_version': CLUSTERED_SPEC_VERSION,
+        'data': str(_config_get(config, 'data')).lower(),
+        'config': payload,
+    }
+
+
+def clustered_spec_from_meta(meta: dict):
+    word2vec = meta.get('word2vec') or {}
+    cluster = meta.get('cluster') or {}
+    payload = {
+        'levels_spec': str(meta.get('levels_spec')).strip().lower(),
+        'resolved_levels': list(meta.get('resolved_levels') or []),
+        'word2vec': {
+            'vector_size': int(word2vec.get('vector_size')),
+            'window': int(word2vec.get('window')),
+            'patience': int(word2vec.get('patience')),
+            'sg': int(word2vec.get('sg')),
+            'negative': int(word2vec.get('negative')),
+            'min_count': int(word2vec.get('min_count')),
+        },
+        'cluster': {
+            'batch_size': int(cluster.get('batch_size')),
+            'max_iter': int(cluster.get('max_iter')),
+            'n_init': int(cluster.get('n_init')),
+        },
+    }
+    return {
+        'stage': 'clustered',
+        'schema_version': CLUSTERED_SPEC_VERSION,
+        'data': str(meta.get('data') or meta.get('dataset')).lower(),
+        'config': payload,
+    }
+
+
+def compiled_spec_from_config(config: CompileConfig):
+    return {
+        'stage': 'compiled',
+        'schema_version': COMPILED_SPEC_VERSION,
+        'data': config.data,
+        'config': config.config_dict,
+    }
+
+
+def compiled_spec_from_meta(meta: dict):
+    if not isinstance(meta.get('config'), dict):
+        raise ValueError('compiled meta missing config')
+    config = deepcopy(meta.get('config'))
+    if not config.get('upstreams'):
+        config['upstreams'] = build_default_upstreams(config)
+    compile_config = CompileConfig(
+        data=config.get('data') or meta.get('data') or meta.get('dataset'),
+        model=config.get('model'),
+        repr_type=config.get('repr_type'),
+        repr_source_model=config.get('repr_source_model'),
+        sid_export=config.get('sid_export'),
+        sid_coder=config.get('sid_coder'),
+        hash_coder=config.get('hash_coder'),
+        task_type=config.get('task_type'),
+        maxitems=int(config.get('maxitems', 20)),
+        model_max_length=config.get('model_max_length'),
+        item_text_max_tokens=int(config.get('item_text_max_tokens', 20)),
+        repr_combine=config.get('repr_combine', 'concat'),
+        upstreams=config.get('upstreams'),
+    )
+    return {
+        'stage': 'compiled',
+        'schema_version': COMPILED_SPEC_VERSION,
+        'data': str(meta.get('data') or meta.get('dataset')).lower(),
+        'config': compile_config.config_dict,
+    }
+
+
+def generic_stage_spec(stage: str, source: Any, **kwargs):
+    if stage == 'compiled':
+        return compiled_spec_from_config(source) if isinstance(source, CompileConfig) else compiled_spec_from_meta(source)
+    if stage == 'clustered':
+        if isinstance(source, dict) and ('dataset' in source or 'data' in source) and 'word2vec' in source:
+            return clustered_spec_from_meta(source)
+        return clustered_spec_from_config(source, resolved_levels=kwargs.get('resolved_levels'))
+    if stage == 'quantized':
+        if isinstance(source, dict) and ('dataset' in source or 'data' in source) and (
+            'quantizer_model' in source or 'hash_model' in source
+        ):
+            return quantized_spec_from_meta(source)
+        return quantized_spec_from_config(kwargs.get('data'), kwargs.get('embedding_model'), source)
+    raise ValueError(f'unsupported artifact stage: {stage}')
+
+
+def generic_signature_from_spec(spec: dict):
+    return short_config_hash(spec, length=16)
+
+
+def compiled_signature_from_config(config: CompileConfig):
+    return generic_signature_from_spec(compiled_spec_from_config(config))
+
+
+def clustered_signature_from_config(config: Any, resolved_levels: list[int]):
+    return generic_signature_from_spec(clustered_spec_from_config(config, resolved_levels))
+
+
+def quantized_signature_from_config(data: str, embedding_model: str, config: Any):
+    return generic_signature_from_spec(quantized_spec_from_config(data, embedding_model, config))
+
+
+def quantized_signature_from_upstream(data: str, upstream: dict):
+    return generic_signature_from_spec(quantized_spec_from_upstream(data, upstream))
+
+
+def generic_signature_from_meta(stage: str, meta: dict):
+    return generic_signature_from_spec(generic_stage_spec(stage, meta))
+
+
+def _generic_schema_version(stage: str):
+    return GENERIC_SPEC_VERSIONS[stage]
+
+
+def _version_error(stage: str, signature: str, found: str | None, expected: str):
+    found_label = found or 'missing'
+    return ArtifactRegistryVersionError(
+        f'{stage} artifact index version mismatch for {signature}: '
+        f'index has {found_label}, current code expects {expected}. '
+        f'Please run `python scripts/init_artifact_registry.py --stage {stage} --apply` to update SIGN aliases.'
+    )
+
+
+def _resolve_generic_index_entry(stage: str, data: str, signature: str, root: Path | str | None = None):
+    expected = _generic_schema_version(stage)
+    index = load_generic_index(stage, data, root=root)
+    seen = set()
+    cursor = signature
+    while cursor and cursor not in seen:
+        seen.add(cursor)
+        entry = index.get(cursor)
+        if not isinstance(entry, dict):
+            return None
+        entry_version = entry.get('schema_version')
+        if entry_version != expected:
+            raise _version_error(stage, cursor, entry_version, expected)
+        alias_of = entry.get('alias_of')
+        if alias_of:
+            cursor = str(alias_of)
+            continue
+        return entry
+    return None
+
+
+def canonical_generic_artifact_dir(stage: str, data: str, signature: str, root: Path | str | None = None):
+    return generic_dataset_dir(stage, data, root=root) / signature
+
+
+def resolve_generic_artifact_dir(
+    stage: str,
+    data: str,
+    signature: str,
+    root: Path | str | None = None,
+):
+    dataset_dir = generic_dataset_dir(stage, data, root=root)
+    entry = _resolve_generic_index_entry(stage, data, signature, root=root)
+    if isinstance(entry, dict) and entry.get('folder'):
+        candidate = dataset_dir / str(entry['folder'])
+        if candidate.exists():
+            return candidate
+    return canonical_generic_artifact_dir(stage, data, signature, root=root)
+
+
+def generic_folder_from_dir(stage: str, data: str, run_dir: Path, root: Path | str | None = None):
+    dataset_dir = generic_dataset_dir(stage, data, root=root)
+    try:
+        return Path(run_dir).relative_to(dataset_dir).as_posix()
+    except ValueError:
+        return Path(run_dir).name
+
+
+def generic_artifact_identity(
+    stage: str,
+    meta_or_spec: dict,
+    folder: str,
+    *,
+    aliases: list[str] | None = None,
+    migration_status: str = 'current',
+):
+    if meta_or_spec.get('stage') == stage and meta_or_spec.get('schema_version') == _generic_schema_version(stage):
+        spec = meta_or_spec
+    else:
+        spec = generic_stage_spec(stage, meta_or_spec)
+    signature = generic_signature_from_spec(spec)
+    return {
+        'stage': stage,
+        'schema_version': _generic_schema_version(stage),
+        'signature': signature,
+        'folder': folder,
+        'aliases': _dedupe(aliases or []),
+        'migration_status': migration_status,
+        'spec': spec,
+    }
+
+
+def register_generic_artifact(
+    stage: str,
+    meta_or_spec: dict,
+    folder: str,
+    *,
+    aliases: list[str] | None = None,
+    root: Path | str | None = None,
+):
+    if meta_or_spec.get('stage') == stage and meta_or_spec.get('schema_version') == _generic_schema_version(stage):
+        spec = meta_or_spec
+    else:
+        spec = generic_stage_spec(stage, meta_or_spec)
+    signature = generic_signature_from_spec(spec)
+    data = str(spec['data']).lower()
+    index = load_generic_index(stage, data, root=root)
+    expected = _generic_schema_version(stage)
+    alias_values = _dedupe([*(aliases or []), legacy_signature_from_folder(folder)])
+
+    existing = index.get(signature)
+    if isinstance(existing, dict):
+        entry_version = existing.get('schema_version')
+        if entry_version not in {None, expected}:
+            raise _version_error(stage, signature, entry_version, expected)
+        if existing.get('folder') and existing.get('folder') != folder:
+            existing_path = generic_dataset_dir(stage, data, root=root) / str(existing.get('folder'))
+            if existing_path.exists():
+                raise TrainedArtifactRegistryConflict(
+                    f'{stage} artifact signature conflict for {signature}: {existing.get("folder")} vs {folder}',
+                    signature=signature,
+                    folder=folder,
+                    existing_folder=str(existing.get('folder')),
+                )
+
+    for alias in alias_values:
+        if alias == signature:
+            continue
+        existing_alias = index.get(alias)
+        if isinstance(existing_alias, dict):
+            alias_version = existing_alias.get('schema_version')
+            if alias_version not in {None, expected}:
+                raise _version_error(stage, alias, alias_version, expected)
+            alias_of = existing_alias.get('alias_of')
+            if alias_of and alias_of != signature:
+                raise TrainedArtifactRegistryConflict(
+                    f'{stage} artifact alias conflict for {alias}: {alias_of} vs {signature}',
+                    signature=signature,
+                    folder=folder,
+                    alias=alias,
+                )
+        index[alias] = {'alias_of': signature, 'schema_version': expected}
+
+    index[signature] = {
+        'folder': folder,
+        'schema_version': expected,
+        'aliases': alias_values,
+    }
+    save_generic_index(stage, data, index, root=root)
+    return index[signature]
+
+
+def resolve_compiled_dir(config: CompileConfig, root: Path | str | None = None):
+    signature = compiled_signature_from_config(config)
+    return resolve_generic_artifact_dir('compiled', config.data, signature, root=root)
+
+
+def compiled_artifact_identity(config: CompileConfig, run_dir: Path, *, aliases: list[str] | None = None):
+    spec = compiled_spec_from_config(config)
+    return generic_artifact_identity(
+        'compiled',
+        spec,
+        generic_folder_from_dir('compiled', config.data, run_dir),
+        aliases=aliases,
+    )
+
+
+def register_compiled_artifact(config: CompileConfig, run_dir: Path, *, aliases: list[str] | None = None):
+    spec = compiled_spec_from_config(config)
+    folder = generic_folder_from_dir('compiled', config.data, run_dir)
+    return register_generic_artifact('compiled', spec, folder, aliases=aliases)
+
+
+def resolve_clustered_dir(config: Any, resolved_levels: list[int], root: Path | str | None = None):
+    signature = clustered_signature_from_config(config, resolved_levels)
+    return resolve_generic_artifact_dir('clustered', str(_config_get(config, 'data')).lower(), signature, root=root)
+
+
+def clustered_artifact_identity(config: Any, resolved_levels: list[int], run_dir: Path, *, aliases: list[str] | None = None):
+    spec = clustered_spec_from_config(config, resolved_levels)
+    data = str(_config_get(config, 'data')).lower()
+    return generic_artifact_identity(
+        'clustered',
+        spec,
+        generic_folder_from_dir('clustered', data, run_dir),
+        aliases=aliases,
+    )
+
+
+def register_clustered_artifact(config: Any, resolved_levels: list[int], run_dir: Path, *, aliases: list[str] | None = None):
+    spec = clustered_spec_from_config(config, resolved_levels)
+    data = str(_config_get(config, 'data')).lower()
+    folder = generic_folder_from_dir('clustered', data, run_dir)
+    return register_generic_artifact('clustered', spec, folder, aliases=aliases)
+
+
+def resolve_quantized_dir(data: str, embedding_model: str, config: Any, root: Path | str | None = None):
+    spec = quantized_spec_from_config(data, embedding_model, config)
+    signature = generic_signature_from_spec(spec)
+    return resolve_generic_artifact_dir('quantized', str(data).lower(), signature, root=root)
+
+
+def resolve_quantized_dir_from_upstream(data: str, upstream: dict, root: Path | str | None = None):
+    spec = quantized_spec_from_upstream(data, upstream)
+    signature = generic_signature_from_spec(spec)
+    return resolve_generic_artifact_dir('quantized', str(data).lower(), signature, root=root)
+
+
+def quantized_artifact_identity(data: str, embedding_model: str, config: Any, run_dir: Path, *, aliases: list[str] | None = None):
+    spec = quantized_spec_from_config(data, embedding_model, config)
+    return generic_artifact_identity(
+        'quantized',
+        spec,
+        generic_folder_from_dir('quantized', str(data).lower(), run_dir),
+        aliases=aliases,
+    )
+
+
+def register_quantized_artifact(data: str, embedding_model: str, config: Any, run_dir: Path, *, aliases: list[str] | None = None):
+    spec = quantized_spec_from_config(data, embedding_model, config)
+    folder = generic_folder_from_dir('quantized', str(data).lower(), run_dir)
+    return register_generic_artifact('quantized', spec, folder, aliases=aliases)
 
 
 def _compile_config_from_config(config: Any):
@@ -279,6 +868,13 @@ def _resolve_alias(index: dict, signature: str):
         entry = index.get(cursor)
         if not isinstance(entry, dict):
             return cursor, None
+        entry_version = entry.get('schema_version')
+        if entry_version != TRAINED_SPEC_VERSION:
+            raise ArtifactRegistryVersionError(
+                f'trained artifact index version mismatch for {cursor}: '
+                f'index has {entry_version or "missing"}, current code expects {TRAINED_SPEC_VERSION}. '
+                'Please run `python scripts/init_artifact_registry.py --stage trained --apply` to update SIGN aliases.'
+            )
         alias_of = entry.get('alias_of')
         if not alias_of:
             return cursor, entry
@@ -462,7 +1058,7 @@ def register_trained_artifact(
                     alias=alias,
                     existing_folder=str(existing_alias.get('folder')),
                 )
-        index[alias] = {'alias_of': signature}
+        index[alias] = {'alias_of': signature, 'schema_version': TRAINED_SPEC_VERSION}
     index[signature] = {
         'folder': folder,
         'schema_version': TRAINED_SPEC_VERSION,

@@ -14,7 +14,11 @@ from sklearn.cluster import MiniBatchKMeans
 from tqdm import tqdm
 
 from processors.base_processor import Processor
-from utils.artifact import ArtifactStore
+from utils.artifact_identity import (
+    clustered_artifact_identity,
+    register_clustered_artifact,
+    resolve_clustered_dir,
+)
 from utils.compile import short_config_hash
 from utils.config_init import ConfigInit
 from utils.data import get_data_dir
@@ -130,7 +134,7 @@ class Clusterer:
 
         self.resolved_levels = resolve_uid_cluster_levels(self.config.levels_spec, len(self.item_ids))
         self.prepare_id = self._build_prepare_id()
-        self.output_dir = ArtifactStore(self.config.data).clustered_dir(self.prepare_id)
+        self.output_dir = resolve_clustered_dir(self.config, self.resolved_levels)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.meta_path = self.output_dir / 'meta.json'
@@ -193,8 +197,8 @@ class Clusterer:
 
     def _build_prepare_id(self):
         payload = asdict(self.config).copy()
+        payload.pop('seed', None)
         payload['resolved_levels'] = self.resolved_levels
-        payload['version'] = self.VER
         payload_hash = short_config_hash(payload)
         return (
             f'ptw2v__lv{format_uid_cluster_levels(self.resolved_levels)}'
@@ -527,10 +531,12 @@ class Clusterer:
         return item_node_ids, item_labels, node_meta, child_nodes, leaf_items
 
     def _save_meta(self, embeddings: np.ndarray):
+        identity = clustered_artifact_identity(self.config, self.resolved_levels, self.output_dir)
         meta = {
             'version': self.VER,
             'dataset': self.config.data,
             'prepare_id': self.prepare_id,
+            'artifact_identity': identity,
             'item_col': self.processor.IID_COL,
             'levels_spec': self.config.levels_spec,
             'resolved_levels': self.resolved_levels,
@@ -558,6 +564,7 @@ class Clusterer:
             'processed_items_path': str(Path(self.processor.store_dir) / 'items.parquet'),
         }
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+        register_clustered_artifact(self.config, self.resolved_levels, self.output_dir, aliases=identity.get('aliases'))
 
     def run(self):
         pnt(

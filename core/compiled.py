@@ -9,6 +9,7 @@ from pigmento import pnt
 
 from utils import function
 from utils.artifact import ArtifactStore
+from utils.artifact_identity import resolve_compiled_dir
 from utils.pipeline import ensure_compiled
 
 
@@ -16,7 +17,7 @@ class CompiledArtifacts:
     def __init__(self, config):
         self.config = config
         self.store = ArtifactStore(config.data)
-        self.compile_dir = self.store.compiled_dir(config.compile_config.prepare_id)
+        self.compile_dir = resolve_compiled_dir(config.compile_config)
         self.meta = None
         self.prompt_main = None
         self.vocab_meta = None

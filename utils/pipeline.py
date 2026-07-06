@@ -43,11 +43,59 @@ def ensure_embedded(data: str, model: str, device=None, batch_size=32, normalize
     return embedder
 
 
-def ensure_quantized(data: str, model: str, quantizer_name: str | None = None):
+def ensure_quantized(data: str, model: str, quantizer_name: str | None = None, quantizer_spec: dict | None = None):
     setup_logging()
     suffix = f'/{quantizer_name}' if quantizer_name else ''
     pnt(f'auto preparing quantized artifacts for {data}/{model}{suffix}')
     from quantizer import Quantizer
+
+    quantizer_spec = quantizer_spec or {}
+    quantizer = quantizer_spec.get('quantizer') or {}
+    encoder = quantizer_spec.get('encoder') or {}
+    trainer = quantizer_spec.get('trainer') or {}
+    hash_config = quantizer.get('config') or {}
+    quantizer_config = quantizer.get('config') or {}
+    if (quantizer.get('name') or quantizer_name) in {'lsh', 'simhash', 'pcahash', 'itq'}:
+        hash_config = quantizer.get('config') or {}
+
+    kwargs = {
+        'data': data,
+        'model': model,
+        'quantizer_name': quantizer.get('name') or quantizer_name,
+        'config': 'config/quantizer.yaml',
+        'hidden_dims': (encoder.get('config') or {}).get('hidden_dims'),
+        'latent_dim': quantizer_config.get('latent_dim'),
+        'reconstruction_loss': quantizer_config.get('reconstruction_loss'),
+        'codebook_size': quantizer_config.get('codebook_size'),
+        'commitment_weight': quantizer_config.get('commitment_weight'),
+        'codebook_weight': quantizer_config.get('codebook_weight'),
+        'use_ema_codebook': quantizer_config.get('use_ema_codebook'),
+        'ema_decay': quantizer_config.get('ema_decay'),
+        'ema_epsilon': quantizer_config.get('ema_epsilon'),
+        'dead_code_reset': quantizer_config.get('dead_code_reset'),
+        'dead_code_threshold': quantizer_config.get('dead_code_threshold'),
+        'num_quantizers': quantizer_config.get('num_quantizers'),
+        'num_codebooks': quantizer_config.get('num_codebooks'),
+        'assignment_strategy': quantizer_config.get('assignment_strategy'),
+        'sinkhorn_epsilon': quantizer_config.get('sinkhorn_epsilon'),
+        'sinkhorn_iters': quantizer_config.get('sinkhorn_iters'),
+        'kmeans_init': quantizer_config.get('kmeans_init'),
+        'kmeans_iters': quantizer_config.get('kmeans_iters'),
+        'num_bits': hash_config.get('num_bits'),
+        'num_tables': hash_config.get('num_tables'),
+        'projection_distribution': hash_config.get('projection_distribution'),
+        'use_median_thresholds': hash_config.get('use_median_thresholds'),
+        'num_iterations': hash_config.get('num_iterations'),
+        'normalize_inputs': hash_config.get('normalize_inputs'),
+        'validation_ratio': trainer.get('validation_ratio'),
+        'test_ratio': trainer.get('test_ratio'),
+        'epoch': trainer.get('epochs'),
+        'batch_size': trainer.get('batch_size'),
+        'lr': trainer.get('learning_rate'),
+        'patience': trainer.get('patience'),
+        'save_best_by': trainer.get('save_best_by'),
+    }
+    kwargs = {key: value for key, value in kwargs.items() if value is not None}
 
     configurations = ConfigInit(
         required_args=['data', 'model'],
@@ -55,14 +103,7 @@ def ensure_quantized(data: str, model: str, quantizer_name: str | None = None):
             config='config/quantizer.yaml',
         ),
         makedirs=[],
-    ).parse_kwargs(
-        {
-            'data': data,
-            'model': model,
-            'quantizer_name': quantizer_name,
-            'config': 'config/quantizer.yaml',
-        }
-    )
+    ).parse_kwargs(kwargs)
     quantizer = Quantizer(configurations.data, configurations.model, configurations.config)
     quantizer.run()
     return quantizer

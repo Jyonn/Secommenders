@@ -20,9 +20,9 @@ from tqdm import tqdm
 from core import CompiledArtifacts, SequentialRecModel, TrainConfig
 from core.dataset import CompiledFinetuneTrajectoryDataset, CompiledTestSampleDataset, CompiledValidSampleDataset
 from utils import function
-from utils.artifact import ArtifactStore
 from utils.artifact_identity import (
     register_trained_artifact,
+    resolve_compiled_dir,
     resolve_trained_run_dir,
     trained_artifact_identity,
 )
@@ -672,7 +672,7 @@ def _write_pid_record(run_dir: Path, config: TrainConfig):
         'hostname': socket.gethostname(),
         'command': _command_string(),
         'run_dir': str(run_dir),
-        'compile_dir': str(ArtifactStore(config.data).compiled_dir(config.compile_config.prepare_id)),
+        'compile_dir': str(resolve_compiled_dir(config.compile_config)),
         'rank': rank,
         'world_size': world_size,
         'created_at': _utc_now_iso(),
@@ -689,7 +689,7 @@ def _write_initial_meta(run_dir: Path, config: TrainConfig):
     meta.update({
         'config': asdict(config),
         'run_dir': str(run_dir),
-        'compiled_dir': str(ArtifactStore(config.data).compiled_dir(config.compile_config.prepare_id)),
+        'compiled_dir': str(resolve_compiled_dir(config.compile_config)),
         'command': _command_string(),
         'pid': os.getpid(),
         'hostname': socket.gethostname(),

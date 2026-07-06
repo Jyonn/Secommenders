@@ -16,26 +16,28 @@ from utils.artifact_identity import (  # noqa: E402
     TRAINED_PHASES,
     TrainedArtifactRegistryConflict,
     canonical_trained_run_dir,
+    GENERIC_SPEC_VERSIONS,
+    generic_artifact_identity as identity_generic_artifact_identity,
+    generic_index_path as identity_generic_index_path,
+    generic_signature_from_meta as identity_generic_signature_from_meta,
     legacy_signature_from_folder,
+    load_generic_index as identity_load_generic_index,
     load_trained_index,
     migrate_train_config_dict,
+    register_generic_artifact as identity_register_generic_artifact,
     register_trained_artifact,
+    save_generic_index as identity_save_generic_index,
     save_trained_index,
     trained_artifact_identity,
     trained_mode,
     trained_seed,
     trained_signature_from_config,
 )
-from utils.compile import short_config_hash  # noqa: E402
 
 
 GENERIC_STAGES = {'clustered', 'compiled', 'quantized'}
 REGISTRY_STAGES = {'trained', *GENERIC_STAGES}
-GENERIC_SCHEMA_VERSIONS = {
-    'clustered': 'clustered.v1',
-    'compiled': 'compiled.v1',
-    'quantized': 'quantized.v1',
-}
+GENERIC_SCHEMA_VERSIONS = GENERIC_SPEC_VERSIONS
 PATH_KEY_SUFFIXES = ('_path', '_dir')
 PATH_KEYS = {
     'path',
@@ -110,24 +112,15 @@ def dedupe(values):
 
 
 def registry_index_path(stage: str, data: str, root: Path):
-    path = root / 'artifacts' / stage / data.lower()
-    path.mkdir(parents=True, exist_ok=True)
-    return path / TRAINED_INDEX_NAME
+    return identity_generic_index_path(stage, data, root=root)
 
 
 def load_registry_index(stage: str, data: str, root: Path):
-    path = registry_index_path(stage, data, root)
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text())
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    return identity_load_generic_index(stage, data, root=root)
 
 
 def save_registry_index(stage: str, data: str, index: dict, root: Path):
-    registry_index_path(stage, data, root).write_text(json.dumps(index, indent=2, sort_keys=True) + '\n')
+    identity_save_generic_index(stage, data, index, root=root)
 
 
 def strip_path_values(value):
@@ -152,6 +145,8 @@ def generic_data_from_meta(stage: str, meta: dict):
 
 
 def generic_stage_payload(stage: str, meta: dict):
+    # Runtime artifact identity now lives in utils.artifact_identity.  Keep this
+    # helper only for backward-compatible callers inside this script.
     if stage == 'compiled':
         if not isinstance(meta.get('config'), dict):
             raise ValueError('compiled meta missing config')
@@ -195,16 +190,13 @@ def generic_stage_payload(stage: str, meta: dict):
 
 
 def generic_stage_spec(stage: str, meta: dict):
-    return {
-        'stage': stage,
-        'schema_version': GENERIC_SCHEMA_VERSIONS[stage],
-        'data': generic_data_from_meta(stage, meta),
-        'config': generic_stage_payload(stage, meta),
-    }
+    from utils.artifact_identity import generic_stage_spec as identity_generic_stage_spec
+
+    return identity_generic_stage_spec(stage, meta)
 
 
 def generic_signature_from_meta(stage: str, meta: dict):
-    return short_config_hash(generic_stage_spec(stage, meta), length=16)
+    return identity_generic_signature_from_meta(stage, meta)
 
 
 def generic_artifact_identity(
@@ -215,16 +207,13 @@ def generic_artifact_identity(
     aliases: list[str] | None = None,
     migration_status: str = 'current',
 ):
-    signature = generic_signature_from_meta(stage, meta)
-    return {
-        'stage': stage,
-        'schema_version': GENERIC_SCHEMA_VERSIONS[stage],
-        'signature': signature,
-        'folder': folder,
-        'aliases': dedupe(aliases or []),
-        'migration_status': migration_status,
-        'spec': generic_stage_spec(stage, meta),
-    }
+    return identity_generic_artifact_identity(
+        stage,
+        meta,
+        folder,
+        aliases=aliases,
+        migration_status=migration_status,
+    )
 
 
 def iter_generic_meta_paths(root: Path, stage: str, data: str | None = None):
@@ -311,101 +300,7 @@ def generic_folder_has_artifacts(dataset_dir: Path, folder: str):
 
 
 def register_generic_artifact(stage: str, meta: dict, folder: str, *, aliases: list[str] | None, root: Path):
-    data = generic_data_from_meta(stage, meta)
-    signature = generic_signature_from_meta(stage, meta)
-    dataset_dir = root / 'artifacts' / stage / data
-    index = load_registry_index(stage, data, root)
-    alias_values = dedupe([*(aliases or []), legacy_signature_from_folder(folder)])
-
-    def same_or_stale_primary(entry: dict):
-        primary_folder = entry.get('folder')
-        if not primary_folder:
-            return False
-        if primary_folder == folder:
-            return True
-        return not generic_folder_has_artifacts(dataset_dir, str(primary_folder))
-
-    def resolve_alias_target(alias_of: str):
-        seen = set()
-        cursor = str(alias_of)
-        chain = []
-        while cursor and cursor not in seen:
-            seen.add(cursor)
-            chain.append(cursor)
-            entry = index.get(cursor)
-            if not isinstance(entry, dict):
-                return 'stale', None, chain
-            if entry.get('folder'):
-                if same_or_stale_primary(entry):
-                    return 'stale', str(entry.get('folder')), chain
-                return 'conflict', str(entry.get('folder')), chain
-            next_alias = entry.get('alias_of')
-            if not next_alias:
-                return 'stale', None, chain
-            if str(next_alias) == signature:
-                return 'current', folder, chain
-            cursor = str(next_alias)
-        return 'stale', None, chain
-
-    existing = index.get(signature)
-    if isinstance(existing, dict) and existing.get('folder') and not same_or_stale_primary(existing):
-        raise TrainedArtifactRegistryConflict(
-            f'{stage} artifact signature conflict for {signature}: {existing.get("folder")} vs {folder}',
-            signature=signature,
-            folder=folder,
-            existing_folder=str(existing.get('folder')),
-        )
-    if isinstance(existing, dict) and existing.get('alias_of') and existing.get('alias_of') != signature:
-        status, existing_folder, chain = resolve_alias_target(str(existing.get('alias_of')))
-        if status in {'current', 'stale'}:
-            alias_values = dedupe([*alias_values, *chain])
-        else:
-            raise TrainedArtifactRegistryConflict(
-                f'{stage} artifact signature conflict for {signature}: already aliases {existing.get("alias_of")}',
-                signature=signature,
-                folder=folder,
-                alias=str(existing.get('alias_of')),
-                existing_folder=existing_folder,
-            )
-
-    alias_index = 0
-    while alias_index < len(alias_values):
-        alias = alias_values[alias_index]
-        alias_index += 1
-        if alias == signature:
-            continue
-        existing_alias = index.get(alias)
-        if isinstance(existing_alias, dict):
-            alias_of = existing_alias.get('alias_of')
-            if alias_of and alias_of != signature:
-                status, existing_folder, chain = resolve_alias_target(str(alias_of))
-                if status in {'current', 'stale'}:
-                    alias_values = dedupe([*alias_values, *chain])
-                else:
-                    raise TrainedArtifactRegistryConflict(
-                        f'{stage} artifact alias conflict for {alias}: {alias_of} vs {signature}',
-                        signature=signature,
-                        folder=folder,
-                        alias=alias,
-                        existing_folder=existing_folder,
-                    )
-            if existing_alias.get('folder') and not same_or_stale_primary(existing_alias):
-                raise TrainedArtifactRegistryConflict(
-                    f'{stage} artifact alias conflict for {alias}: already registered as primary',
-                    signature=signature,
-                    folder=folder,
-                    alias=alias,
-                    existing_folder=str(existing_alias.get('folder')),
-                )
-        index[alias] = {'alias_of': signature}
-
-    index[signature] = {
-        'folder': folder,
-        'schema_version': GENERIC_SCHEMA_VERSIONS[stage],
-        'aliases': alias_values,
-    }
-    save_registry_index(stage, data, index, root)
-    return index[signature]
+    return identity_register_generic_artifact(stage, meta, folder, aliases=aliases, root=root)
 
 
 def iter_trained_meta_paths(root: Path, data: str | None = None):

@@ -12,7 +12,14 @@ from models import BaseBackbone, build_backbone
 from models.base import TYPE_MARKER_ORDER, TYPE_MARKER_TOKENS
 from processors.base_processor import Processor
 from utils.artifact import ArtifactStore
+from utils.artifact_identity import (
+    compiled_artifact_identity,
+    register_compiled_artifact,
+    resolve_compiled_dir,
+    resolve_quantized_dir_from_upstream,
+)
 from utils.compile import CompileConfig, normalize_model_name
+from utils.experiment_template import build_default_upstreams
 from utils.function import load_processor
 from utils.logging import setup_logging
 from utils.pipeline import ensure_embedded, ensure_quantized
@@ -48,7 +55,7 @@ class Compiler:
     def __init__(self, config: CompileConfig):
         self.config = config
         self.store = ArtifactStore(config.data)
-        self.output_dir = self.store.compiled_dir(config.prepare_id)
+        self.output_dir = resolve_compiled_dir(config)
         self.processor: Optional[Processor] = None
         self.backbone: Optional[BaseBackbone] = None
         self.registry = VocabularyRegistry()
@@ -622,7 +629,11 @@ class Compiler:
                 f'Only {supported} are supported.'
             )
 
-        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / export_name
+        export_dir = (
+            resolve_quantized_dir_from_upstream(self.config.data, upstream)
+            if upstream
+            else self.store.quantized_dir(model_name, quantizer_name)
+        ) / 'exports' / export_name
 
         def _export_ready(path: Path):
             meta_path = path / 'meta.json'
@@ -638,7 +649,7 @@ class Compiler:
                     f'Expected: {export_dir}. '
                     f'Please run `python basic_rqvae_quantizer.py --data {self.config.data} --model {model_name}` first.'
                 )
-            ensure_quantized(self.config.data, model_name, quantizer_name)
+            ensure_quantized(self.config.data, model_name, quantizer_name, upstream)
             export_ready = _export_ready(export_dir)
         if not export_ready:
             raise FileNotFoundError(
@@ -674,7 +685,11 @@ class Compiler:
                 f'Only {supported} are supported.'
             )
 
-        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / export_name
+        export_dir = (
+            resolve_quantized_dir_from_upstream(self.config.data, upstream)
+            if upstream
+            else self.store.quantized_dir(model_name, quantizer_name)
+        ) / 'exports' / export_name
 
         def _export_ready(path: Path):
             meta_path = path / 'meta.json'
@@ -684,7 +699,7 @@ class Compiler:
 
         export_ready = _export_ready(export_dir)
         if not export_ready:
-            ensure_quantized(self.config.data, model_name, quantizer_name)
+            ensure_quantized(self.config.data, model_name, quantizer_name, upstream)
             export_ready = _export_ready(export_dir)
         if not export_ready:
             raise FileNotFoundError(
@@ -1197,6 +1212,7 @@ class Compiler:
         )
 
     def save_meta(self):
+        identity = compiled_artifact_identity(self.config, self.output_dir)
         self._save_json(
             self.meta_path,
             {
@@ -1205,6 +1221,7 @@ class Compiler:
                 'data': self.config.data,
                 'prepare_id': self.config.prepare_id,
                 'config': self.config.config_dict,
+                'artifact_identity': identity,
                 'model_kind': self.backbone.kind,
                 'model_max_length': int(self.backbone.max_length),
                 'processed_dir': str(self.store.processed_dir()),
@@ -1216,6 +1233,7 @@ class Compiler:
                 'hash_recommended_decoding': self.hash_stats.get('recommended_decoding'),
             },
         )
+        register_compiled_artifact(self.config, self.output_dir, aliases=identity.get('aliases'))
         pnt(f'meta saved to {self.meta_path}')
 
     def save_stats(self):
@@ -1295,6 +1313,7 @@ if __name__ == '__main__':
         maxitems=int(args.maxitems),
         model_max_length=int(args.model_max_length) or None,
         item_text_max_tokens=int(args.item_text_max_tokens),
+        upstreams=build_default_upstreams(vars(args)),
     )
     compiler = Compiler(config)
     compiler.run()

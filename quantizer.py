@@ -18,6 +18,11 @@ from autoencoders.training.display import style
 from autoencoders.training.trainer import TrainingConfig, VQTrainer
 from utils.config_init import ConfigInit
 from utils.artifact import ArtifactStore
+from utils.artifact_identity import (
+    quantized_artifact_identity,
+    register_quantized_artifact,
+    resolve_quantized_dir,
+)
 from utils.data import get_data_dir
 from utils.function import load_processor
 from utils.gpu import GPU
@@ -81,6 +86,7 @@ class Quantizer:
         self.requested_latent_dim = None
         self.resolved_latent_dim = None
         self.resolved_quantizer_config = None
+        self.resolved_encoder_config = None
 
         self.processor = load_processor(self.data, data_dir=get_data_dir(self.data))
         self.processor.load()
@@ -95,13 +101,7 @@ class Quantizer:
         if not self.embedding_path.exists():
             raise FileNotFoundError(f'Embedding file not found after auto preparation: {self.embedding_path}')
 
-        self.output_dir = Path(
-            getattr(
-                self.config.trainer,
-                'output_dir',
-                artifacts.quantized_dir(self.embedding_model, self.quantizer_name),
-            )
-        )
+        self.output_dir = resolve_quantized_dir(self.data, self.embedding_model, self.config)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.embedding_matrix = None
@@ -176,6 +176,12 @@ class Quantizer:
 
     def _resolve_quantizer_config(self):
         quantizer_config = dict(self.config.quantizer.config())
+        if isinstance(quantizer_config.get('sinkhorn_epsilon'), str):
+            quantizer_config['sinkhorn_epsilon'] = [
+                float(part.strip())
+                for part in quantizer_config['sinkhorn_epsilon'].split(',')
+                if part.strip()
+            ]
         requested_latent_dim = quantizer_config.get('latent_dim')
         self.requested_latent_dim = int(requested_latent_dim) if requested_latent_dim is not None else None
 
@@ -284,6 +290,7 @@ class Quantizer:
             decoder_config = self.config.decoder.config() if self.config.decoder.config else None
         quantizer_config = self._resolve_quantizer_config()
         encoder_config = self._resolve_encoder_config()
+        self.resolved_encoder_config = encoder_config
 
         self.model = load_model(
             self.config.quantizer.name,
@@ -298,6 +305,12 @@ class Quantizer:
 
     def build_trainer(self):
         trainer_config = self.config.trainer()
+        if isinstance(trainer_config.get('save_best_by'), str):
+            trainer_config['save_best_by'] = [
+                part.strip()
+                for part in trainer_config['save_best_by'].split(',')
+                if part.strip()
+            ]
         trainer_config['device'] = self._resolve_device()
         self.trainer_args = TrainingConfig(**trainer_config)
         return VQTrainer(model=self.model, args=self.trainer_args)
@@ -450,6 +463,8 @@ class Quantizer:
             'requested_latent_dim': self.requested_latent_dim,
             'resolved_latent_dim': self.resolved_latent_dim,
             'quantizer_config': self.resolved_quantizer_config or self.config.quantizer.config(),
+            'encoder_name': self.config.encoder.name or None,
+            'encoder_config': self.resolved_encoder_config,
         }
         if codebooks is not None:
             meta['codebooks_path'] = str(codebooks_path)
@@ -464,6 +479,7 @@ class Quantizer:
         exports = {}
         for metric_name in self.trainer_args.save_best_by:
             exports[metric_name] = self.export_checkpoint(metric_name)
+        self.save_root_meta(exports)
         return exports
 
     def _hash_export_dir(self):
@@ -534,9 +550,32 @@ class Quantizer:
         }
         meta.update(extras)
         meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+        self.save_root_meta({'hash': meta})
 
         pnt(f'binary hash bits saved to {bits_path}')
         return meta
+
+    def save_root_meta(self, exports: dict):
+        identity = quantized_artifact_identity(self.data, self.embedding_model, self.config, self.output_dir)
+        root_meta = {
+            'stage': 'quantized',
+            'dataset': self.data,
+            'embedding_model': self.embedding_model,
+            'quantizer_model': self.quantizer_name,
+            'quantizer_scheme': self.quantizer_scheme,
+            'recommended_decoding': self.recommended_decoding,
+            'trainer_output_dir': str(self.output_dir),
+            'exports': exports,
+            'artifact_identity': identity,
+        }
+        (self.output_dir / 'meta.json').write_text(json.dumps(root_meta, indent=2) + '\n')
+        register_quantized_artifact(
+            self.data,
+            self.embedding_model,
+            self.config,
+            self.output_dir,
+            aliases=identity.get('aliases'),
+        )
 
     def run(self):
         if self.is_hash_indexer:
