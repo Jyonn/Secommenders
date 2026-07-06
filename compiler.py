@@ -525,6 +525,9 @@ class Compiler:
         views = {'uid', *self.config.repr_types, self.config.task_type}
         return view_name in views
 
+    def _upstream(self, name: str):
+        return (self.config.compile_upstreams or {}).get(name) or {}
+
     def build_item_views(self):
         required_views = [view for view in ['uid', 'text', 'sid', 'hash', 'embedding'] if self.requires_view(view)]
         pnt(f'building item views {required_views} for {len(self.uid_raw_items)} items')
@@ -603,10 +606,15 @@ class Compiler:
         pnt(f'item view manifest saved: {sorted(self.item_views)}')
 
     def _load_quantized_export(self):
-        model_name = normalize_model_name(self.config.repr_source_model)
-        quantizer_name = (self.config.sid_coder or '').strip().lower()
+        upstream = self._upstream('sid')
+        quantizer = upstream.get('quantizer') or {}
+        model_name = normalize_model_name(upstream.get('embedding_model') or self.config.repr_source_model)
+        quantizer_name = (quantizer.get('name') or self.config.sid_coder or '').strip().lower()
+        export_name = str(upstream.get('export') or self.config.sid_export or '').strip().lower()
         if not quantizer_name:
             raise ValueError('quantizer_name is required when compile config uses sid views')
+        if not export_name:
+            raise ValueError('sid export is required when compile config uses sid views')
         if quantizer_name not in self.SUPPORTED_QUANTIZERS:
             supported = ', '.join(self.SUPPORTED_QUANTIZERS)
             raise ValueError(
@@ -614,7 +622,7 @@ class Compiler:
                 f'Only {supported} are supported.'
             )
 
-        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / self.config.sid_export
+        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / export_name
 
         def _export_ready(path: Path):
             meta_path = path / 'meta.json'
@@ -652,8 +660,11 @@ class Compiler:
         return export_dir, meta, item_ids, codes
 
     def _load_hash_export(self):
-        model_name = normalize_model_name(self.config.repr_source_model)
-        quantizer_name = (self.config.hash_coder or '').strip().lower()
+        upstream = self._upstream('hash')
+        quantizer = upstream.get('quantizer') or {}
+        model_name = normalize_model_name(upstream.get('embedding_model') or self.config.repr_source_model)
+        quantizer_name = (quantizer.get('name') or self.config.hash_coder or '').strip().lower()
+        export_name = str(upstream.get('export') or 'hash').strip().lower()
         if not quantizer_name:
             raise ValueError('quantizer_name is required when compile config uses hash views')
         if quantizer_name not in self.SUPPORTED_QUANTIZERS:
@@ -663,7 +674,7 @@ class Compiler:
                 f'Only {supported} are supported.'
             )
 
-        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / 'hash'
+        export_dir = self.store.quantized_dir(model_name, quantizer_name) / 'exports' / export_name
 
         def _export_ready(path: Path):
             meta_path = path / 'meta.json'

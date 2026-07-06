@@ -162,6 +162,11 @@ def _compile_config_from_config(config: Any):
     if not isinstance(config, dict) and hasattr(config, 'compile_config'):
         return config.compile_config
     defaults = TRAIN_CONFIG_DEFAULTS
+    upstreams = _config_get(config, 'upstreams', None)
+    if not upstreams:
+        upstreams = build_default_upstreams(config if isinstance(config, dict) else {
+            key: _config_get(config, key) for key in TRAIN_CONFIG_FIELD_NAMES
+        })
     return CompileConfig(
         data=_config_get(config, 'data'),
         model=_config_get(config, 'model'),
@@ -175,6 +180,7 @@ def _compile_config_from_config(config: Any):
         model_max_length=_config_get(config, 'model_max_length', defaults['model_max_length']),
         item_text_max_tokens=int(_config_get(config, 'item_text_max_tokens', defaults['item_text_max_tokens'])),
         repr_combine=_config_get(config, 'repr_combine', defaults['repr_combine']),
+        upstreams=upstreams,
     )
 
 

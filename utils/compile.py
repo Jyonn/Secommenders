@@ -1,6 +1,7 @@
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from copy import deepcopy
 from typing import Optional
 
 
@@ -53,6 +54,7 @@ class CompileConfig:
     model_max_length: Optional[int] = None
     item_text_max_tokens: int = 50
     repr_combine: str = 'concat'
+    upstreams: Optional[dict] = None
 
     def __post_init__(self):
         self.data = str(self.data).lower()
@@ -64,6 +66,7 @@ class CompileConfig:
         self.sid_export = self.sid_export.lower() if self.sid_export else None
         self.sid_coder = str(self.sid_coder).strip().lower() if self.sid_coder else None
         self.hash_coder = str(self.hash_coder).strip().lower() if self.hash_coder else None
+        self.upstreams = deepcopy(self.upstreams or {})
 
     @property
     def repr_types(self):
@@ -72,6 +75,15 @@ class CompileConfig:
     @property
     def used_views(self):
         return set(self.repr_types + [self.task_type])
+
+    @property
+    def compile_upstreams(self):
+        upstreams = {}
+        if 'sid' in self.used_views and self.upstreams.get('sid'):
+            upstreams['sid'] = deepcopy(self.upstreams['sid'])
+        if 'hash' in self.used_views and self.upstreams.get('hash'):
+            upstreams['hash'] = deepcopy(self.upstreams['hash'])
+        return upstreams
 
     @property
     def sign_parts(self):
@@ -98,6 +110,8 @@ class CompileConfig:
             parts.append(f'sc-{self.sid_coder}')
         if self.hash_coder and uses_hash:
             parts.append(f'hc-{self.hash_coder}')
+        for name, upstream in sorted(self.compile_upstreams.items()):
+            parts.append(f'{name}u{short_config_hash(upstream)}')
         return parts
 
     @property
@@ -108,6 +122,7 @@ class CompileConfig:
     @property
     def config_dict(self):
         payload = asdict(self)
+        payload['upstreams'] = self.compile_upstreams
         if not any(view in {'sid', 'hash', 'embedding'} for view in self.used_views):
             payload.pop('repr_source_model', None)
         if 'sid' not in self.used_views:
@@ -115,4 +130,6 @@ class CompileConfig:
             payload.pop('sid_coder', None)
         if 'hash' not in self.used_views:
             payload.pop('hash_coder', None)
+        if not payload.get('upstreams'):
+            payload.pop('upstreams', None)
         return payload

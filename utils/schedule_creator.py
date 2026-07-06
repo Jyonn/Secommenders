@@ -8,6 +8,7 @@ from typing import Any, Iterable, Sequence
 import yaml
 
 from utils.compile import CompileConfig, normalize_model_name
+from utils.experiment_template import build_default_upstreams
 from utils import model as model_utils
 
 def _validate_compile_config(config: CompileConfig):
@@ -459,6 +460,7 @@ class Job:
             model_max_length=self._args.get('model_max_length'),
             item_text_max_tokens=int(self._args.get('item_text_max_tokens', 20)),
             repr_combine=self._args.get('repr_combine', 'concat'),
+            upstreams=build_default_upstreams(self._args),
         )
         _validate_compile_config(compile_config)
         _validate_job_runtime_args(self._args, compile_config)

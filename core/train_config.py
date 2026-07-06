@@ -267,6 +267,7 @@ class TrainConfig:
             model_max_length=self.model_max_length,
             item_text_max_tokens=self.item_text_max_tokens,
             repr_combine=self.repr_combine,
+            upstreams=self.upstreams,
         )
 
     @property
