@@ -1,20 +1,57 @@
 import argparse
 import json
-import sys
-from copy import deepcopy
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
-from utils.artifact_identity import (  # noqa: E402
-    TRAIN_CONFIG_DEFAULTS,
-    trained_phase_dir_name,
-    trained_seed_dir_name,
-    trained_signature_from_config,
-)
+RUNTIME_KEYS = {'root', 'json', 'all_seeds', 'limit', 'overwrite', 'load_ckpt', 'device'}
+FILTER_KEYS = [
+    'data',
+    'model',
+    'repr_type',
+    'task_type',
+    'repr_source_model',
+    'sid_export',
+    'sid_coder',
+    'hash_coder',
+    'repr_combine',
+    'maxitems',
+    'model_max_length',
+    'item_text_max_tokens',
+    'batch_size',
+    'accumulate_batch',
+    'learning_rate',
+    'weight_decay',
+    'seed',
+    'uid_decoding',
+    'uid_cluster_levels',
+    'uid_cluster_topk',
+    'code_decoding',
+    'code_beam_width',
+    'code_beam_chunk_size',
+    'code_collision_loss_weight',
+    'main_metric',
+    'metrics',
+    'patience',
+    'alignment_weight',
+    'num_gpus',
+    'freeze_backbone',
+    'model_dtype',
+    'use_lora',
+    'lora_rank',
+    'lora_alpha',
+    'lora_dropout',
+    'lora_layers',
+    'lora_target_modules',
+    'hidden_size',
+    'num_layers',
+    'num_heads',
+    'dropout',
+    'epochs',
+    'valid_only',
+    'test_only',
+]
 
 
 def read_json_if_exists(path: Path):
@@ -45,27 +82,6 @@ def coerce_scalar(value):
         return value
 
 
-def normalize_config(args):
-    kwargs = {key: coerce_scalar(value) for key, value in vars(args).items() if value is not None}
-    kwargs.pop('root', None)
-    kwargs.pop('all_seeds', None)
-    kwargs.pop('json', None)
-    kwargs.pop('config', None)
-    kwargs = normalize_aliases(kwargs)
-
-    config = deepcopy(TRAIN_CONFIG_DEFAULTS)
-    for key, value in kwargs.items():
-        if key in config or key in {'data', 'model', 'repr_type', 'task_type'}:
-            config[key] = value
-    if isinstance(config.get('metrics'), str):
-        config['metrics'] = [part.strip().lower() for part in config['metrics'].split(',') if part.strip()]
-
-    missing = [key for key in ('data', 'model', 'repr_type', 'task_type') if not config.get(key)]
-    if missing:
-        raise ValueError(f'missing required fields: {missing}')
-    return config
-
-
 def normalize_aliases(kwargs: dict):
     aliases = {
         'repr': 'repr_type',
@@ -82,122 +98,218 @@ def normalize_aliases(kwargs: dict):
     return normalized
 
 
-def resolve_setting_folder(data: str, signature: str, root: Path):
-    index = read_json_if_exists(root / 'artifacts' / 'trained' / data / '.index.json') or {}
-    seen = set()
-    cursor = signature
-    while cursor and cursor not in seen:
-        seen.add(cursor)
-        entry = index.get(cursor)
-        if not isinstance(entry, dict):
-            return signature, None
-        alias_of = entry.get('alias_of')
-        if alias_of:
-            cursor = str(alias_of)
-            continue
-        return cursor, entry
-    return signature, None
-
-
-def summarize_metrics(metrics: dict | None):
-    if not isinstance(metrics, dict):
-        return {}
-    return {
-        key: value
-        for key, value in sorted(metrics.items())
-        if isinstance(value, (int, float, str))
+def cli_filters(args):
+    raw = {
+        key: coerce_scalar(value)
+        for key, value in vars(args).items()
+        if key not in RUNTIME_KEYS and value is not None
     }
+    raw = normalize_aliases(raw)
+    return {key: value for key, value in raw.items() if key in FILTER_KEYS}
 
 
-def summarize_run(run_dir: Path):
-    meta = read_json_if_exists(run_dir / 'meta.json') or {}
-    pid = read_json_if_exists(run_dir / 'pid.json') or {}
+def normalize_for_compare(value):
+    if isinstance(value, str):
+        text = value.strip()
+        lowered = text.lower()
+        if lowered == 'null':
+            return None
+        if ',' in text:
+            return [normalize_for_compare(part) for part in text.split(',') if part.strip()]
+        return lowered
+    if isinstance(value, list):
+        return [normalize_for_compare(item) for item in value]
+    return value
+
+
+def values_match(actual, expected):
+    actual = normalize_for_compare(actual)
+    expected = normalize_for_compare(expected)
+    if isinstance(actual, float) or isinstance(expected, float):
+        try:
+            return abs(float(actual) - float(expected)) <= 1e-12
+        except (TypeError, ValueError):
+            return False
+    return actual == expected
+
+
+def iter_meta_paths(root: Path, data: str | None = None):
+    base = root / 'artifacts' / 'trained'
+    if data:
+        dataset_dirs = [base / str(data).lower()]
+    else:
+        dataset_dirs = sorted(path for path in base.glob('*') if path.is_dir()) if base.exists() else []
+    for dataset_dir in dataset_dirs:
+        if not dataset_dir.exists():
+            continue
+        yield from sorted(dataset_dir.glob('*/*/*/meta.json'))
+        yield from sorted(dataset_dir.glob('*/*/meta.json'))
+        yield from sorted(dataset_dir.glob('*/meta.json'))
+
+
+def trained_relative_parts(meta_path: Path):
+    parts = meta_path.parts
+    if 'trained' not in parts:
+        return []
+    trained_index = len(parts) - 1 - parts[::-1].index('trained')
+    return list(parts[trained_index + 1 : -1])
+
+
+def run_phase_from_path(meta_path: Path):
+    parts = trained_relative_parts(meta_path)
+    if len(parts) >= 4 and parts[3] in {'train', 'precheck', 'test'}:
+        return parts[3]
+    if len(parts) >= 3 and parts[2] in {'train', 'precheck', 'test'}:
+        return parts[2]
+    return '-'
+
+
+def run_seed_from_path(meta_path: Path):
+    parts = trained_relative_parts(meta_path)
+    if len(parts) >= 4:
+        return parts[2]
+    return '-'
+
+
+def path_value(meta_path: Path, offset: int, default='-'):
+    parts = trained_relative_parts(meta_path)
+    if 0 <= offset < len(parts):
+        return parts[offset]
+    return default
+
+
+def row_from_meta(meta_path: Path, root: Path):
+    meta = read_json_if_exists(meta_path) or {}
+    config = meta.get('config') if isinstance(meta.get('config'), dict) else {}
+    identity = meta.get('artifact_identity') if isinstance(meta.get('artifact_identity'), dict) else {}
+    metrics = meta.get('test_metrics') if isinstance(meta.get('test_metrics'), dict) else None
+    if metrics is None:
+        metrics = meta.get('valid_metrics') if isinstance(meta.get('valid_metrics'), dict) else {}
+    run_dir = meta_path.parent
+    signature = identity.get('signature') or path_value(meta_path, 1)
+    folder = identity.get('folder') or path_value(meta_path, 1)
+    try:
+        display_path = str(run_dir.relative_to(root))
+    except ValueError:
+        display_path = str(run_dir)
     return {
-        'path': str(run_dir),
-        'exists': run_dir.exists(),
-        'status': meta.get('status'),
-        'seed': (meta.get('config') or {}).get('seed'),
-        'phase': (meta.get('artifact_identity') or {}).get('phase') or run_dir.name,
-        'has_checkpoint': (run_dir / 'best.pt').exists(),
+        'data': config.get('data') or identity.get('spec', {}).get('config', {}).get('data') or path_value(meta_path, 0),
+        'model': config.get('model'),
+        'repr_type': config.get('repr_type'),
+        'task_type': config.get('task_type'),
+        'seed': config.get('seed') if config.get('seed') is not None else run_seed_from_path(meta_path),
+        'phase': identity.get('phase') or run_phase_from_path(meta_path),
+        'status': meta.get('status') or 'unknown',
+        'checkpoint': 'yes' if (run_dir / 'best.pt').exists() else 'no',
+        'signature': signature,
+        'folder': folder,
         'best_epoch': meta.get('best_epoch'),
+        'best_valid': meta.get('best_valid_metric'),
         'main_metric': meta.get('main_metric'),
-        'best_valid_metric': meta.get('best_valid_metric'),
-        'test_metrics': summarize_metrics(meta.get('test_metrics')),
-        'valid_metrics': summarize_metrics(meta.get('valid_metrics')),
-        'pid': pid.get('pid'),
-        'hostname': pid.get('hostname'),
-        'started_at': meta.get('started_at'),
-        'finished_at': meta.get('finished_at'),
-        'failed_at': meta.get('failed_at'),
+        'ndcg@10': metrics.get('ndcg@10') if isinstance(metrics, dict) else None,
+        'hr@10': metrics.get('hr@10') if isinstance(metrics, dict) else None,
+        'mrr': metrics.get('mrr') if isinstance(metrics, dict) else None,
+        'path': str(run_dir),
+        'display_path': display_path,
+        'config': config,
         'error': meta.get('error'),
     }
 
 
-def find_runs(config: dict, root: Path, *, all_seeds: bool):
-    signature = trained_signature_from_config(config)
-    data = str(config['data']).lower()
-    dataset_dir = root / 'artifacts' / 'trained' / data
-    primary_signature, entry = resolve_setting_folder(data, signature, root)
-    folder = str(entry.get('folder')) if isinstance(entry, dict) and entry.get('folder') else signature
-    setting_dir = dataset_dir / folder
-    seed_name = trained_seed_dir_name(config)
-    phase_name = trained_phase_dir_name(config)
+def matches_filters(row: dict, filters: dict):
+    config = row.get('config') or {}
+    for key, expected in filters.items():
+        actual = config.get(key)
+        if key == 'data':
+            actual = config.get('data') or row.get('data')
+        elif key == 'seed':
+            actual = config.get('seed') if config.get('seed') is not None else row.get('seed')
+        if not values_match(actual, expected):
+            return False
+    return True
 
-    if all_seeds:
-        candidate_runs = sorted(setting_dir.glob(f'*/{phase_name}/meta.json'))
-        run_dirs = [path.parent for path in candidate_runs]
-    else:
-        run_dirs = [setting_dir / seed_name / phase_name]
 
+def search(root: Path, filters: dict, *, all_seeds: bool, limit: int | None):
+    root = root.resolve()
+    rows = [row_from_meta(path, root) for path in iter_meta_paths(root, data=filters.get('data'))]
+    rows = [row for row in rows if matches_filters(row, filters)]
+    rows.sort(key=lambda row: (str(row.get('data')), str(row.get('model')), str(row.get('signature')), str(row.get('seed'))))
+    total_count = len(rows)
+
+    if limit is not None:
+        rows = rows[:limit]
     return {
-        'query_signature': signature,
-        'primary_signature': primary_signature,
-        'folder': folder,
-        'setting_dir': str(setting_dir),
-        'index_hit': isinstance(entry, dict),
-        'runs': [summarize_run(run_dir) for run_dir in run_dirs],
-        'canonical_run_dir': str(dataset_dir / signature / seed_name / phase_name),
-        'resolved_run_dir': str(setting_dir / seed_name / phase_name),
+        'filters': filters,
+        'count': len(rows),
+        'total_count': total_count,
+        'runs': rows,
     }
 
 
+def fmt(value):
+    if value is None or value == '':
+        return '-'
+    if isinstance(value, float):
+        return f'{value:.6g}'
+    return str(value)
+
+
+def print_table(rows: list[dict]):
+    columns = [
+        ('data', 'data'),
+        ('model', 'model'),
+        ('repr', 'repr_type'),
+        ('task', 'task_type'),
+        ('seed', 'seed'),
+        ('phase', 'phase'),
+        ('status', 'status'),
+        ('ckpt', 'checkpoint'),
+        ('best', 'best_valid'),
+        ('ndcg@10', 'ndcg@10'),
+        ('hr@10', 'hr@10'),
+        ('sig', 'signature'),
+        ('path', 'display_path'),
+    ]
+    widths = {}
+    for title, key in columns:
+        values = [fmt(row.get(key)) for row in rows]
+        max_value_width = max([len(title), *(len(value) for value in values)], default=len(title))
+        widths[key] = min(max_value_width, 64 if key == 'display_path' else 18)
+
+    header = '  '.join(title.ljust(widths[key]) for title, key in columns)
+    print(header)
+    print('  '.join('-' * widths[key] for _, key in columns))
+    for row in rows:
+        cells = []
+        for _, key in columns:
+            value = fmt(row.get(key))
+            if len(value) > widths[key]:
+                value = value[: widths[key] - 1] + '…'
+            cells.append(value.ljust(widths[key]))
+        print('  '.join(cells))
+
+
 def print_report(report: dict):
-    print(
-        f'trained search signature={report["query_signature"]} '
-        f'primary={report["primary_signature"]} index_hit={report["index_hit"]}'
-    )
-    print(f'setting_dir={report["setting_dir"]}')
-    print(f'canonical_run_dir={report["canonical_run_dir"]}')
-    print(f'resolved_run_dir={report["resolved_run_dir"]}')
+    total_count = report.get('total_count', report['count'])
+    if report['count'] == total_count:
+        print(f'trained search matched {total_count} run(s)')
+    else:
+        print(f'trained search matched {total_count} run(s), showing {report["count"]}')
+    if report.get('filters'):
+        print('filters=' + json.dumps(report['filters'], sort_keys=True))
     if not report['runs']:
         print('no runs found')
         return
-    for run in report['runs']:
-        marker = 'FOUND' if run['exists'] else 'MISS'
-        print(
-            f'{marker} seed={run.get("seed") or "-"} phase={run.get("phase") or "-"} '
-            f'status={run.get("status") or "unknown"} checkpoint={"yes" if run["has_checkpoint"] else "no"}'
-        )
-        print(f'  path={run["path"]}')
-        if run.get('best_epoch') is not None:
-            print(
-                f'  best_epoch={run["best_epoch"]} main_metric={run.get("main_metric") or "-"} '
-                f'best_valid={run.get("best_valid_metric")}'
-            )
-        metrics = run.get('test_metrics') or run.get('valid_metrics')
-        if metrics:
-            print('  metrics=' + json.dumps(metrics, sort_keys=True))
-        if run.get('error'):
-            print(f'  error={run["error"]}')
+    print_table(report['runs'])
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Search trained artifacts by trainer config fields.')
+    parser = argparse.ArgumentParser(description='Search trained artifacts by partial trainer config fields.')
     parser.add_argument('--root', default=str(ROOT), help='Algorithm repository root.')
-    parser.add_argument('--data', required=True)
-    parser.add_argument('--model', required=True)
-    parser.add_argument('--repr_type', '--repr', dest='repr_type', required=True)
-    parser.add_argument('--task_type', '--task', dest='task_type', required=True)
+    parser.add_argument('--data')
+    parser.add_argument('--model')
+    parser.add_argument('--repr_type', '--repr', dest='repr_type')
+    parser.add_argument('--task_type', '--task', dest='task_type')
     parser.add_argument('--repr_source_model')
     parser.add_argument('--sid_export')
     parser.add_argument('--sid_coder')
@@ -216,6 +328,7 @@ def main():
     parser.add_argument('--uid_cluster_topk')
     parser.add_argument('--code_decoding')
     parser.add_argument('--code_beam_width', type=int)
+    parser.add_argument('--code_beam_chunk_size', type=int)
     parser.add_argument('--code_collision_loss_weight', type=float)
     parser.add_argument('--main_metric')
     parser.add_argument('--metrics')
@@ -237,13 +350,19 @@ def main():
     parser.add_argument('--epochs', type=int)
     parser.add_argument('--valid_only')
     parser.add_argument('--test_only')
-    parser.add_argument('--overwrite')
-    parser.add_argument('--all-seeds', action='store_true', help='List all seed subdirectories for the setting.')
+    parser.add_argument('--overwrite', help='Accepted for copy-pasted trainer commands, ignored by search.')
+    parser.add_argument('--load_ckpt', help='Accepted for copy-pasted trainer commands, ignored by search.')
+    parser.add_argument('--device', help='Accepted for copy-pasted trainer commands, ignored by search.')
+    parser.add_argument('--all-seeds', action='store_true', help='Deprecated no-op; omitted seed already matches all seeds.')
+    parser.add_argument('--limit', type=int, default=None)
     parser.add_argument('--json', action='store_true', help='Print machine-readable JSON.')
     args = parser.parse_args()
 
-    config = normalize_config(args)
-    report = find_runs(config, Path(args.root), all_seeds=args.all_seeds)
+    filters = cli_filters(args)
+    try:
+        report = search(Path(args.root), filters, all_seeds=args.all_seeds, limit=args.limit)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
         return
