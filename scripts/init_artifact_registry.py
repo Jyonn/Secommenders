@@ -18,6 +18,7 @@ from utils.artifact_identity import (  # noqa: E402
     canonical_trained_run_dir,
     GENERIC_SPEC_VERSIONS,
     generic_artifact_identity as identity_generic_artifact_identity,
+    canonical_generic_artifact_dir,
     generic_index_path as identity_generic_index_path,
     generic_signature_from_meta as identity_generic_signature_from_meta,
     legacy_signature_from_folder,
@@ -847,6 +848,31 @@ def delete_source_for_target(source_dir: Path, target_dir: Path, dataset_dir: Pa
     delete_run_dir(source_dir, dataset_dir)
 
 
+def prune_empty_generic_parents(path: Path, dataset_dir: Path):
+    parent = Path(path).parent
+    while parent != dataset_dir and parent.exists() and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
+
+
+def move_generic_run_dir(source_dir: Path, target_dir: Path, dataset_dir: Path):
+    source_dir = Path(source_dir)
+    target_dir = Path(target_dir)
+    if source_dir == target_dir:
+        return
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source_dir), str(target_dir))
+    prune_empty_generic_parents(source_dir, dataset_dir)
+
+
+def delete_generic_run_dir(run_dir: Path, dataset_dir: Path):
+    run_dir = Path(run_dir)
+    if not run_dir.exists():
+        return
+    shutil.rmtree(run_dir)
+    prune_empty_generic_parents(run_dir, dataset_dir)
+
+
 def init_trained_registry(
     root: Path,
     *,
@@ -1059,6 +1085,7 @@ def init_generic_registry(
     resolved = []
     unresolved = []
     conflicts = []
+    moved = []
     touched_data = set()
 
     for meta_path in iter_generic_meta_paths(root, stage, data=data):
@@ -1079,10 +1106,12 @@ def init_generic_registry(
             if legacy_signature:
                 aliases.append(legacy_signature)
             signature = generic_signature_from_meta(stage, meta)
+            target_run_dir = canonical_generic_artifact_dir(stage, meta_data, signature, root=root)
+            target_folder = target_run_dir.relative_to(dataset_dir).as_posix()
             identity = generic_artifact_identity(
                 stage,
                 meta,
-                folder,
+                target_folder,
                 aliases=aliases,
                 migration_status='migrated',
             )
@@ -1091,32 +1120,87 @@ def init_generic_registry(
                     'data': meta_data,
                     'folder': folder,
                     'signature': signature,
-                    'target_run_dir': str(run_dir),
+                    'target_run_dir': str(target_run_dir),
                     'aliases': identity.get('aliases') or [],
                     'meta_path': str(identity_meta_path),
                 }
             )
             touched_data.add(meta_data)
             if not apply:
+                if run_dir != target_run_dir and target_run_dir.exists():
+                    conflicts.append(
+                        conflict_report(
+                            meta_data,
+                            folder,
+                            signature,
+                            run_dir,
+                            target_run_dir,
+                            error=f'target run dir already exists: {target_run_dir}',
+                        )
+                    )
                 continue
 
             while True:
                 try:
+                    final_run_dir = run_dir
+                    final_meta_path = identity_meta_path
+                    if run_dir != target_run_dir:
+                        if target_run_dir.exists():
+                            conflict = conflict_report(
+                                meta_data,
+                                folder,
+                                signature,
+                                run_dir,
+                                target_run_dir,
+                                error=f'target run dir already exists: {target_run_dir}',
+                            )
+                            conflict['stage'] = stage
+                            resolution = choose_conflict_resolution(conflict) if interactive else 'report'
+                            conflict['resolution'] = resolution
+                            if resolution == 'report':
+                                conflicts.append(conflict)
+                                break
+                            if resolution == 'target':
+                                delete_generic_run_dir(run_dir, dataset_dir)
+                                conflict['action'] = 'kept target and deleted source'
+                                conflict['deleted'] = str(run_dir)
+                                conflicts.append(conflict)
+                                final_run_dir = target_run_dir
+                                final_meta_path = target_run_dir / 'meta.json'
+                            elif resolution == 'source':
+                                delete_generic_run_dir(target_run_dir, dataset_dir)
+                                conflict['action'] = 'kept source and deleted target'
+                                conflict['deleted'] = str(target_run_dir)
+                                conflicts.append(conflict)
+                            else:
+                                raise ValueError(f'unsupported conflict resolution: {resolution}')
+                        if final_run_dir == run_dir and run_dir.exists():
+                            old_run_dir = run_dir
+                            move_generic_run_dir(old_run_dir, target_run_dir, dataset_dir)
+                            final_run_dir = target_run_dir
+                            final_meta_path = target_run_dir / 'meta.json'
+                            moved.append(
+                                {
+                                    'data': meta_data,
+                                    'from': str(old_run_dir),
+                                    'to': str(target_run_dir),
+                                }
+                            )
                     registered = register_generic_artifact(
                         stage,
                         meta,
-                        folder,
+                        target_folder,
                         aliases=identity.get('aliases'),
                         root=root,
                     )
                     meta['artifact_identity'] = generic_artifact_identity(
                         stage,
                         meta,
-                        folder,
+                        target_folder,
                         aliases=registered.get('aliases') or identity.get('aliases'),
                         migration_status='migrated',
                     )
-                    write_json(identity_meta_path, meta)
+                    write_json(final_meta_path, meta)
                     break
                 except ValueError as exc:
                     conflict = generic_conflict_report(
@@ -1138,15 +1222,14 @@ def init_generic_registry(
                         break
                     target_path = Path((conflict.get('target') or {}).get('path') or '')
                     if resolution == 'target':
-                        if run_dir.exists():
-                            shutil.rmtree(run_dir)
+                        delete_generic_run_dir(run_dir, dataset_dir)
                         conflict['action'] = 'kept target and deleted source'
                         conflict['deleted'] = str(run_dir)
                         conflicts.append(conflict)
                         break
                     if resolution == 'source':
                         if target_path.exists() and target_path != run_dir:
-                            shutil.rmtree(target_path)
+                            delete_generic_run_dir(target_path, dataset_dir)
                         conflict['action'] = 'kept source and deleted target'
                         conflict['deleted'] = str(target_path)
                         conflicts.append(conflict)
@@ -1181,7 +1264,7 @@ def init_generic_registry(
         'resolved_count': len(resolved),
         'unresolved_count': len(unresolved),
         'conflict_count': len(conflicts),
-        'moved_count': 0,
+        'moved_count': len(moved),
         'delete_candidate_count': 0,
         'deleted_count': 0,
         'index_name': TRAINED_INDEX_NAME,
@@ -1189,7 +1272,7 @@ def init_generic_registry(
         'resolved': resolved,
         'unresolved': unresolved,
         'conflicts': conflicts,
-        'moved': [],
+        'moved': moved,
         'delete_candidates': [],
         'deleted': [],
     }
