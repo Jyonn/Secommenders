@@ -6,6 +6,8 @@ from typing import Any
 
 from utils.compile import CompileConfig, normalize_model_name, short_config_hash
 from utils.experiment_template import (
+    CLUSTERER_CONFIG_DEFAULTS,
+    CLUSTERER_WORD2VEC_DEFAULTS,
     HASH_QUANTIZER_CONFIG_DEFAULTS,
     QUANTIZER_TRAINER_DEFAULTS,
     SID_ENCODER_CONFIG_DEFAULTS,
@@ -31,6 +33,9 @@ GENERIC_INDEX_NAME = TRAINED_INDEX_NAME
 LEGACY_RUN_HASH_RE = re.compile(r'__h([0-9a-fA-F]{6,64})$')
 TRAINED_PHASES = {'precheck', 'train', 'test'}
 HASH_INDEXER_NAMES = {'lsh', 'simhash', 'pcahash', 'itq'}
+LEGACY_CLUSTERED_FOLDER_RE = re.compile(
+    r'(?:pt)?w2v__lv(?P<levels>[0-9x,]+)__d(?P<vector_size>\d+)__w(?P<window>\d+)__(?:p|e)(?P<patience>\d+)'
+)
 
 
 TRAIN_CONFIG_DEFAULTS = {
@@ -424,24 +429,66 @@ def clustered_spec_from_config(config: Any, resolved_levels: list[int] | None = 
     }
 
 
+def _parse_clustered_levels(value: Any):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [int(part) for part in value]
+    text = str(value).strip().lower().replace('x', ',')
+    return [int(part.strip()) for part in text.split(',') if part.strip().isdigit()]
+
+
+def _legacy_clustered_folder_config(folder: str | None):
+    match = LEGACY_CLUSTERED_FOLDER_RE.search(str(folder or ''))
+    if not match:
+        return {}
+    levels = _parse_clustered_levels(match.group('levels'))
+    return {
+        'levels_spec': ','.join(str(level) for level in levels),
+        'resolved_levels': levels,
+        'word2vec': {
+            'vector_size': int(match.group('vector_size')),
+            'window': int(match.group('window')),
+            'patience': int(match.group('patience')),
+        },
+    }
+
+
+def _int_with_default(value, default):
+    return int(default if value is None else value)
+
+
 def clustered_spec_from_meta(meta: dict):
     word2vec = meta.get('word2vec') or {}
     cluster = meta.get('cluster') or {}
+    legacy = _legacy_clustered_folder_config(meta.get('_legacy_folder') or meta.get('legacy_folder'))
+    legacy_word2vec = legacy.get('word2vec') or {}
+    resolved_levels = meta.get('resolved_levels') or legacy.get('resolved_levels') or []
+    levels_spec = meta.get('levels_spec') or legacy.get('levels_spec')
     payload = {
-        'levels_spec': str(meta.get('levels_spec')).strip().lower(),
-        'resolved_levels': list(meta.get('resolved_levels') or []),
+        'levels_spec': str(levels_spec).strip().lower(),
+        'resolved_levels': _parse_clustered_levels(resolved_levels),
         'word2vec': {
-            'vector_size': int(word2vec.get('vector_size')),
-            'window': int(word2vec.get('window')),
-            'patience': int(word2vec.get('patience')),
-            'sg': int(word2vec.get('sg')),
-            'negative': int(word2vec.get('negative')),
-            'min_count': int(word2vec.get('min_count')),
+            'vector_size': _int_with_default(
+                word2vec.get('vector_size', legacy_word2vec.get('vector_size')),
+                CLUSTERER_WORD2VEC_DEFAULTS['vector_size'],
+            ),
+            'window': _int_with_default(
+                word2vec.get('window', legacy_word2vec.get('window')),
+                CLUSTERER_WORD2VEC_DEFAULTS['window'],
+            ),
+            'patience': _int_with_default(
+                word2vec.get('patience', legacy_word2vec.get('patience')),
+                CLUSTERER_WORD2VEC_DEFAULTS['patience'],
+            ),
+            'sg': _int_with_default(word2vec.get('sg'), CLUSTERER_WORD2VEC_DEFAULTS['sg']),
+            'negative': _int_with_default(word2vec.get('negative'), CLUSTERER_WORD2VEC_DEFAULTS['negative']),
+            'min_count': _int_with_default(word2vec.get('min_count'), CLUSTERER_WORD2VEC_DEFAULTS['min_count']),
         },
         'cluster': {
-            'batch_size': int(cluster.get('batch_size')),
-            'max_iter': int(cluster.get('max_iter')),
-            'n_init': int(cluster.get('n_init')),
+            'batch_size': _int_with_default(cluster.get('batch_size'), CLUSTERER_CONFIG_DEFAULTS['batch_size']),
+            'max_iter': _int_with_default(cluster.get('max_iter'), CLUSTERER_CONFIG_DEFAULTS['max_iter']),
+            'n_init': _int_with_default(cluster.get('n_init'), CLUSTERER_CONFIG_DEFAULTS['n_init']),
         },
     }
     return {

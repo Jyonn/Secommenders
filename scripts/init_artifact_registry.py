@@ -1098,6 +1098,8 @@ def init_generic_registry(
             if meta_data != location['data'].lower():
                 raise ValueError(f'meta data={meta_data} does not match path data={location["data"]}')
             folder = location['folder']
+            identity_meta = dict(meta)
+            identity_meta['_legacy_folder'] = folder
             run_dir = Path(location['run_dir'])
             identity_meta_path = run_dir / 'meta.json' if stage == 'quantized' else meta_path
             dataset_dir = root / 'artifacts' / stage / meta_data
@@ -1105,12 +1107,12 @@ def init_generic_registry(
             legacy_signature = legacy_signature_from_folder(folder)
             if legacy_signature:
                 aliases.append(legacy_signature)
-            signature = generic_signature_from_meta(stage, meta)
+            signature = generic_signature_from_meta(stage, identity_meta)
             target_run_dir = canonical_generic_artifact_dir(stage, meta_data, signature, root=root)
             target_folder = target_run_dir.relative_to(dataset_dir).as_posix()
             identity = generic_artifact_identity(
                 stage,
-                meta,
+                identity_meta,
                 target_folder,
                 aliases=aliases,
                 migration_status='migrated',
@@ -1188,14 +1190,14 @@ def init_generic_registry(
                             )
                     registered = register_generic_artifact(
                         stage,
-                        meta,
+                        identity_meta,
                         target_folder,
                         aliases=identity.get('aliases'),
                         root=root,
                     )
                     meta['artifact_identity'] = generic_artifact_identity(
                         stage,
-                        meta,
+                        identity_meta,
                         target_folder,
                         aliases=registered.get('aliases') or identity.get('aliases'),
                         migration_status='migrated',
