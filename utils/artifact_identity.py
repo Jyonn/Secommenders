@@ -669,6 +669,7 @@ def register_generic_artifact(
     *,
     aliases: list[str] | None = None,
     root: Path | str | None = None,
+    allow_version_migration: bool = False,
 ):
     if meta_or_spec.get('stage') == stage and meta_or_spec.get('schema_version') == _generic_schema_version(stage):
         spec = meta_or_spec
@@ -680,6 +681,13 @@ def register_generic_artifact(
     expected = _generic_schema_version(stage)
     dataset_dir = generic_dataset_dir(stage, data, root=root)
     alias_values = _dedupe([*(aliases or []), legacy_signature_from_folder(folder)])
+
+    def check_index_version(key: str, found: str | None):
+        if found in {None, expected}:
+            return
+        if allow_version_migration:
+            return
+        raise _version_error(stage, key, found, expected)
 
     def folder_has_artifacts(primary_folder: str):
         folder_dir = dataset_dir / str(primary_folder)
@@ -709,8 +717,7 @@ def register_generic_artifact(
             if not isinstance(entry, dict):
                 return 'stale', None, chain
             entry_version = entry.get('schema_version')
-            if entry_version not in {None, expected}:
-                raise _version_error(stage, cursor, entry_version, expected)
+            check_index_version(cursor, entry_version)
             if entry.get('folder'):
                 if same_or_stale_primary(entry):
                     return 'current', str(entry.get('folder')), chain
@@ -723,11 +730,31 @@ def register_generic_artifact(
             cursor = str(next_alias)
         return 'stale', None, chain
 
+    if allow_version_migration:
+        folder_primary_keys = set()
+        for key, entry in list(index.items()):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get('folder') == folder or (
+                entry.get('folder') and not folder_has_artifacts(str(entry.get('folder')))
+            ):
+                folder_primary_keys.add(str(key))
+                alias_values = _dedupe([*alias_values, str(key), *(entry.get('aliases') or [])])
+        changed = True
+        while changed:
+            changed = False
+            for key, entry in list(index.items()):
+                if not isinstance(entry, dict):
+                    continue
+                alias_of = entry.get('alias_of')
+                if alias_of and str(alias_of) in folder_primary_keys and str(key) not in alias_values:
+                    alias_values = _dedupe([*alias_values, str(key)])
+                    changed = True
+
     existing = index.get(signature)
     if isinstance(existing, dict):
         entry_version = existing.get('schema_version')
-        if entry_version not in {None, expected}:
-            raise _version_error(stage, signature, entry_version, expected)
+        check_index_version(signature, entry_version)
         if existing.get('folder') and existing.get('folder') != folder:
             existing_path = dataset_dir / str(existing.get('folder'))
             if existing_path.exists():
@@ -759,8 +786,7 @@ def register_generic_artifact(
         existing_alias = index.get(alias)
         if isinstance(existing_alias, dict):
             alias_version = existing_alias.get('schema_version')
-            if alias_version not in {None, expected}:
-                raise _version_error(stage, alias, alias_version, expected)
+            check_index_version(alias, alias_version)
             alias_of = existing_alias.get('alias_of')
             if alias_of and alias_of != signature:
                 status, existing_folder, chain = resolve_alias_target(str(alias_of))

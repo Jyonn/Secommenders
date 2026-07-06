@@ -301,7 +301,14 @@ def generic_folder_has_artifacts(dataset_dir: Path, folder: str):
 
 
 def register_generic_artifact(stage: str, meta: dict, folder: str, *, aliases: list[str] | None, root: Path):
-    return identity_register_generic_artifact(stage, meta, folder, aliases=aliases, root=root)
+    return identity_register_generic_artifact(
+        stage,
+        meta,
+        folder,
+        aliases=aliases,
+        root=root,
+        allow_version_migration=True,
+    )
 
 
 def iter_trained_meta_paths(root: Path, data: str | None = None):
