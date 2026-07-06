@@ -105,11 +105,16 @@ This lets newer config signatures reuse older folders when a signature schema ch
 Initialize or inspect the registry for existing runs with:
 
 ```bash
+python scripts/init_artifact_registry.py --stage clustered
+python scripts/init_artifact_registry.py --stage compiled
+python scripts/init_artifact_registry.py --stage quantized
 python scripts/init_artifact_registry.py --stage trained
 python scripts/init_artifact_registry.py --stage trained --apply
 ```
 
-The dry run reports unresolved folders and delete candidates. A folder is only migrated when its `meta.json` contains enough `config` information to rebuild the current trained artifact spec.
+The dry run reports unresolved folders and delete candidates. A folder is only migrated when its `meta.json` contains enough information to rebuild the current artifact spec.
+
+`clustered`, `compiled`, and `quantized` use the same dataset-level `.index.json` alias registry as `trained`, but they do not create seed or phase subdirectories. Their registry maps the latest signature back to the existing artifact folder.
 
 The same script is also the migration path from older trained layouts. It upgrades both legacy flat folders and the previous `<trained_signature>/<seed>/` layout into the current `<trained_signature>/<seed>/<phase>/` layout, so it is safe to rerun after an earlier registry initialization.
 

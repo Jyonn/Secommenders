@@ -26,6 +26,34 @@ from utils.artifact_identity import (  # noqa: E402
     trained_seed,
     trained_signature_from_config,
 )
+from utils.compile import short_config_hash  # noqa: E402
+
+
+GENERIC_STAGES = {'clustered', 'compiled', 'quantized'}
+REGISTRY_STAGES = {'trained', *GENERIC_STAGES}
+GENERIC_SCHEMA_VERSIONS = {
+    'clustered': 'clustered.v1',
+    'compiled': 'compiled.v1',
+    'quantized': 'quantized.v1',
+}
+PATH_KEY_SUFFIXES = ('_path', '_dir')
+PATH_KEYS = {
+    'path',
+    'processed_dir',
+    'processed_items_path',
+    'embedding_path',
+    'embedding_meta_path',
+    'trainer_output_dir',
+    'export_dir',
+    'checkpoint_dir',
+    'codebook_indices_path',
+    'quantized_latents_path',
+    'item_ids_path',
+    'codebooks_path',
+    'binary_bits_path',
+    'indexer_dir',
+}
+VOLATILE_SIGN_KEYS = {'seed', 'device'}
 
 
 ANSI = {
@@ -68,6 +96,266 @@ def read_json(path: Path):
 
 def write_json(path: Path, payload: dict):
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+
+
+def dedupe(values):
+    result = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def registry_index_path(stage: str, data: str, root: Path):
+    path = root / 'artifacts' / stage / data.lower()
+    path.mkdir(parents=True, exist_ok=True)
+    return path / TRAINED_INDEX_NAME
+
+
+def load_registry_index(stage: str, data: str, root: Path):
+    path = registry_index_path(stage, data, root)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_registry_index(stage: str, data: str, index: dict, root: Path):
+    registry_index_path(stage, data, root).write_text(json.dumps(index, indent=2, sort_keys=True) + '\n')
+
+
+def strip_path_values(value):
+    if isinstance(value, dict):
+        clean = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text in PATH_KEYS or key_text in VOLATILE_SIGN_KEYS or key_text.endswith(PATH_KEY_SUFFIXES):
+                continue
+            clean[key_text] = strip_path_values(item)
+        return clean
+    if isinstance(value, list):
+        return [strip_path_values(item) for item in value]
+    return value
+
+
+def generic_data_from_meta(stage: str, meta: dict):
+    value = meta.get('data') or meta.get('dataset')
+    if not value:
+        raise ValueError(f'{stage} meta missing data/dataset')
+    return str(value).lower()
+
+
+def generic_stage_payload(stage: str, meta: dict):
+    if stage == 'compiled':
+        if not isinstance(meta.get('config'), dict):
+            raise ValueError('compiled meta missing config')
+        return {
+            'version': meta.get('version'),
+            'prepare_id': meta.get('prepare_id'),
+            'config': strip_path_values(meta.get('config')),
+            'model_kind': meta.get('model_kind'),
+            'model_max_length': meta.get('model_max_length'),
+        }
+    if stage == 'clustered':
+        return {
+            'version': meta.get('version'),
+            'prepare_id': meta.get('prepare_id'),
+            'levels_spec': meta.get('levels_spec'),
+            'resolved_levels': meta.get('resolved_levels'),
+            'word2vec': strip_path_values(meta.get('word2vec') or {}),
+            'cluster': strip_path_values(meta.get('cluster') or {}),
+        }
+    if stage == 'quantized':
+        return {
+            'embedding_model': meta.get('embedding_model'),
+            'quantizer_model': meta.get('quantizer_model') or meta.get('hash_model'),
+            'quantizer_scheme': meta.get('quantizer_scheme'),
+            'representation_family': meta.get('representation_family'),
+            'checkpoint_metric': meta.get('checkpoint_metric'),
+            'recommended_decoding': meta.get('recommended_decoding'),
+            'requested_latent_dim': meta.get('requested_latent_dim'),
+            'resolved_latent_dim': meta.get('resolved_latent_dim'),
+            'code_shape': meta.get('code_shape'),
+            'binary_bits_shape': meta.get('binary_bits_shape'),
+            'num_bits_total': meta.get('num_bits_total'),
+            'quantizer_config': strip_path_values(meta.get('quantizer_config') or {}),
+            'hash_config': strip_path_values(meta.get('hash_config') or {}),
+            'trainer_args': strip_path_values(meta.get('trainer_args') or {}),
+        }
+    raise ValueError(f'unsupported generic stage: {stage}')
+
+
+def generic_stage_spec(stage: str, meta: dict):
+    return {
+        'stage': stage,
+        'schema_version': GENERIC_SCHEMA_VERSIONS[stage],
+        'data': generic_data_from_meta(stage, meta),
+        'config': generic_stage_payload(stage, meta),
+    }
+
+
+def generic_signature_from_meta(stage: str, meta: dict):
+    return short_config_hash(generic_stage_spec(stage, meta), length=16)
+
+
+def generic_artifact_identity(
+    stage: str,
+    meta: dict,
+    folder: str,
+    *,
+    aliases: list[str] | None = None,
+    migration_status: str = 'current',
+):
+    signature = generic_signature_from_meta(stage, meta)
+    return {
+        'stage': stage,
+        'schema_version': GENERIC_SCHEMA_VERSIONS[stage],
+        'signature': signature,
+        'folder': folder,
+        'aliases': dedupe(aliases or []),
+        'migration_status': migration_status,
+        'spec': generic_stage_spec(stage, meta),
+    }
+
+
+def iter_generic_meta_paths(root: Path, stage: str, data: str | None = None):
+    base = root / 'artifacts' / stage
+    dataset_dirs = [base / data.lower()] if data else sorted(path for path in base.glob('*') if path.is_dir())
+    for dataset_dir in dataset_dirs:
+        if not dataset_dir.exists():
+            continue
+        if stage in {'clustered', 'compiled'}:
+            yield from sorted(dataset_dir.glob('*/meta.json'))
+        elif stage == 'quantized':
+            yield from sorted(dataset_dir.glob('*/exports/*/meta.json'))
+            yield from sorted(dataset_dir.glob('*/*/exports/*/meta.json'))
+
+
+def generic_meta_location(root: Path, stage: str, meta_path: Path):
+    relative = meta_path.relative_to(root / 'artifacts' / stage)
+    if len(relative.parts) < 3 or relative.parts[-1] != 'meta.json':
+        raise ValueError(f'unrecognized {stage} meta path: {meta_path}')
+    data = relative.parts[0]
+    folder = Path(*relative.parts[1:-1]).as_posix()
+    return {
+        'data': data,
+        'folder': folder,
+        'run_dir': meta_path.parent,
+    }
+
+
+def generic_folder_has_artifacts(dataset_dir: Path, folder: str):
+    folder_dir = dataset_dir / str(folder)
+    if not folder_dir.exists():
+        return False
+    for pattern in ('meta.json', '*/meta.json', '*/*/meta.json', 'exports/*/meta.json', '*/exports/*/meta.json'):
+        if next(folder_dir.glob(pattern), None) is not None:
+            return True
+    return False
+
+
+def register_generic_artifact(stage: str, meta: dict, folder: str, *, aliases: list[str] | None, root: Path):
+    data = generic_data_from_meta(stage, meta)
+    signature = generic_signature_from_meta(stage, meta)
+    dataset_dir = root / 'artifacts' / stage / data
+    index = load_registry_index(stage, data, root)
+    alias_values = dedupe([*(aliases or []), legacy_signature_from_folder(folder)])
+
+    def same_or_stale_primary(entry: dict):
+        primary_folder = entry.get('folder')
+        if not primary_folder:
+            return False
+        if primary_folder == folder:
+            return True
+        return not generic_folder_has_artifacts(dataset_dir, str(primary_folder))
+
+    def resolve_alias_target(alias_of: str):
+        seen = set()
+        cursor = str(alias_of)
+        chain = []
+        while cursor and cursor not in seen:
+            seen.add(cursor)
+            chain.append(cursor)
+            entry = index.get(cursor)
+            if not isinstance(entry, dict):
+                return 'stale', None, chain
+            if entry.get('folder'):
+                if same_or_stale_primary(entry):
+                    return 'stale', str(entry.get('folder')), chain
+                return 'conflict', str(entry.get('folder')), chain
+            next_alias = entry.get('alias_of')
+            if not next_alias:
+                return 'stale', None, chain
+            if str(next_alias) == signature:
+                return 'current', folder, chain
+            cursor = str(next_alias)
+        return 'stale', None, chain
+
+    existing = index.get(signature)
+    if isinstance(existing, dict) and existing.get('folder') and not same_or_stale_primary(existing):
+        raise TrainedArtifactRegistryConflict(
+            f'{stage} artifact signature conflict for {signature}: {existing.get("folder")} vs {folder}',
+            signature=signature,
+            folder=folder,
+            existing_folder=str(existing.get('folder')),
+        )
+    if isinstance(existing, dict) and existing.get('alias_of') and existing.get('alias_of') != signature:
+        status, existing_folder, chain = resolve_alias_target(str(existing.get('alias_of')))
+        if status in {'current', 'stale'}:
+            alias_values = dedupe([*alias_values, *chain])
+        else:
+            raise TrainedArtifactRegistryConflict(
+                f'{stage} artifact signature conflict for {signature}: already aliases {existing.get("alias_of")}',
+                signature=signature,
+                folder=folder,
+                alias=str(existing.get('alias_of')),
+                existing_folder=existing_folder,
+            )
+
+    alias_index = 0
+    while alias_index < len(alias_values):
+        alias = alias_values[alias_index]
+        alias_index += 1
+        if alias == signature:
+            continue
+        existing_alias = index.get(alias)
+        if isinstance(existing_alias, dict):
+            alias_of = existing_alias.get('alias_of')
+            if alias_of and alias_of != signature:
+                status, existing_folder, chain = resolve_alias_target(str(alias_of))
+                if status in {'current', 'stale'}:
+                    alias_values = dedupe([*alias_values, *chain])
+                else:
+                    raise TrainedArtifactRegistryConflict(
+                        f'{stage} artifact alias conflict for {alias}: {alias_of} vs {signature}',
+                        signature=signature,
+                        folder=folder,
+                        alias=alias,
+                        existing_folder=existing_folder,
+                    )
+            if existing_alias.get('folder') and not same_or_stale_primary(existing_alias):
+                raise TrainedArtifactRegistryConflict(
+                    f'{stage} artifact alias conflict for {alias}: already registered as primary',
+                    signature=signature,
+                    folder=folder,
+                    alias=alias,
+                    existing_folder=str(existing_alias.get('folder')),
+                )
+        index[alias] = {'alias_of': signature}
+
+    index[signature] = {
+        'folder': folder,
+        'schema_version': GENERIC_SCHEMA_VERSIONS[stage],
+        'aliases': alias_values,
+    }
+    save_registry_index(stage, data, index, root)
+    return index[signature]
 
 
 def iter_trained_meta_paths(root: Path, data: str | None = None):
@@ -380,8 +668,9 @@ def print_choice_help(conflict: dict):
 
 def print_conflict_summary(conflict: dict):
     message = conflict.get('error') or conflict.get('action') or 'target run dir already exists'
+    stage_label = str(conflict.get('stage') or 'trained').upper()
     print()
-    print(section_rule('TRAINED ARTIFACT CONFLICT'))
+    print(section_rule(f'{stage_label} ARTIFACT CONFLICT'))
     print(f'    {paint("setting", "dim")}: {conflict["data"]}/{conflict["folder"]}')
     print(f'    {paint("signature", "dim")}: {conflict.get("signature") or "-"}')
     if conflict.get('seed') is not None:
@@ -449,6 +738,39 @@ def registry_conflict_report(
         display_target,
         error=str(error),
     )
+
+
+def generic_registry_folder_run_dir(dataset_dir: Path, folder: str | None):
+    if not folder:
+        return None
+    folder_dir = dataset_dir / str(folder)
+    if folder_dir.exists():
+        meta_paths = sorted(folder_dir.glob('meta.json')) + sorted(folder_dir.glob('*/meta.json'))
+        meta_paths += sorted(folder_dir.glob('*/*/meta.json')) + sorted(folder_dir.glob('exports/*/meta.json'))
+        meta_paths += sorted(folder_dir.glob('*/exports/*/meta.json'))
+        if meta_paths:
+            return meta_paths[0].parent
+    return folder_dir
+
+
+def generic_conflict_report(
+    stage: str,
+    data: str,
+    folder: str,
+    signature: str,
+    source_dir: Path,
+    *,
+    dataset_dir: Path,
+    error: Exception,
+):
+    target_dir = dataset_dir / folder
+    if isinstance(error, TrainedArtifactRegistryConflict):
+        registry_target = generic_registry_folder_run_dir(dataset_dir, error.existing_folder)
+        if registry_target is not None:
+            target_dir = registry_target
+    report = conflict_report(data, folder, signature, source_dir, target_dir, error=str(error))
+    report['stage'] = stage
+    return report
 
 
 def choose_conflict_resolution(conflict: dict):
@@ -778,9 +1100,158 @@ def init_trained_registry(
     }
 
 
+def init_generic_registry(
+    root: Path,
+    *,
+    stage: str,
+    data: str | None,
+    apply: bool,
+    interactive: bool = False,
+):
+    if stage not in GENERIC_STAGES:
+        raise ValueError(f'unsupported generic stage: {stage}')
+
+    resolved = []
+    unresolved = []
+    conflicts = []
+    touched_data = set()
+
+    for meta_path in iter_generic_meta_paths(root, stage, data=data):
+        try:
+            location = generic_meta_location(root, stage, meta_path)
+            meta = read_json(meta_path)
+            if not isinstance(meta, dict):
+                raise ValueError('meta root must be a dict')
+            meta_data = generic_data_from_meta(stage, meta)
+            if meta_data != location['data'].lower():
+                raise ValueError(f'meta data={meta_data} does not match path data={location["data"]}')
+            folder = location['folder']
+            run_dir = Path(location['run_dir'])
+            dataset_dir = root / 'artifacts' / stage / meta_data
+            aliases = collect_existing_identity_aliases(meta)
+            legacy_signature = legacy_signature_from_folder(folder)
+            if legacy_signature:
+                aliases.append(legacy_signature)
+            signature = generic_signature_from_meta(stage, meta)
+            identity = generic_artifact_identity(
+                stage,
+                meta,
+                folder,
+                aliases=aliases,
+                migration_status='migrated',
+            )
+            resolved.append(
+                {
+                    'data': meta_data,
+                    'folder': folder,
+                    'signature': signature,
+                    'target_run_dir': str(run_dir),
+                    'aliases': identity.get('aliases') or [],
+                    'meta_path': str(meta_path),
+                }
+            )
+            touched_data.add(meta_data)
+            if not apply:
+                continue
+
+            while True:
+                try:
+                    registered = register_generic_artifact(
+                        stage,
+                        meta,
+                        folder,
+                        aliases=identity.get('aliases'),
+                        root=root,
+                    )
+                    meta['artifact_identity'] = generic_artifact_identity(
+                        stage,
+                        meta,
+                        folder,
+                        aliases=registered.get('aliases') or identity.get('aliases'),
+                        migration_status='migrated',
+                    )
+                    write_json(meta_path, meta)
+                    break
+                except ValueError as exc:
+                    conflict = generic_conflict_report(
+                        stage,
+                        meta_data,
+                        folder,
+                        signature,
+                        run_dir,
+                        dataset_dir=dataset_dir,
+                        error=exc,
+                    )
+                    if not interactive:
+                        conflicts.append(conflict)
+                        break
+                    resolution = choose_conflict_resolution(conflict)
+                    conflict['resolution'] = resolution
+                    if resolution == 'report':
+                        conflicts.append(conflict)
+                        break
+                    target_path = Path((conflict.get('target') or {}).get('path') or '')
+                    if resolution == 'target':
+                        if run_dir.exists():
+                            shutil.rmtree(run_dir)
+                        conflict['action'] = 'kept target and deleted source'
+                        conflict['deleted'] = str(run_dir)
+                        conflicts.append(conflict)
+                        break
+                    if resolution == 'source':
+                        if target_path.exists() and target_path != run_dir:
+                            shutil.rmtree(target_path)
+                        conflict['action'] = 'kept source and deleted target'
+                        conflict['deleted'] = str(target_path)
+                        conflicts.append(conflict)
+                        continue
+                    raise ValueError(f'unsupported conflict resolution: {resolution}')
+        except Exception as exc:
+            fallback_data = data or '-'
+            fallback_folder = str(meta_path.parent) if 'meta_path' in locals() else '-'
+            try:
+                location = generic_meta_location(root, stage, meta_path)
+                fallback_data = location.get('data') or fallback_data
+                fallback_folder = location.get('folder') or fallback_folder
+            except Exception:
+                pass
+            unresolved.append(
+                {
+                    'data': str(fallback_data),
+                    'folder': str(fallback_folder),
+                    'meta_path': str(meta_path),
+                    'reason': str(exc),
+                }
+            )
+
+    if apply:
+        for dataset in sorted(touched_data):
+            index = load_registry_index(stage, dataset, root)
+            save_registry_index(stage, dataset, index, root)
+
+    return {
+        'stage': stage,
+        'mode': 'apply' if apply else 'dry-run',
+        'resolved_count': len(resolved),
+        'unresolved_count': len(unresolved),
+        'conflict_count': len(conflicts),
+        'moved_count': 0,
+        'delete_candidate_count': 0,
+        'deleted_count': 0,
+        'index_name': TRAINED_INDEX_NAME,
+        'datasets': sorted(touched_data),
+        'resolved': resolved,
+        'unresolved': unresolved,
+        'conflicts': conflicts,
+        'moved': [],
+        'delete_candidates': [],
+        'deleted': [],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description='Initialize artifact registry indexes for existing artifacts.')
-    parser.add_argument('--stage', default='trained', choices=['trained'])
+    parser.add_argument('--stage', default='trained', choices=sorted(REGISTRY_STAGES))
     parser.add_argument('--data', default=None, help='Optional dataset name, e.g. mind.')
     parser.add_argument('--root', default=str(ROOT), help='Algorithm project root. Defaults to this repository.')
     parser.add_argument('--apply', action='store_true', help='Write meta.json artifact_identity fields and .index.json.')
@@ -798,14 +1269,25 @@ def main():
     args = parser.parse_args()
     if args.interactive and not args.apply:
         parser.error('--interactive requires --apply because choices are executed immediately')
+    if args.delete_abnormal_empty and args.stage != 'trained':
+        parser.error('--delete-abnormal-empty is only supported for --stage trained')
 
-    report = init_trained_registry(
-        Path(args.root),
-        data=args.data,
-        apply=bool(args.apply),
-        delete_abnormal_empty=bool(args.delete_abnormal_empty),
-        interactive=bool(args.interactive),
-    )
+    if args.stage == 'trained':
+        report = init_trained_registry(
+            Path(args.root),
+            data=args.data,
+            apply=bool(args.apply),
+            delete_abnormal_empty=bool(args.delete_abnormal_empty),
+            interactive=bool(args.interactive),
+        )
+    else:
+        report = init_generic_registry(
+            Path(args.root),
+            stage=args.stage,
+            data=args.data,
+            apply=bool(args.apply),
+            interactive=bool(args.interactive),
+        )
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
         return
