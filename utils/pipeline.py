@@ -68,10 +68,31 @@ def ensure_quantized(data: str, model: str, quantizer_name: str | None = None):
     return quantizer
 
 
-def ensure_clustered(data: str, uid_cluster_levels: str):
+def ensure_clustered(data: str, uid_cluster_levels: str, clusterer_spec: dict | None = None):
     setup_logging()
     pnt(f'auto preparing clustered artifacts for {data}/{uid_cluster_levels}')
     from clusterer import Clusterer, ClustererConfig
+
+    clusterer_spec = clusterer_spec or {}
+    word2vec = clusterer_spec.get('word2vec') or {}
+    cluster = clusterer_spec.get('cluster') or {}
+
+    kwargs = {
+        'data': data,
+        'uid_cluster_levels': uid_cluster_levels,
+        'cluster_vector_size': word2vec.get('vector_size'),
+        'cluster_window': word2vec.get('window'),
+        'cluster_patience': word2vec.get('patience'),
+        'cluster_sg': word2vec.get('sg'),
+        'cluster_negative': word2vec.get('negative'),
+        'cluster_min_count': word2vec.get('min_count'),
+        'cluster_workers': word2vec.get('workers'),
+        'cluster_batch_size': cluster.get('batch_size'),
+        'cluster_max_iter': cluster.get('max_iter'),
+        'cluster_n_init': cluster.get('n_init'),
+        'config': 'config/clusterer.yaml',
+    }
+    kwargs = {key: value for key, value in kwargs.items() if value is not None}
 
     configurations = ConfigInit(
         required_args=['data'],
@@ -79,13 +100,7 @@ def ensure_clustered(data: str, uid_cluster_levels: str):
             config='config/clusterer.yaml',
         ),
         makedirs=[],
-    ).parse_kwargs(
-        {
-            'data': data,
-            'uid_cluster_levels': uid_cluster_levels,
-            'config': 'config/clusterer.yaml',
-        }
-    )
+    ).parse_kwargs(kwargs)
     clusterer = Clusterer(ClustererConfig.from_refconfig(configurations))
     clusterer.run()
     return clusterer

@@ -4,6 +4,36 @@ from typing import Optional
 from utils import function
 from utils import model as model_utils
 from utils.compile import CompileConfig, canonicalize_repr_type, compact_float, normalize_model_name, short_config_hash
+from utils.experiment_template import (
+    CLUSTERER_CONFIG_DEFAULTS,
+    CLUSTERER_WORD2VEC_DEFAULTS,
+    HASH_QUANTIZER_CONFIG_DEFAULTS,
+    QUANTIZER_TRAINER_DEFAULTS,
+    SID_ENCODER_CONFIG_DEFAULTS,
+    SID_QUANTIZER_CONFIG_DEFAULTS,
+    build_default_upstreams,
+    merge_defaults,
+    normalize_list,
+    normalize_metrics,
+    normalize_optional_string,
+    used_upstreams_for_config,
+)
+
+
+def _get(obj, name, default=None):
+    try:
+        return getattr(obj, name)
+    except Exception:
+        return default
+
+
+def _plain_section(section, defaults: dict):
+    payload = {}
+    for key in defaults:
+        value = _get(section, key, None) if section is not None else None
+        if value is not None:
+            payload[key] = value
+    return payload
 
 
 @dataclass
@@ -54,6 +84,7 @@ class TrainConfig:
     num_layers: int
     num_heads: int
     dropout: float
+    upstreams: dict
 
     @property
     def effective_batch_size(self):
@@ -61,26 +92,91 @@ class TrainConfig:
 
     @classmethod
     def from_refconfig(cls, configurations):
-        data_config = configurations.config.data
+        root = configurations.config
+        data_config = root.data
+        representation = _get(root, 'representation')
+        upstreams_section = _get(root, 'upstreams')
+        decoder = _get(root, 'decoder')
         trainer = configurations.config.trainer
         evaluator = configurations.config.evaluator
         model = configurations.config.model
         lora = model.lora
-        scratch = model.config
-        try:
-            raw_repr_type = data_config.repr_type
-        except Exception:
-            raw_repr_type = None
-        raw_task_type = str(data_config.task_type).lower()
+        scratch = _get(model, 'scratch') or model.config
+        raw_repr_type = _get(representation, 'history', _get(data_config, 'repr_type', None))
+        raw_task_type = str(_get(representation, 'target', _get(data_config, 'task_type'))).lower()
         normalized_repr_type = canonicalize_repr_type(raw_task_type, raw_repr_type)
         raw_metrics = getattr(evaluator, 'metrics', [])
-        if isinstance(raw_metrics, str):
-            metrics = [metric.strip().lower() for metric in raw_metrics.split(',') if metric.strip()]
-        else:
-            metrics = [str(metric).strip().lower() for metric in list(raw_metrics) if str(metric).strip()]
-        uid_decoding = str(getattr(trainer, 'uid_decoding', 'flat')).strip().lower()
-        uid_cluster_levels = function.normalize_optional_string(getattr(trainer, 'uid_cluster_levels', None))
-        uid_cluster_topk = function.normalize_optional_string(getattr(trainer, 'uid_cluster_topk', None))
+        metrics = normalize_metrics(raw_metrics)
+        decoder_uid = _get(decoder, 'uid')
+        decoder_sid = _get(decoder, 'sid')
+        uid_decoding = str(_get(decoder_uid, 'mode', getattr(trainer, 'uid_decoding', 'flat'))).strip().lower()
+        uid_cluster_topk = normalize_optional_string(_get(decoder_uid, 'topk', getattr(trainer, 'uid_cluster_topk', None)))
+        repr_source_model = normalize_model_name(_get(representation, 'source_model', _get(data_config, 'repr_source_model', None)))
+        sid_section = _get(upstreams_section, 'sid')
+        sid_quantizer = _get(sid_section, 'quantizer')
+        sid_encoder = _get(sid_section, 'encoder')
+        sid_upstream_trainer = _get(sid_section, 'trainer')
+        hash_section = _get(upstreams_section, 'hash')
+        hash_quantizer = _get(hash_section, 'quantizer')
+        uid_section = _get(upstreams_section, 'uid')
+        uid_clusterer = _get(uid_section, 'clusterer')
+        uid_cluster_levels = normalize_optional_string(
+            _get(uid_clusterer, 'levels', getattr(trainer, 'uid_cluster_levels', None))
+        )
+        sid_quantizer_config = merge_defaults(
+            SID_QUANTIZER_CONFIG_DEFAULTS,
+            _plain_section(_get(sid_quantizer, 'config'), SID_QUANTIZER_CONFIG_DEFAULTS),
+        )
+        sid_encoder_config = merge_defaults(
+            SID_ENCODER_CONFIG_DEFAULTS,
+            _plain_section(_get(sid_encoder, 'config'), SID_ENCODER_CONFIG_DEFAULTS),
+        )
+        sid_quantizer_trainer = merge_defaults(
+            QUANTIZER_TRAINER_DEFAULTS,
+            _plain_section(sid_upstream_trainer, QUANTIZER_TRAINER_DEFAULTS),
+        )
+        sid_quantizer_trainer['save_best_by'] = normalize_list(sid_quantizer_trainer.get('save_best_by')) or [
+            'loss',
+            'coll',
+            'codes',
+            'recon',
+        ]
+        hash_quantizer_config = merge_defaults(
+            HASH_QUANTIZER_CONFIG_DEFAULTS,
+            _plain_section(_get(hash_quantizer, 'config'), HASH_QUANTIZER_CONFIG_DEFAULTS),
+        )
+        uid_cluster_word2vec = merge_defaults(
+            CLUSTERER_WORD2VEC_DEFAULTS,
+            _plain_section(_get(uid_clusterer, 'word2vec'), CLUSTERER_WORD2VEC_DEFAULTS),
+        )
+        uid_cluster_config = merge_defaults(
+            CLUSTERER_CONFIG_DEFAULTS,
+            _plain_section(_get(uid_clusterer, 'cluster'), CLUSTERER_CONFIG_DEFAULTS),
+        )
+        sid_coder = str(
+            _get(sid_quantizer, 'name', getattr(data_config, 'sid_coder', '')) or ''
+        ).strip().lower() or None
+        hash_coder = str(
+            _get(hash_quantizer, 'name', getattr(data_config, 'hash_coder', '')) or ''
+        ).strip().lower() or None
+        sid_export = str(_get(sid_section, 'export', getattr(data_config, 'sid_export', None)) or '').strip().lower() or None
+        flat_for_upstreams = {
+            'repr_source_model': repr_source_model,
+            'sid_coder': sid_coder,
+            'sid_export': sid_export,
+            'sid_embedding_model': _get(sid_section, 'embedding_model', None),
+            'sid_quantizer_config': sid_quantizer_config,
+            'sid_encoder_name': _get(sid_encoder, 'name', 'mlp'),
+            'sid_encoder_config': sid_encoder_config,
+            'sid_quantizer_trainer': sid_quantizer_trainer,
+            'hash_coder': hash_coder,
+            'hash_embedding_model': _get(hash_section, 'embedding_model', None),
+            'hash_quantizer_config': hash_quantizer_config,
+            'uid_cluster_levels': uid_cluster_levels,
+            'uid_cluster_word2vec': uid_cluster_word2vec,
+            'uid_cluster_config': uid_cluster_config,
+        }
+        canonical_upstreams = build_default_upstreams(flat_for_upstreams)
         raw_valid_only = getattr(trainer, 'valid_only', False)
         if isinstance(raw_valid_only, bool):
             valid_only = -1 if raw_valid_only else 0
@@ -108,15 +204,15 @@ class TrainConfig:
             data=data_config.name.lower(),
             model=model.name.lower(),
             repr_type=normalized_repr_type,
-            repr_source_model=normalize_model_name(data_config.repr_source_model),
-            sid_export=data_config.sid_export.lower() if data_config.sid_export else None,
-            sid_coder=str(getattr(data_config, 'sid_coder', '')).strip().lower() or None,
-            hash_coder=str(getattr(data_config, 'hash_coder', '')).strip().lower() or None,
-            repr_combine=data_config.repr_combine.lower(),
+            repr_source_model=repr_source_model,
+            sid_export=sid_export,
+            sid_coder=sid_coder,
+            hash_coder=hash_coder,
+            repr_combine=str(_get(representation, 'combine', getattr(data_config, 'repr_combine', 'concat'))).lower(),
             task_type=raw_task_type,
-            maxitems=int(data_config.maxitems),
-            model_max_length=int(model.max_length) or None,
-            item_text_max_tokens=int(data_config.item_text_max_tokens),
+            maxitems=int(_get(representation, 'max_items', getattr(data_config, 'maxitems', 20))),
+            model_max_length=int(_get(representation, 'model_max_length', model.max_length)) or None,
+            item_text_max_tokens=int(_get(representation, 'item_text_max_tokens', getattr(data_config, 'item_text_max_tokens', 20))),
             batch_size=int(trainer.batch_size),
             accumulate_batch=max(1, int(getattr(trainer, 'accumulate_batch', 1))),
             valid_only=valid_only,
@@ -128,29 +224,32 @@ class TrainConfig:
             seed=int(trainer.seed),
             device=trainer.device,
             num_gpus=int(getattr(trainer, 'num_gpus', 1)),
-            freeze_backbone=str(trainer.freeze_backbone).lower(),
+            freeze_backbone=str(_get(model, 'freeze_backbone', getattr(trainer, 'freeze_backbone', 'auto'))).lower(),
             uid_decoding=uid_decoding,
             uid_cluster_levels=uid_cluster_levels,
             uid_cluster_topk=uid_cluster_topk,
-            code_decoding=str(getattr(trainer, 'code_decoding', 'auto')).strip().lower(),
+            code_decoding=str(_get(decoder_sid, 'mode', getattr(trainer, 'code_decoding', 'auto'))).strip().lower(),
             main_metric=str(getattr(evaluator, 'main_metric', 'loss')).strip().lower(),
             metrics=metrics,
             patience=int(evaluator.patience),
             alignment_weight=float(getattr(trainer, 'alignment', 0)),
-            code_beam_width=int(getattr(trainer, 'code_beam_width', 20)),
-            code_beam_chunk_size=int(getattr(trainer, 'code_beam_chunk_size', 0)) or int(trainer.batch_size),
-            code_collision_loss_weight=float(getattr(trainer, 'code_collision_loss_weight', 0.1)),
+            code_beam_width=int(_get(decoder_sid, 'beam_width', getattr(trainer, 'code_beam_width', 20))),
+            code_beam_chunk_size=int(_get(decoder_sid, 'beam_chunk_size', getattr(trainer, 'code_beam_chunk_size', 0))) or int(trainer.batch_size),
+            code_collision_loss_weight=float(
+                _get(decoder_sid, 'collision_loss_weight', getattr(trainer, 'code_collision_loss_weight', 0.1))
+            ),
             model_dtype=str(model.dtype).lower(),
             use_lora=str(lora.use).lower(),
             lora_rank=int(lora.rank),
             lora_alpha=int(lora.alpha),
             lora_dropout=float(lora.dropout),
             lora_layers=function.normalize_lora_layers(getattr(lora, 'layers', None)),
-            lora_target_modules='all-linear',
+            lora_target_modules=str(getattr(lora, 'target_modules', 'all-linear')).strip().lower(),
             hidden_size=int(scratch.hidden_size),
             num_layers=int(scratch.num_layers),
             num_heads=int(scratch.num_heads),
             dropout=float(scratch.dropout),
+            upstreams=canonical_upstreams,
         )
 
     @property
@@ -233,6 +332,11 @@ class TrainConfig:
         payload.pop('load_ckpt', None)
         payload.pop('code_beam_chunk_size', None)
         used_views = self.compile_config.used_views
+        used_upstreams = used_upstreams_for_config(self.task_type, self.repr_type, self.uid_decoding)
+        payload['upstreams'] = {
+            key: value for key, value in self.upstreams.items()
+            if key in used_upstreams
+        }
         if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
             payload.pop('repr_source_model', None)
         if 'sid' not in used_views:
@@ -255,4 +359,6 @@ class TrainConfig:
             payload.pop('code_collision_loss_weight', None)
         if self.repr_combine == 'add' or len(self.compile_config.repr_types) <= 1:
             payload.pop('alignment_weight', None)
+        if not payload.get('upstreams'):
+            payload.pop('upstreams', None)
         return payload

@@ -69,7 +69,9 @@ class Trainer:
     def _prepare_uid_hierarchy_if_needed(self):
         if self.config.task_type != 'uid' or self.config.uid_decoding != 'hierarchical':
             return
-        clusterer = ensure_clustered(self.config.data, self.config.uid_cluster_levels)
+        uid_upstream = (getattr(self.config, 'upstreams', {}) or {}).get('uid') or {}
+        clusterer_spec = uid_upstream.get('clusterer') or {}
+        clusterer = ensure_clustered(self.config.data, self.config.uid_cluster_levels, clusterer_spec)
         setattr(self.config, 'uid_hierarchy_dir', str(clusterer.output_dir))
 
     @property

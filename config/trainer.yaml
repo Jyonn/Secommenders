@@ -1,30 +1,123 @@
+name: ${name:experiment}$
+
 data:
   name: ${data}$
-  repr_type: ${repr_type:null}$
-  repr_source_model: ${repr_source_model:null}$
-  sid_export: ${sid_export:coll}$
-  sid_coder: ${sid_coder:null}$
-  hash_coder: ${hash_coder:null}$
-  repr_combine: ${repr_combine:concat}$
-  task_type: ${task_type}$
-  maxitems: ${maxitems:20}$
+
+representation:
+  history: ${repr_type:null}$
+  target: ${task_type}$
+  source_model: ${repr_source_model:null}$
+  combine: ${repr_combine:concat}$
+  max_items: ${maxitems:20}$
+  model_max_length: ${model_max_length:0}$
   item_text_max_tokens: ${item_text_max_tokens:20}$
+
+upstreams:
+  sid:
+    kind: quantized
+    embedding_model: ${sid_embedding_model:null}$
+    export: ${sid_export:coll}$
+    quantizer:
+      name: ${sid_coder:rqvae}$
+      config:
+        latent_dim: ${sid_latent_dim:32}$
+        reconstruction_loss: ${sid_reconstruction_loss:mse}$
+        codebook_size: ${sid_codebook_size:256}$
+        commitment_weight: ${sid_commitment_weight:0.25}$
+        codebook_weight: ${sid_codebook_weight:1.0}$
+        use_ema_codebook: ${sid_use_ema_codebook:true}$
+        ema_decay: ${sid_ema_decay:0.99}$
+        ema_epsilon: ${sid_ema_epsilon:0.00001}$
+        dead_code_reset: ${sid_dead_code_reset:false}$
+        dead_code_threshold: ${sid_dead_code_threshold:0}$
+        num_quantizers: ${sid_num_quantizers:3}$
+        num_codebooks: ${sid_num_codebooks:3}$
+        assignment_strategy: ${sid_assignment_strategy:sinkhorn}$
+        sinkhorn_epsilon: ${sid_sinkhorn_epsilon:0.0,0.0,0.003}$
+        sinkhorn_iters: ${sid_sinkhorn_iters:50}$
+        kmeans_init: ${sid_kmeans_init:true}$
+        kmeans_iters: ${sid_kmeans_iters:100}$
+    encoder:
+      name: ${sid_encoder_name:mlp}$
+      config:
+        hidden_dims: ${sid_hidden_dims:2048,1024,512,256,128,64}$
+        activation: ${sid_activation:relu}$
+        use_bias: ${sid_use_bias:true}$
+    trainer:
+      validation_ratio: ${sid_validation_ratio:0.1}$
+      test_ratio: ${sid_test_ratio:0.1}$
+      full_dataset_as_splits: ${sid_full_dataset_as_splits:true}$
+      epochs: ${sid_epochs:0}$
+      batch_size: ${sid_batch_size:1000}$
+      learning_rate: ${sid_lr:0.001}$
+      patience: ${sid_patience:50}$
+      save_best_by: ${sid_save_best_by:loss,coll,codes,recon}$
+
+  hash:
+    kind: quantized
+    embedding_model: ${hash_embedding_model:null}$
+    export: hash
+    quantizer:
+      name: ${hash_coder:simhash}$
+      config:
+        num_bits: ${hash_num_bits:24}$
+        num_tables: ${hash_num_tables:1}$
+        projection_distribution: ${hash_projection_distribution:gaussian}$
+        use_median_thresholds: ${hash_use_median_thresholds:true}$
+        num_iterations: ${hash_num_iterations:50}$
+        normalize_inputs: ${hash_normalize_inputs:true}$
+
+  uid:
+    kind: clustered
+    clusterer:
+      levels: ${uid_cluster_levels:auto}$
+      word2vec:
+        vector_size: ${cluster_vector_size:64}$
+        window: ${cluster_window:5}$
+        patience: ${cluster_patience:5}$
+        sg: ${cluster_sg:1}$
+        negative: ${cluster_negative:5}$
+        min_count: ${cluster_min_count:1}$
+        workers: ${cluster_workers:4}$
+      cluster:
+        batch_size: ${cluster_batch_size:4096}$
+        max_iter: ${cluster_max_iter:100}$
+        n_init: ${cluster_n_init:10}$
 
 model:
   name: ${model}$
-  max_length: ${model_max_length:0}$
   dtype: ${model_dtype:auto}$
+  freeze_backbone: ${freeze_backbone:auto}$
+  max_length: ${model_max_length:0}$
   lora:
     use: ${use_lora:auto}$
     rank: ${lora_rank:8}$
     alpha: ${lora_alpha:32}$
     dropout: ${lora_dropout:0.05}$
     layers: ${lora_layers:null}$
+    target_modules: ${lora_target_modules:all-linear}$
+  scratch:
+    hidden_size: ${hidden_size:256}$
+    num_layers: ${num_layers:4}$
+    num_heads: ${num_heads:8}$
+    dropout: ${dropout:0.1}$
   config:
     hidden_size: ${hidden_size:256}$
     num_layers: ${num_layers:4}$
     num_heads: ${num_heads:8}$
     dropout: ${dropout:0.1}$
+
+decoder:
+  uid:
+    mode: ${uid_decoding:flat}$
+    topk: ${uid_cluster_topk:null}$
+  sid:
+    mode: ${code_decoding:auto}$
+    beam_width: ${code_beam_width:20}$
+    beam_chunk_size: ${code_beam_chunk_size:0}$
+    collision_loss_weight: ${code_collision_loss_weight:0.1}$
+  hash:
+    mode: parallel
 
 trainer:
   batch_size: ${batch_size:64}$
@@ -38,24 +131,9 @@ trainer:
   seed: ${seed:42}$
   device: ${device:null}$
   num_gpus: ${num_gpus:1}$
-  freeze_backbone: ${freeze_backbone:auto}$
-  uid_decoding: ${uid_decoding:flat}$
-  uid_cluster_levels: ${uid_cluster_levels:null}$
-  uid_cluster_topk: ${uid_cluster_topk:null}$
-  code_decoding: ${code_decoding:auto}$
-  code_beam_width: ${code_beam_width:20}$
-  code_beam_chunk_size: ${code_beam_chunk_size:0}$
-  code_collision_loss_weight: ${code_collision_loss_weight:0.1}$
   alignment: ${alignment:0}$
 
 evaluator:
   main_metric: ${main_metric:loss}$
   patience: ${patience:3}$
-  metrics:
-    - ndcg@5
-    - ndcg@10
-    - ndcg@20
-    - hr@5
-    - hr@10
-    - hr@20
-    - mrr
+  metrics: ${metrics:ndcg@5,ndcg@10,ndcg@20,hr@5,hr@10,hr@20,mrr}$

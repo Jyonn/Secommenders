@@ -84,6 +84,8 @@ This is useful when training succeeds but final test evaluation needs a smaller 
 
 ### Trained Artifact Registry
 
+`config/trainer.yaml` is the canonical experiment template. It keeps the user-facing schedule arguments small while expanding them into explicit `representation`, `upstreams`, `decoder`, `model`, and `trainer` sections. Signatures are computed from this canonical template, not from user-provided artifact signs.
+
 Trained artifacts are stored by evaluation setting, seed, and execution phase:
 
 ```text
@@ -117,6 +119,8 @@ The dry run reports unresolved folders and delete candidates. A folder is only m
 `clustered`, `compiled`, and `quantized` use the same dataset-level `.index.json` alias registry as `trained`, but they do not create seed or phase subdirectories. Their registry maps the latest signature back to the existing artifact folder. For `quantized`, the artifact folder is the quantizer root, e.g. `artifacts/quantized/<dataset>/<embedding_model>/<quantizer_variant>/`; checkpoint folders such as `best`, `best-recon`, `best-usage`, `final`, and `exports` remain internal subdirectories.
 
 The same script is also the migration path from older trained layouts. It upgrades both legacy flat folders and the previous `<trained_signature>/<seed>/` layout into the current `<trained_signature>/<seed>/<phase>/` layout, so it is safe to rerun after an earlier registry initialization.
+
+For trained artifacts, the registry initializer also backfills missing canonical upstream defaults from the current template before recomputing signatures. This lets older commands and meta files collide with the new signature when they describe the same experiment under today's explicit defaults.
 
 If migration reports a conflict, the old folder and canonical target folder both contain results for the same trained signature and seed. Inspect both sides first:
 

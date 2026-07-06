@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.compile import CompileConfig, short_config_hash
+from utils.experiment_template import build_default_upstreams, used_upstreams_for_config
 
 
 TRAINED_SPEC_VERSION = 'trained.v2'
@@ -56,6 +57,7 @@ TRAIN_CONFIG_DEFAULTS = {
     'num_layers': 4,
     'num_heads': 8,
     'dropout': 0.1,
+    'upstreams': None,
 }
 
 TRAIN_CONFIG_REQUIRED_FIELDS = {
@@ -199,6 +201,17 @@ def _config_sign_payload(config: Any):
     payload.pop('code_beam_chunk_size', None)
     compile_config = _compile_config_from_config(payload)
     used_views = compile_config.used_views
+    if not payload.get('upstreams'):
+        payload['upstreams'] = build_default_upstreams(payload)
+    used_upstreams = used_upstreams_for_config(
+        payload.get('task_type'),
+        payload.get('repr_type'),
+        payload.get('uid_decoding', TRAIN_CONFIG_DEFAULTS['uid_decoding']),
+    )
+    payload['upstreams'] = {
+        key: value for key, value in (payload.get('upstreams') or {}).items()
+        if key in used_upstreams
+    }
     if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
         payload.pop('repr_source_model', None)
     if 'sid' not in used_views:
@@ -221,6 +234,8 @@ def _config_sign_payload(config: Any):
         payload.pop('code_collision_loss_weight', None)
     if payload.get('repr_combine') == 'add' or len(compile_config.repr_types) <= 1:
         payload.pop('alignment_weight', None)
+    if not payload.get('upstreams'):
+        payload.pop('upstreams', None)
     if not payload.get('test_only'):
         payload.pop('load_ckpt', None)
     return payload
@@ -471,5 +486,7 @@ def migrate_train_config_dict(raw_config: dict[str, Any]):
         config['metrics'] = [part.strip().lower() for part in config['metrics'].split(',') if part.strip()]
     if isinstance(config.get('valid_only'), bool):
         config['valid_only'] = -1 if config['valid_only'] else 0
+    if not config.get('upstreams'):
+        config['upstreams'] = build_default_upstreams(config)
 
     return {key: config[key] for key in TRAIN_CONFIG_FIELD_NAMES}
