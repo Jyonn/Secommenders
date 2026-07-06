@@ -734,6 +734,47 @@ def _read_json_if_exists(path: Path):
         return None
 
 
+def _completed_run_status(config: TrainConfig, run_dir: Path):
+    meta = _read_json_if_exists(run_dir / 'meta.json') or {}
+    status = str(meta.get('status') or '').lower()
+    if config.test_only:
+        complete_statuses = {'test_only_finished'}
+        required_paths = [run_dir / 'meta.json']
+    elif config.valid_only:
+        complete_statuses = {'valid_only_finished'}
+        required_paths = [run_dir / 'meta.json']
+    else:
+        complete_statuses = {'finished'}
+        required_paths = [run_dir / 'meta.json', run_dir / 'best.pt']
+    complete = status in complete_statuses and all(path.exists() for path in required_paths)
+    return complete, status, meta
+
+
+def _should_skip_completed_run(config: TrainConfig, run_dir: Path):
+    overwrite = str(getattr(config, 'overwrite', 'auto') or 'auto').strip().lower()
+    complete, status, meta = _completed_run_status(config, run_dir)
+    if overwrite == 'true':
+        return False
+    if overwrite == 'false' and run_dir.exists():
+        raise RuntimeError(
+            f'trainer run exists at {run_dir} with status={status or "unknown"}; '
+            'use --overwrite true to rerun'
+        )
+    if overwrite == 'auto' and complete:
+        pnt(
+            f'trainer run already complete at {run_dir}; '
+            f'status={status} overwrite=auto, skipping. '
+            'Use --overwrite true to rerun.'
+        )
+        return True
+    if overwrite == 'auto' and run_dir.exists():
+        pnt(
+            f'trainer run exists but is not complete at {run_dir}; '
+            f'status={status or "unknown"} overwrite=auto, rerunning.'
+        )
+    return False
+
+
 def _looks_like_tqdm_progress(line: str):
     text = str(line).strip()
     if not text:
@@ -836,6 +877,10 @@ def _update_remote_experiment(run_dir: Path, *, status: str, error_text: str = '
 
 
 def _run_trainer(config: TrainConfig):
+    run_dir = _run_dir_for_config(config)
+    if _should_skip_completed_run(config, run_dir):
+        _update_remote_experiment(run_dir, status='completed')
+        return
     run_dir = _setup_run_artifacts(config)
     _register_remote_experiment(run_dir, config)
     try:

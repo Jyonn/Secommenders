@@ -238,6 +238,7 @@ REPORT_RUNTIME_ARG_KEYS = {
     'valid_only',
     'test_only',
     'load_ckpt',
+    'overwrite',
     'code_beam_chunk_size',
 }
 

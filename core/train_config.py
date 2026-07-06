@@ -55,6 +55,7 @@ class TrainConfig:
     valid_only: int
     test_only: bool
     load_ckpt: Optional[str]
+    overwrite: str
     epochs: int
     learning_rate: float
     weight_decay: float
@@ -188,6 +189,9 @@ class TrainConfig:
                 raise ValueError('trainer.valid_only must be false/0, true, or a positive integer')
         test_only = bool(getattr(trainer, 'test_only', False))
         load_ckpt = function.normalize_optional_string(getattr(trainer, 'load_ckpt', None))
+        overwrite = str(getattr(trainer, 'overwrite', 'auto') or 'auto').strip().lower()
+        if overwrite not in {'auto', 'true', 'false'}:
+            raise ValueError('trainer.overwrite must be one of: auto, true, false')
         if valid_only and test_only:
             raise ValueError('trainer.valid_only and trainer.test_only cannot both be true')
         if test_only and not load_ckpt:
@@ -218,6 +222,7 @@ class TrainConfig:
             valid_only=valid_only,
             test_only=test_only,
             load_ckpt=load_ckpt,
+            overwrite=overwrite,
             epochs=int(trainer.epochs),
             learning_rate=float(trainer.learning_rate),
             weight_decay=float(trainer.weight_decay),
@@ -331,6 +336,7 @@ class TrainConfig:
         payload.pop('valid_only', None)
         payload.pop('test_only', None)
         payload.pop('load_ckpt', None)
+        payload.pop('overwrite', None)
         payload.pop('code_beam_chunk_size', None)
         used_views = self.compile_config.used_views
         used_upstreams = used_upstreams_for_config(self.task_type, self.repr_type, self.uid_decoding)

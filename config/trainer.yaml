@@ -125,6 +125,7 @@ trainer:
   valid_only: ${valid_only:false}$
   test_only: ${test_only:false}$
   load_ckpt: ${load_ckpt:null}$
+  overwrite: ${overwrite:auto}$
   epochs: ${epochs:0}$
   learning_rate: ${learning_rate:0.0001}$
   weight_decay: ${weight_decay:0.01}$

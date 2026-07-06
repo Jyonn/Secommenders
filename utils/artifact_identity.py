@@ -52,6 +52,7 @@ TRAIN_CONFIG_DEFAULTS = {
     'valid_only': 0,
     'test_only': False,
     'load_ckpt': None,
+    'overwrite': 'auto',
     'epochs': 0,
     'learning_rate': 0.0001,
     'weight_decay': 0.01,
@@ -954,6 +955,7 @@ def _config_sign_payload(config: Any):
     payload.pop('valid_only', None)
     payload.pop('test_only', None)
     payload.pop('load_ckpt', None)
+    payload.pop('overwrite', None)
     payload.pop('code_beam_chunk_size', None)
     compile_config = _compile_config_from_config(payload)
     used_views = compile_config.used_views

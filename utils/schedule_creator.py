@@ -330,6 +330,11 @@ class Job:
     def load_ckpt(self, value: str):
         return self._set_string_arg('load_ckpt', value)
 
+    def overwrite(self, value: str | bool = 'auto'):
+        if isinstance(value, bool):
+            value = 'true' if value else 'false'
+        return self._set_arg('overwrite', str(value).strip().lower())
+
     def epochs(self, value: int):
         return self._set_int_arg('epochs', value)
 
