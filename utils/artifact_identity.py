@@ -512,6 +512,19 @@ def compiled_spec_from_meta(meta: dict):
     if not isinstance(meta.get('config'), dict):
         raise ValueError('compiled meta missing config')
     config = deepcopy(meta.get('config'))
+    if config.get('repr_source_model') is None and config.get('repr_model') is not None:
+        config['repr_source_model'] = config.get('repr_model')
+    if config.get('sid_export') is None and config.get('repr_best') is not None:
+        config['sid_export'] = config.get('repr_best')
+    quantizer_name = config.get('quantizer_name')
+    view_text = '+'.join(
+        str(value or '').strip().lower()
+        for value in (config.get('repr_type'), config.get('task_type'))
+    )
+    if quantizer_name and 'sid' in view_text and config.get('sid_coder') is None:
+        config['sid_coder'] = quantizer_name
+    if quantizer_name and 'hash' in view_text and config.get('hash_coder') is None:
+        config['hash_coder'] = quantizer_name
     if not config.get('upstreams'):
         config['upstreams'] = build_default_upstreams(config)
     compile_config = CompileConfig(
