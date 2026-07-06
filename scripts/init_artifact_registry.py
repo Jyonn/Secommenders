@@ -172,12 +172,15 @@ def generic_stage_payload(stage: str, meta: dict):
             'cluster': strip_path_values(meta.get('cluster') or {}),
         }
     if stage == 'quantized':
+        export_metrics = meta.get('export_metrics')
+        if export_metrics is None and meta.get('checkpoint_metric') is not None:
+            export_metrics = [meta.get('checkpoint_metric')]
         return {
             'embedding_model': meta.get('embedding_model'),
             'quantizer_model': meta.get('quantizer_model') or meta.get('hash_model'),
             'quantizer_scheme': meta.get('quantizer_scheme'),
             'representation_family': meta.get('representation_family'),
-            'checkpoint_metric': meta.get('checkpoint_metric'),
+            'export_metrics': export_metrics,
             'recommended_decoding': meta.get('recommended_decoding'),
             'requested_latent_dim': meta.get('requested_latent_dim'),
             'resolved_latent_dim': meta.get('resolved_latent_dim'),
@@ -233,8 +236,17 @@ def iter_generic_meta_paths(root: Path, stage: str, data: str | None = None):
         if stage in {'clustered', 'compiled'}:
             yield from sorted(dataset_dir.glob('*/meta.json'))
         elif stage == 'quantized':
-            yield from sorted(dataset_dir.glob('*/exports/*/meta.json'))
-            yield from sorted(dataset_dir.glob('*/*/exports/*/meta.json'))
+            seen_roots = set()
+            for root_meta_path in sorted(dataset_dir.glob('*/*/meta.json')):
+                quantized_root = root_meta_path.parent
+                seen_roots.add(quantized_root)
+                yield root_meta_path
+            for meta_path in sorted(dataset_dir.glob('*/*/exports/*/meta.json')):
+                quantized_root = meta_path.parents[2]
+                if quantized_root in seen_roots:
+                    continue
+                seen_roots.add(quantized_root)
+                yield meta_path
 
 
 def generic_meta_location(root: Path, stage: str, meta_path: Path):
@@ -242,12 +254,50 @@ def generic_meta_location(root: Path, stage: str, meta_path: Path):
     if len(relative.parts) < 3 or relative.parts[-1] != 'meta.json':
         raise ValueError(f'unrecognized {stage} meta path: {meta_path}')
     data = relative.parts[0]
-    folder = Path(*relative.parts[1:-1]).as_posix()
+    if stage == 'quantized' and len(relative.parts) >= 6 and relative.parts[-3] == 'exports':
+        folder = Path(*relative.parts[1:-3]).as_posix()
+        run_dir = meta_path.parents[2]
+    else:
+        folder = Path(*relative.parts[1:-1]).as_posix()
+        run_dir = meta_path.parent
     return {
         'data': data,
         'folder': folder,
-        'run_dir': meta_path.parent,
+        'run_dir': run_dir,
     }
+
+
+def read_generic_meta(stage: str, meta_path: Path):
+    meta = read_json(meta_path)
+    if stage != 'quantized':
+        return meta
+
+    if meta_path.parent.name == 'exports' or meta_path.parent.parent.name == 'exports':
+        root_dir = meta_path.parents[2]
+        root_meta = {}
+    else:
+        root_dir = meta_path.parent
+        root_meta = meta if isinstance(meta, dict) else {}
+    export_metas = []
+    export_metrics = []
+    for export_meta_path in sorted((root_dir / 'exports').glob('*/meta.json')):
+        export_meta = read_json(export_meta_path)
+        if not isinstance(export_meta, dict):
+            continue
+        export_metas.append(export_meta)
+        metric = export_meta.get('checkpoint_metric') or export_meta_path.parent.name
+        export_metrics.append(str(metric))
+    if not export_metas:
+        return meta
+
+    merged = dict(export_metas[0])
+    merged.update({key: value for key, value in root_meta.items() if key in {'artifact_identity'}})
+    merged['export_metrics'] = sorted(set(export_metrics))
+    merged['exports'] = {
+        str(export_meta.get('checkpoint_metric') or Path(export_meta.get('export_dir') or '').name): strip_path_values(export_meta)
+        for export_meta in export_metas
+    }
+    return merged
 
 
 def generic_folder_has_artifacts(dataset_dir: Path, folder: str):
@@ -1119,7 +1169,7 @@ def init_generic_registry(
     for meta_path in iter_generic_meta_paths(root, stage, data=data):
         try:
             location = generic_meta_location(root, stage, meta_path)
-            meta = read_json(meta_path)
+            meta = read_generic_meta(stage, meta_path)
             if not isinstance(meta, dict):
                 raise ValueError('meta root must be a dict')
             meta_data = generic_data_from_meta(stage, meta)
@@ -1127,6 +1177,7 @@ def init_generic_registry(
                 raise ValueError(f'meta data={meta_data} does not match path data={location["data"]}')
             folder = location['folder']
             run_dir = Path(location['run_dir'])
+            identity_meta_path = run_dir / 'meta.json' if stage == 'quantized' else meta_path
             dataset_dir = root / 'artifacts' / stage / meta_data
             aliases = collect_existing_identity_aliases(meta)
             legacy_signature = legacy_signature_from_folder(folder)
@@ -1147,7 +1198,7 @@ def init_generic_registry(
                     'signature': signature,
                     'target_run_dir': str(run_dir),
                     'aliases': identity.get('aliases') or [],
-                    'meta_path': str(meta_path),
+                    'meta_path': str(identity_meta_path),
                 }
             )
             touched_data.add(meta_data)
@@ -1170,7 +1221,7 @@ def init_generic_registry(
                         aliases=registered.get('aliases') or identity.get('aliases'),
                         migration_status='migrated',
                     )
-                    write_json(meta_path, meta)
+                    write_json(identity_meta_path, meta)
                     break
                 except ValueError as exc:
                     conflict = generic_conflict_report(
