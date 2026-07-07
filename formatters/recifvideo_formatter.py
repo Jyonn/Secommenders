@@ -1,3 +1,4 @@
+import abc
 import json
 from collections import Counter
 from pathlib import Path
@@ -18,6 +19,9 @@ class RecIFVideoFormatter(BaseFormatter):
     IID_COL = 'pid'
     UID_COL = 'uid'
     HIS_COL = 'history'
+    DOMAIN = 'video'
+    RAW_HISTORY_COL = 'hist_video_pid'
+    OFFICIAL_TEST_DIR = 'video'
 
     REQUIRE_STRINGIFY = False
 
@@ -56,7 +60,7 @@ class RecIFVideoFormatter(BaseFormatter):
 
     @property
     def official_video_test_path(self) -> Path:
-        return Path(self.data_dir) / 'benchmark_data' / 'video' / 'video_test.parquet'
+        return Path(self.data_dir) / 'benchmark_data' / self.OFFICIAL_TEST_DIR / f'{self.OFFICIAL_TEST_DIR}_test.parquet'
 
     def _save_meta(self):
         meta_path = self._paths()['meta']
@@ -78,7 +82,9 @@ class RecIFVideoFormatter(BaseFormatter):
         }
         meta.update(
             {
-                'domain': 'video',
+                'domain': self.DOMAIN,
+                'raw_history_col': self.RAW_HISTORY_COL,
+                'official_test_dir': self.OFFICIAL_TEST_DIR,
                 'n_core': int(self.n_core),
                 'min_length': int(self.min_length),
                 'max_length': int(self.max_length),
@@ -98,13 +104,19 @@ class RecIFVideoFormatter(BaseFormatter):
             return list(value)
         return []
 
+    def _normalize_item_id(self, value):
+        return value
+
+    def _normalize_history_ids(self, history):
+        return [self._normalize_item_id(item) for item in self._normalize_history(history)]
+
     def _load_raw_users(self) -> pd.DataFrame:
-        pnt(f'loading RecIF video histories from {self.source_path}')
-        users = pd.read_parquet(self.source_path, columns=[self.UID_COL, 'hist_video_pid'])
-        users = users.rename(columns={'hist_video_pid': self.HIS_COL})
-        users[self.HIS_COL] = users[self.HIS_COL].apply(self._normalize_history)
+        pnt(f'loading RecIF {self.DOMAIN} histories from {self.source_path}')
+        users = pd.read_parquet(self.source_path, columns=[self.UID_COL, self.RAW_HISTORY_COL])
+        users = users.rename(columns={self.RAW_HISTORY_COL: self.HIS_COL})
+        users[self.HIS_COL] = users[self.HIS_COL].apply(self._normalize_history_ids)
         users = users[users[self.HIS_COL].map(len) > 0].reset_index(drop=True)
-        pnt(f'loaded {len(users)} raw RecIF video users with non-empty history')
+        pnt(f'loaded {len(users)} raw RecIF {self.DOMAIN} users with non-empty history')
         return users
 
     def _stream_caption_pid_set(self) -> set:
@@ -117,7 +129,7 @@ class RecIFVideoFormatter(BaseFormatter):
         )
         for batch in progress:
             pid_array = batch.column(0).to_numpy()
-            caption_pid_set.update(pid_array.tolist())
+            caption_pid_set.update(self._normalize_item_id(pid) for pid in pid_array.tolist())
         pnt(f'caption coverage collected for {len(caption_pid_set)} pids')
         return caption_pid_set
 
@@ -157,7 +169,7 @@ class RecIFVideoFormatter(BaseFormatter):
         return counter
 
     def _load_caption_rows(self, final_item_ids: set) -> pd.DataFrame:
-        pnt(f'loading captions for {len(final_item_ids)} filtered video items from {self.caption_path}')
+        pnt(f'loading captions for {len(final_item_ids)} filtered {self.DOMAIN} items from {self.caption_path}')
         parquet_file = pq.ParquetFile(self.caption_path)
         rows = []
         for batch in tqdm(
@@ -169,9 +181,10 @@ class RecIFVideoFormatter(BaseFormatter):
             if not frame.empty:
                 rows.append(frame)
         if not rows:
-            raise ValueError('No RecIF video items with captions survived filtering')
+            raise ValueError(f'No RecIF {self.DOMAIN} items with captions survived filtering')
         items = pd.concat(rows, ignore_index=True)
         items = items.rename(columns={'dense_caption': 'caption'})
+        items[self.IID_COL] = items[self.IID_COL].apply(self._normalize_item_id)
         items = items.drop_duplicates(subset=[self.IID_COL], keep='first').reset_index(drop=True)
         return items[[self.IID_COL, 'caption']]
 
@@ -232,8 +245,8 @@ class RecIFVideoFormatter(BaseFormatter):
         test_frame = pd.read_parquet(self.official_video_test_path, columns=['hist_pid', 'metadata'])
 
         records = []
-        for index, row in tqdm(test_frame.iterrows(), total=len(test_frame), desc='official-video-test'):
-            history = self._normalize_history(row['hist_pid'])
+        for index, row in tqdm(test_frame.iterrows(), total=len(test_frame), desc=f'official-{self.DOMAIN}-test'):
+            history = self._normalize_history_ids(row['hist_pid'])
             history = [pid for pid in history if pid in final_item_set]
             history = self._tail_history(history)
             if not history:
@@ -244,20 +257,20 @@ class RecIFVideoFormatter(BaseFormatter):
                 metadata = json.loads(metadata)
             elif not isinstance(metadata, dict):
                 metadata = {}
-            answer_pids = self._normalize_history(metadata.get('answer_pid'))
+            answer_pids = self._normalize_history_ids(metadata.get('answer_pid'))
             answer_pids = [pid for pid in answer_pids if pid in final_item_set]
             if not answer_pids:
                 continue
 
             records.append(
                 {
-                    self.UID_COL: f'official-video-test-{index}',
+                    self.UID_COL: f'official-{self.DOMAIN}-test-{index}',
                     self.HIS_COL: history,
                     'answer_pids': answer_pids,
                 }
             )
         if not records:
-            raise ValueError('No official RecIF video test samples survived item filtering')
+            raise ValueError(f'No official RecIF {self.DOMAIN} test samples survived item filtering')
         return pd.DataFrame(records)
 
 
@@ -299,3 +312,49 @@ class RecIFVideoXLargeAllOfficialFormatter(RecIFVideoXLargeFormatter):
 
     def load_test_users(self) -> pd.DataFrame:
         return self._load_official_video_test_users()
+
+
+class RecIFAdsFormatter(RecIFVideoFormatter, abc.ABC):
+    DOMAIN = 'ad'
+    RAW_HISTORY_COL = 'hist_ad_pid'
+    OFFICIAL_TEST_DIR = 'ad'
+    PROVIDES_TEST_SET = True
+    MULTI_ITEM_COL = 'answer_pids'
+    USE_ALL_USERS_IN_PROCESSOR = True
+    SPLIT_RATIO = 0.9
+
+    @classmethod
+    @abc.abstractmethod
+    def get_seed(cls):
+        raise NotImplementedError
+
+    def _normalize_item_id(self, value):
+        if pd.isna(value):
+            return value
+        return int(value)
+
+
+class RecIFAdsAllFormatter(RecIFAdsFormatter):
+    @classmethod
+    def get_seed(cls):
+        return 'recifadsall'
+
+
+class RecIFAdsLargeAllFormatter(RecIFAdsFormatter):
+    DEFAULT_N_CORE = 10
+    DEFAULT_MIN_LENGTH = 5
+    DEFAULT_MAX_LENGTH = 50
+
+    @classmethod
+    def get_seed(cls):
+        return 'recifadslargeall'
+
+
+class RecIFAdsXLargeAllFormatter(RecIFAdsFormatter):
+    DEFAULT_N_CORE = 3
+    DEFAULT_MIN_LENGTH = 5
+    DEFAULT_MAX_LENGTH = 50
+
+    @classmethod
+    def get_seed(cls):
+        return 'recifadsxlargeall'

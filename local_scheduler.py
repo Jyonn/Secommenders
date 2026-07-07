@@ -3,7 +3,16 @@ from pathlib import Path
 from utils import Schedule
 
 
-DATASETS = ['mind', 'recifvideo', 'recifvideolarge', 'recifvideoxlarge', 'recifvideoxlargeall']
+DATASETS = [
+    'mind',
+    'recifvideo',
+    'recifvideolarge',
+    'recifvideoxlarge',
+    'recifvideoxlargeall',
+    'recifadsall',
+    'recifadslargeall',
+    'recifadsxlargeall',
+]
 LLM_MODELS = ['llama3', 'qwen35th9b', 'qwen35th4b', 'qwen35th08b']
 SCRATCH_MODELS = ['scratch']
 SOURCE_MODELS = ['llama3', 'qwen3embedding06b']
