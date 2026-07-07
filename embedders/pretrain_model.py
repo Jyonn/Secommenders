@@ -30,17 +30,42 @@ class RecIFPretrainModel(BaseModel):
 
     @staticmethod
     def _as_vector(value):
+        if value is None:
+            raise ValueError('embedding value is null')
+
         if isinstance(value, np.ndarray) and value.dtype == object and value.ndim == 1:
-            vectors = [RecIFPretrainModel._as_vector(item) for item in value.tolist()]
+            vectors = []
+            for item in value.tolist():
+                try:
+                    vectors.append(RecIFPretrainModel._as_vector(item))
+                except ValueError as exc:
+                    if 'null' in str(exc) or 'empty' in str(exc):
+                        continue
+                    raise
+            if not vectors:
+                raise ValueError('embedding value is empty')
             dims = {int(vector.shape[0]) for vector in vectors}
             if len(dims) == 1 and len(vectors) > 1:
                 return np.stack(vectors, axis=0).mean(axis=0).astype(np.float32)
+            if len(vectors) == 1:
+                return vectors[0]
 
         if isinstance(value, (list, tuple)) and value:
-            vectors = [RecIFPretrainModel._as_vector(item) for item in value]
+            vectors = []
+            for item in value:
+                try:
+                    vectors.append(RecIFPretrainModel._as_vector(item))
+                except ValueError as exc:
+                    if 'null' in str(exc) or 'empty' in str(exc):
+                        continue
+                    raise
+            if not vectors:
+                raise ValueError('embedding value is empty')
             dims = {int(vector.shape[0]) for vector in vectors}
             if len(dims) == 1 and len(vectors) > 1:
                 return np.stack(vectors, axis=0).mean(axis=0).astype(np.float32)
+            if len(vectors) == 1:
+                return vectors[0]
 
         def flatten(item):
             if hasattr(item, 'as_py'):
@@ -51,6 +76,8 @@ class RecIFPretrainModel(BaseModel):
                 for child in item:
                     yield from flatten(child)
                 return
+            if item is None:
+                return
             yield float(item)
 
         vector = np.fromiter(flatten(value), dtype=np.float32)
@@ -59,7 +86,13 @@ class RecIFPretrainModel(BaseModel):
         return vector
 
     def _merge_vectors(self, row: dict):
-        vectors = [self._as_vector(row[column]) for column in self.EMBEDDING_COLUMNS]
+        vectors = []
+        item_id = row.get('pid')
+        for column in self.EMBEDDING_COLUMNS:
+            try:
+                vectors.append(self._as_vector(row[column]))
+            except Exception as exc:
+                raise ValueError(f'failed to parse {column} for pid={item_id}: {exc}') from exc
         if len(vectors) == 1:
             return vectors[0]
         return np.concatenate(vectors, axis=0)
