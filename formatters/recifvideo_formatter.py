@@ -333,6 +333,9 @@ class RecIFAdsFormatter(RecIFVideoFormatter, abc.ABC):
             return value
         return int(value)
 
+    def load_test_users(self) -> pd.DataFrame:
+        return self._load_official_video_test_users()
+
 
 class RecIFAdsAllFormatter(RecIFAdsFormatter):
     @classmethod
