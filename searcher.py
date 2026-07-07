@@ -2,6 +2,8 @@ import argparse
 import json
 from pathlib import Path
 
+from utils.artifact_identity import normalize_legacy_train_config
+
 
 ROOT = Path(__file__).resolve().parent
 
@@ -180,7 +182,8 @@ def path_value(meta_path: Path, offset: int, default='-'):
 
 def row_from_meta(meta_path: Path, root: Path):
     meta = read_json_if_exists(meta_path) or {}
-    config = meta.get('config') if isinstance(meta.get('config'), dict) else {}
+    raw_config = meta.get('config') if isinstance(meta.get('config'), dict) else {}
+    config = normalize_legacy_train_config(raw_config) if raw_config else {}
     identity = meta.get('artifact_identity') if isinstance(meta.get('artifact_identity'), dict) else {}
     metrics = meta.get('test_metrics') if isinstance(meta.get('test_metrics'), dict) else None
     if metrics is None:

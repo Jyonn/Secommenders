@@ -95,6 +95,36 @@ TRAIN_CONFIG_REQUIRED_FIELDS = {
 TRAIN_CONFIG_FIELD_NAMES = TRAIN_CONFIG_REQUIRED_FIELDS | set(TRAIN_CONFIG_DEFAULTS)
 
 
+def normalize_legacy_train_config(raw_config: dict[str, Any]):
+    config = dict(raw_config)
+    view_text = '+'.join(
+        str(config.get(key) or '').strip().lower()
+        for key in ('repr_type', 'task_type')
+    )
+
+    legacy_aliases = {
+        'repr_model': 'repr_source_model',
+        'repr_best': 'sid_export',
+        'sid_decoding': 'code_decoding',
+        'sid_beam_width': 'code_beam_width',
+        'sid_collision_loss_weight': 'code_collision_loss_weight',
+        'sid_quantizer_name': 'sid_coder',
+        'hash_quantizer_name': 'hash_coder',
+    }
+    for legacy_key, current_key in legacy_aliases.items():
+        if config.get(current_key) is None and config.get(legacy_key) is not None:
+            config[current_key] = config[legacy_key]
+
+    legacy_quantizer = config.get('repr_quantizer') or config.get('quantizer_name')
+    if legacy_quantizer is not None:
+        if 'sid' in view_text and config.get('sid_coder') is None:
+            config['sid_coder'] = legacy_quantizer
+        if 'hash' in view_text and config.get('hash_coder') is None:
+            config['hash_coder'] = legacy_quantizer
+
+    return config
+
+
 class TrainedArtifactRegistryConflict(ValueError):
     def __init__(
         self,
@@ -1234,6 +1264,7 @@ def register_trained_artifact(
 def migrate_train_config_dict(raw_config: dict[str, Any]):
     if not isinstance(raw_config, dict):
         raise ValueError('meta.config must be a dict')
+    raw_config = normalize_legacy_train_config(raw_config)
     config = deepcopy(TRAIN_CONFIG_DEFAULTS)
     for key, value in raw_config.items():
         if key in TRAIN_CONFIG_FIELD_NAMES:
