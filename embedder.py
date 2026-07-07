@@ -60,6 +60,7 @@ class Embedder:
             meta['source'] = 'recif-pretrain-parquet'
             meta['data_dir'] = self.data_dir
             meta['embedding_columns'] = list(getattr(self.caller, 'EMBEDDING_COLUMNS', ()))
+            meta['pretrain_stats'] = getattr(self.caller, 'pretrain_stats', {})
         self.meta_path.write_text(json.dumps(meta, indent=2))
 
     def is_cached(self):

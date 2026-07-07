@@ -97,6 +97,14 @@ class RecIFPretrainModel(BaseModel):
             return vectors[0]
         return np.concatenate(vectors, axis=0)
 
+    @staticmethod
+    def _mean_vector(vectors, *, column: str):
+        dims = {int(vector.shape[0]) for vector in vectors}
+        if len(dims) != 1:
+            preview = ', '.join(str(dim) for dim in sorted(dims)[:10])
+            raise ValueError(f'RecIF pretrain {column} embeddings have inconsistent dimensions: {preview}')
+        return np.stack(list(vectors), axis=0).mean(axis=0).astype(np.float32)
+
     def embed_items(self, item_ids: list, data_dir: str | Path, normalize=False):
         if not self.EMBEDDING_COLUMNS:
             raise ValueError(f'{self.get_name()} does not define EMBEDDING_COLUMNS')
@@ -109,7 +117,9 @@ class RecIFPretrainModel(BaseModel):
 
         normalized_item_ids = [self._normalize_item_id(item_id) for item_id in item_ids]
         item_positions = {item_id: index for index, item_id in enumerate(normalized_item_ids)}
-        found = {}
+        row_seen = set()
+        found_by_column = {column: {} for column in self.EMBEDDING_COLUMNS}
+        parse_errors = {column: {} for column in self.EMBEDDING_COLUMNS}
         parquet_paths = sorted(embeddings_dir.glob('*.parquet'))
         if not parquet_paths:
             raise FileNotFoundError(f'No parquet files found in RecIF pretrain embedding directory: {embeddings_dir}')
@@ -126,26 +136,68 @@ class RecIFPretrainModel(BaseModel):
                 frame = batch.to_pandas()
                 for row in frame.to_dict('records'):
                     item_id = self._normalize_item_id(row.get('pid'))
-                    if item_id not in item_positions or item_id in found:
+                    if item_id not in item_positions:
                         continue
-                    found[item_id] = self._merge_vectors(row)
-            if len(found) == len(item_positions):
+                    row_seen.add(item_id)
+                    for column in self.EMBEDDING_COLUMNS:
+                        if item_id in found_by_column[column]:
+                            continue
+                        try:
+                            found_by_column[column][item_id] = self._as_vector(row[column])
+                        except ValueError as exc:
+                            parse_errors[column][item_id] = str(exc)
+                        except Exception as exc:
+                            raise ValueError(f'failed to parse {column} for pid={item_id}: {exc}') from exc
+            if all(len(found_by_column[column]) == len(item_positions) for column in self.EMBEDDING_COLUMNS):
                 break
 
-        missing = [item_id for item_id in normalized_item_ids if item_id not in found]
+        missing = [item_id for item_id in normalized_item_ids if item_id not in row_seen]
         if missing:
             preview = ', '.join(str(item_id) for item_id in missing[:10])
             raise ValueError(
-                f'RecIF pretrain embeddings missing {len(missing)}/{len(normalized_item_ids)} processed items; '
+                f'RecIF pretrain embedding rows missing {len(missing)}/{len(normalized_item_ids)} processed items; '
                 f'first missing: {preview}'
             )
 
-        dims = {int(vector.shape[0]) for vector in found.values()}
+        imputed_by_column = {}
+        for column in self.EMBEDDING_COLUMNS:
+            found = found_by_column[column]
+            if not found:
+                raise ValueError(f'RecIF pretrain column {column} has no valid embeddings')
+            fallback = self._mean_vector(found.values(), column=column)
+            missing_column_items = [item_id for item_id in normalized_item_ids if item_id not in found]
+            for item_id in missing_column_items:
+                found[item_id] = fallback
+            imputed_by_column[column] = len(missing_column_items)
+            if missing_column_items:
+                preview = ', '.join(str(item_id) for item_id in missing_column_items[:10])
+                pnt(
+                    f'imputed {len(missing_column_items)} missing {column} embeddings with global mean; '
+                    f'first missing: {preview}'
+                )
+
+        merged = []
+        for item_id in normalized_item_ids:
+            vectors = [found_by_column[column][item_id] for column in self.EMBEDDING_COLUMNS]
+            if len(vectors) == 1:
+                merged.append(vectors[0])
+            else:
+                merged.append(np.concatenate(vectors, axis=0))
+
+        dims = {int(vector.shape[0]) for vector in merged}
         if len(dims) != 1:
             preview = ', '.join(str(dim) for dim in sorted(dims)[:10])
             raise ValueError(f'RecIF pretrain embeddings have inconsistent dimensions: {preview}')
 
-        embeddings = np.stack([found[item_id] for item_id in normalized_item_ids], axis=0).astype(np.float32)
+        self.pretrain_stats = {
+            'imputed_by_column': imputed_by_column,
+            'parse_error_count_by_column': {
+                column: len(errors)
+                for column, errors in parse_errors.items()
+            },
+        }
+
+        embeddings = np.stack(merged, axis=0).astype(np.float32)
         if normalize:
             embeddings = self.normalize(embeddings)
         return embeddings
