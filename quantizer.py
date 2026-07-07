@@ -311,6 +311,11 @@ class Quantizer:
                 for part in trainer_config['save_best_by'].split(',')
                 if part.strip()
             ]
+        # The template still carries the legacy output_dir
+        # artifacts/quantized/<data>/<model>/<quantizer>.  Runtime artifacts are
+        # now resolved through the SIGN registry, so force the trainer to save
+        # checkpoints where the exporter will read them.
+        trainer_config['output_dir'] = str(self.output_dir)
         trainer_config['device'] = self._resolve_device()
         self.trainer_args = TrainingConfig(**trainer_config)
         return VQTrainer(model=self.model, args=self.trainer_args)
