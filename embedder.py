@@ -22,6 +22,7 @@ class Embedder:
         self.device = conf.device or GPU.auto_choose(torch_format=True)
 
         data_dir = get_data_dir(self.data)
+        self.data_dir = data_dir
         self.processor = load_processor(self.data, data_dir=data_dir)
         self.processor.load()
         self.items_path = Path(self.processor.store_dir) / 'items.parquet'
@@ -55,6 +56,10 @@ class Embedder:
             'content_attrs': list(self.processor.default_attrs),
             'processed_items_path': str(self.items_path),
         }
+        if hasattr(self.caller, 'embed_items'):
+            meta['source'] = 'recif-pretrain-parquet'
+            meta['data_dir'] = self.data_dir
+            meta['embedding_columns'] = list(getattr(self.caller, 'EMBEDDING_COLUMNS', ()))
         self.meta_path.write_text(json.dumps(meta, indent=2))
 
     def is_cached(self):
@@ -88,6 +93,16 @@ class Embedder:
     def embed(self):
         if self.is_cached() and not self.conf.overwrite:
             pnt(f'cached embeddings found at {self.embedding_path}')
+            return
+
+        if hasattr(self.caller, 'embed_items'):
+            pnt(f'loading RecIF provided embeddings for {self.data}/{self.model_name}')
+            item_ids = self.processor.items[self.processor.IID_COL].tolist()
+            embeddings = self.caller.embed_items(item_ids, data_dir=self.data_dir, normalize=self.conf.normalize)
+            np.save(self.embedding_path, embeddings)
+            self.processor.items[[self.processor.IID_COL]].to_parquet(self.item_ids_path, index=False)
+            self.save_meta(embeddings)
+            pnt(f'embeddings saved to {self.embedding_path}')
             return
 
         pnt(f'loading item content from {self.items_path}')

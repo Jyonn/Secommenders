@@ -58,6 +58,10 @@ def load_embedder(model, **kwargs):
     embedders = ClassHub.embedders()
     key = model.lower()
     if key not in embedders:
+        compact_key = key.replace('-', '').replace('_', '')
+        if compact_key in embedders:
+            key = compact_key
+    if key not in embedders:
         available = ', '.join(sorted(embedders.class_dict))
         raise ValueError(f'Unknown embedder: {model}. Available: {available}')
     embedder = embedders[key]
