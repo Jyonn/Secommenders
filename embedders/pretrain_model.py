@@ -30,6 +30,18 @@ class RecIFPretrainModel(BaseModel):
 
     @staticmethod
     def _as_vector(value):
+        if isinstance(value, np.ndarray) and value.dtype == object and value.ndim == 1:
+            vectors = [RecIFPretrainModel._as_vector(item) for item in value.tolist()]
+            dims = {int(vector.shape[0]) for vector in vectors}
+            if len(dims) == 1 and len(vectors) > 1:
+                return np.stack(vectors, axis=0).mean(axis=0).astype(np.float32)
+
+        if isinstance(value, (list, tuple)) and value:
+            vectors = [RecIFPretrainModel._as_vector(item) for item in value]
+            dims = {int(vector.shape[0]) for vector in vectors}
+            if len(dims) == 1 and len(vectors) > 1:
+                return np.stack(vectors, axis=0).mean(axis=0).astype(np.float32)
+
         def flatten(item):
             if hasattr(item, 'as_py'):
                 item = item.as_py()
