@@ -22,6 +22,7 @@ class RecIFVideoFormatter(BaseFormatter):
     DOMAIN = 'video'
     RAW_HISTORY_COL = 'hist_video_pid'
     OFFICIAL_TEST_DIR = 'video'
+    OFFICIAL_TEST_HISTORY_COL = 'hist_pid'
 
     REQUIRE_STRINGIFY = False
 
@@ -85,6 +86,7 @@ class RecIFVideoFormatter(BaseFormatter):
                 'domain': self.DOMAIN,
                 'raw_history_col': self.RAW_HISTORY_COL,
                 'official_test_dir': self.OFFICIAL_TEST_DIR,
+                'official_test_history_col': self.OFFICIAL_TEST_HISTORY_COL,
                 'n_core': int(self.n_core),
                 'min_length': int(self.min_length),
                 'max_length': int(self.max_length),
@@ -227,7 +229,7 @@ class RecIFVideoFormatter(BaseFormatter):
         self._filtered_users = users.reset_index(drop=True)
 
         pnt(
-            f'RecIF video formatting complete with items={len(self._filtered_items)} '
+            f'RecIF {self.DOMAIN} formatting complete with items={len(self._filtered_items)} '
             f'users={len(self._filtered_users)}'
         )
 
@@ -242,11 +244,11 @@ class RecIFVideoFormatter(BaseFormatter):
     def _load_official_video_test_users(self) -> pd.DataFrame:
         self._run_filter_pipeline()
         final_item_set = set(cast(pd.DataFrame, self._filtered_items)[self.IID_COL].tolist())
-        test_frame = pd.read_parquet(self.official_video_test_path, columns=['hist_pid', 'metadata'])
+        test_frame = pd.read_parquet(self.official_video_test_path, columns=[self.OFFICIAL_TEST_HISTORY_COL, 'metadata'])
 
         records = []
         for index, row in tqdm(test_frame.iterrows(), total=len(test_frame), desc=f'official-{self.DOMAIN}-test'):
-            history = self._normalize_history_ids(row['hist_pid'])
+            history = self._normalize_history_ids(row[self.OFFICIAL_TEST_HISTORY_COL])
             history = [pid for pid in history if pid in final_item_set]
             history = self._tail_history(history)
             if not history:
@@ -318,6 +320,7 @@ class RecIFAdsFormatter(RecIFVideoFormatter, abc.ABC):
     DOMAIN = 'ad'
     RAW_HISTORY_COL = 'hist_ad_pid'
     OFFICIAL_TEST_DIR = 'ad'
+    OFFICIAL_TEST_HISTORY_COL = 'hist_ad'
     PROVIDES_TEST_SET = True
     MULTI_ITEM_COL = 'answer_pids'
     USE_ALL_USERS_IN_PROCESSOR = True
