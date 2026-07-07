@@ -30,10 +30,21 @@ class RecIFPretrainModel(BaseModel):
 
     @staticmethod
     def _as_vector(value):
-        vector = np.asarray(value, dtype=np.float32)
-        if vector.ndim == 0:
-            raise ValueError('embedding value is scalar')
-        return vector.reshape(-1)
+        def flatten(item):
+            if hasattr(item, 'as_py'):
+                item = item.as_py()
+            if isinstance(item, np.ndarray):
+                item = item.tolist()
+            if isinstance(item, (list, tuple)):
+                for child in item:
+                    yield from flatten(child)
+                return
+            yield float(item)
+
+        vector = np.fromiter(flatten(value), dtype=np.float32)
+        if vector.size == 0:
+            raise ValueError('embedding value is empty')
+        return vector
 
     def _merge_vectors(self, row: dict):
         vectors = [self._as_vector(row[column]) for column in self.EMBEDDING_COLUMNS]
@@ -83,6 +94,11 @@ class RecIFPretrainModel(BaseModel):
                 f'RecIF pretrain embeddings missing {len(missing)}/{len(normalized_item_ids)} processed items; '
                 f'first missing: {preview}'
             )
+
+        dims = {int(vector.shape[0]) for vector in found.values()}
+        if len(dims) != 1:
+            preview = ', '.join(str(dim) for dim in sorted(dims)[:10])
+            raise ValueError(f'RecIF pretrain embeddings have inconsistent dimensions: {preview}')
 
         embeddings = np.stack([found[item_id] for item_id in normalized_item_ids], axis=0).astype(np.float32)
         if normalize:
