@@ -20,7 +20,7 @@ from utils.artifact_identity import (
 )
 from utils.compile import CompileConfig, normalize_model_name
 from utils.experiment_template import build_default_upstreams
-from utils.function import load_processor
+from utils import function
 from utils.logging import setup_logging
 from utils.pipeline import ensure_embedded, ensure_quantized
 from utils import model as model_utils
@@ -337,7 +337,7 @@ class Compiler:
 
     def load_processor(self):
         pnt(f'loading processed dataset {self.config.data}')
-        self.processor = load_processor(self.config.data)
+        self.processor = function.load_processor(self.config.data)
         self.processor.load()
         self.uid_raw_items = self.processor.items[self.processor.IID_COL].tolist()
         self.uid_item_map = {item_id: index for index, item_id in enumerate(self.uid_raw_items)}
