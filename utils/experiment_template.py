@@ -156,11 +156,10 @@ def build_default_upstreams(flat: dict):
     uid_cluster_embedding['content_model'] = normalize_model_name(uid_cluster_embedding.get('content_model'))
     uid_clusterer = {
         'levels': uid_cluster_levels,
+        'embedding': uid_cluster_embedding,
         'word2vec': merge_defaults(CLUSTERER_WORD2VEC_DEFAULTS, flat.get('uid_cluster_word2vec') or {}),
         'cluster': merge_defaults(CLUSTERER_CONFIG_DEFAULTS, flat.get('uid_cluster_config') or {}),
     }
-    if uid_cluster_embedding.get('source') != CLUSTERER_EMBEDDING_DEFAULTS['source']:
-        uid_clusterer['embedding'] = uid_cluster_embedding
     return {
         'sid': {
             'kind': 'quantized',

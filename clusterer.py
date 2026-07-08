@@ -275,19 +275,11 @@ class Clusterer:
         payload.pop('seed', None)
         payload['resolved_levels'] = self.resolved_levels
         if self.config.embedding_source == 'collaborative':
-            payload.pop('embedding_source', None)
-            payload.pop('content_model', None)
-            payload.pop('content_reduce_dim', None)
-            payload.pop('normalize_blocks', None)
-            payload.pop('mix_alpha', None)
             prefix = 'ptw2v'
             details = (
                 f'__d{self.config.vector_size}__w{self.config.window}__p{self.config.patience}'
             )
         elif self.config.embedding_source == 'content':
-            for key in ('vector_size', 'window', 'patience', 'sg', 'negative', 'min_count', 'workers'):
-                payload.pop(key, None)
-            payload.pop('mix_alpha', None)
             prefix = 'ptcontent'
             details = (
                 f'__cm-{self.config.content_model}'

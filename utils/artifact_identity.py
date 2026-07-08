@@ -503,23 +503,21 @@ def clustered_spec_from_config(config: Any, resolved_levels: list[int] | None = 
     payload = {
         'levels_spec': str(_config_get(config, 'levels_spec')).strip().lower(),
         'resolved_levels': levels,
-        'cluster': {
-            'batch_size': int(_config_get(config, 'cluster_batch_size')),
-            'max_iter': int(_config_get(config, 'cluster_max_iter')),
-            'n_init': int(_config_get(config, 'cluster_n_init')),
-        },
-    }
-    if embedding_payload:
-        payload['embedding'] = embedding_payload
-    if not embedding_payload or embedding_payload.get('source') == 'concat':
-        payload['word2vec'] = {
+        'embedding': embedding_payload,
+        'word2vec': {
             'vector_size': int(_config_get(config, 'vector_size')),
             'window': int(_config_get(config, 'window')),
             'patience': int(_config_get(config, 'patience')),
             'sg': int(_config_get(config, 'sg')),
             'negative': int(_config_get(config, 'negative')),
             'min_count': int(_config_get(config, 'min_count')),
-        }
+        },
+        'cluster': {
+            'batch_size': int(_config_get(config, 'cluster_batch_size')),
+            'max_iter': int(_config_get(config, 'cluster_max_iter')),
+            'n_init': int(_config_get(config, 'cluster_n_init')),
+        },
+    }
     return {
         'stage': 'clustered',
         'schema_version': CLUSTERED_SPEC_VERSION,
@@ -583,8 +581,6 @@ def _clustered_embedding_payload_from_values(
         mix_alpha=None,
 ):
     source = str(source or CLUSTERER_EMBEDDING_DEFAULTS['source']).strip().lower()
-    if source == 'collaborative':
-        return None
     if content_model is not None and str(content_model).strip().lower() in {'', 'none', 'null'}:
         content_model = None
     payload = {
@@ -598,9 +594,8 @@ def _clustered_embedding_payload_from_values(
             normalize_blocks,
             CLUSTERER_EMBEDDING_DEFAULTS['normalize_blocks'],
         ),
+        'mix_alpha': _float_with_default(mix_alpha, CLUSTERER_EMBEDDING_DEFAULTS['mix_alpha']),
     }
-    if source == 'concat':
-        payload['mix_alpha'] = _float_with_default(mix_alpha, CLUSTERER_EMBEDDING_DEFAULTS['mix_alpha'])
     return payload
 
 
@@ -622,16 +617,8 @@ def clustered_spec_from_meta(meta: dict):
     payload = {
         'levels_spec': str(levels_spec).strip().lower(),
         'resolved_levels': _parse_clustered_levels(resolved_levels),
-        'cluster': {
-            'batch_size': _int_with_default(cluster.get('batch_size'), CLUSTERER_CONFIG_DEFAULTS['batch_size']),
-            'max_iter': _int_with_default(cluster.get('max_iter'), CLUSTERER_CONFIG_DEFAULTS['max_iter']),
-            'n_init': _int_with_default(cluster.get('n_init'), CLUSTERER_CONFIG_DEFAULTS['n_init']),
-        },
-    }
-    if embedding_payload:
-        payload['embedding'] = embedding_payload
-    if not embedding_payload or embedding_payload.get('source') == 'concat':
-        payload['word2vec'] = {
+        'embedding': embedding_payload,
+        'word2vec': {
             'vector_size': _int_with_default(
                 word2vec.get('vector_size', legacy_word2vec.get('vector_size')),
                 CLUSTERER_WORD2VEC_DEFAULTS['vector_size'],
@@ -647,7 +634,13 @@ def clustered_spec_from_meta(meta: dict):
             'sg': _int_with_default(word2vec.get('sg'), CLUSTERER_WORD2VEC_DEFAULTS['sg']),
             'negative': _int_with_default(word2vec.get('negative'), CLUSTERER_WORD2VEC_DEFAULTS['negative']),
             'min_count': _int_with_default(word2vec.get('min_count'), CLUSTERER_WORD2VEC_DEFAULTS['min_count']),
-        }
+        },
+        'cluster': {
+            'batch_size': _int_with_default(cluster.get('batch_size'), CLUSTERER_CONFIG_DEFAULTS['batch_size']),
+            'max_iter': _int_with_default(cluster.get('max_iter'), CLUSTERER_CONFIG_DEFAULTS['max_iter']),
+            'n_init': _int_with_default(cluster.get('n_init'), CLUSTERER_CONFIG_DEFAULTS['n_init']),
+        },
+    }
     return {
         'stage': 'clustered',
         'schema_version': CLUSTERED_SPEC_VERSION,
