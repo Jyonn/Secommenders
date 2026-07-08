@@ -409,8 +409,13 @@ class Clusterer:
         content_summary = None
 
         if self._uses_collaborative:
+            pnt(f'cluster embedding source={source}: fitting collaborative word2vec block')
             coll_embeddings = self._fit_word2vec()
         if self._uses_content:
+            pnt(
+                f'cluster embedding source={source}: loading content block '
+                f'model={self.config.content_model} reduce_dim={self.config.content_reduce_dim}'
+            )
             content_embeddings, content_summary = self._prepare_content_embeddings()
 
         if source == 'collaborative':
@@ -429,6 +434,11 @@ class Clusterer:
                 ],
                 axis=1,
             ).astype(np.float32)
+            pnt(
+                f'cluster embedding source=concat final_dim={embeddings.shape[1]} '
+                f'coll_dim={coll_embeddings.shape[1]} content_dim={content_embeddings.shape[1]} '
+                f'alpha={self.config.mix_alpha}'
+            )
 
         self.embedding_summary = {
             'source': source,
@@ -792,6 +802,10 @@ class Clusterer:
         pnt(
             f'prepare uid hierarchy for {self.config.data} '
             f'levels={self.config.levels_spec} -> {self.resolved_levels} '
+            f'embedding_source={self.config.embedding_source} '
+            f'content_model={self.config.content_model} '
+            f'content_reduce_dim={self.config.content_reduce_dim} '
+            f'mix_alpha={self.config.mix_alpha} '
             f'output={self.output_dir}'
         )
         if self.is_cached():

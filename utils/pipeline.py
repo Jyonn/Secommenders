@@ -111,13 +111,19 @@ def ensure_quantized(data: str, model: str, quantizer_name: str | None = None, q
 
 def ensure_clustered(data: str, uid_cluster_levels: str, clusterer_spec: dict | None = None):
     setup_logging()
-    pnt(f'auto preparing clustered artifacts for {data}/{uid_cluster_levels}')
     from clusterer import Clusterer, ClustererConfig
 
     clusterer_spec = clusterer_spec or {}
     embedding = clusterer_spec.get('embedding') or {}
     word2vec = clusterer_spec.get('word2vec') or {}
     cluster = clusterer_spec.get('cluster') or {}
+    source = embedding.get('source') or 'collaborative'
+    content_model = embedding.get('content_model')
+    pnt(
+        f'auto preparing clustered artifacts for {data}/{uid_cluster_levels} '
+        f'source={source}'
+        + (f' content_model={content_model}' if content_model else '')
+    )
 
     kwargs = {
         'data': data,
