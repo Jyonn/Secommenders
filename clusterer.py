@@ -11,21 +11,56 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pigmento import pnt
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.decomposition import PCA
 from tqdm import tqdm
 
 from processors.base_processor import Processor
+from utils.artifact import ArtifactStore
 from utils.artifact_identity import (
     clustered_artifact_identity,
     register_clustered_artifact,
     resolve_clustered_dir,
 )
-from utils.compile import short_config_hash
+from utils.compile import compact_float, normalize_model_name, short_config_hash
 from utils.config_init import ConfigInit
 from utils.data import get_data_dir
 from utils.function import load_processor
 from utils.gpu import GPU
 from utils.logging import setup_logging
 from utils.uid_hierarchy import format_uid_cluster_levels, resolve_uid_cluster_levels
+
+
+def _parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {'true', '1', 'yes', 'y'}:
+        return True
+    if text in {'false', '0', 'no', 'n'}:
+        return False
+    raise ValueError(f'expected boolean value, got {value!r}')
+
+
+def _normalize_optional_text(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {'none', 'null'}:
+        return None
+    return text
+
+
+def _parse_optional_int(value, default=0):
+    if value is None:
+        return default
+    text = str(value).strip()
+    if not text or text.lower() in {'none', 'null'}:
+        return default
+    return int(value)
+
+
+def _get_config_value(section, name, default=None):
+    return getattr(section, name, default) if section is not None else default
 
 
 @dataclass
@@ -40,12 +75,18 @@ class ClustererConfig:
     min_count: int
     workers: int
     seed: int
+    embedding_source: str
+    content_model: str | None
+    content_reduce_dim: int
+    normalize_blocks: bool
+    mix_alpha: float
     cluster_batch_size: int
     cluster_max_iter: int
     cluster_n_init: int
 
     @classmethod
     def from_refconfig(cls, configurations):
+        embedding = getattr(configurations.config, 'embedding', None)
         return cls(
             data=str(configurations.config.data.name).lower(),
             levels_spec=str(configurations.config.data.levels).strip().lower(),
@@ -57,6 +98,11 @@ class ClustererConfig:
             min_count=int(configurations.config.word2vec.min_count),
             workers=int(configurations.config.word2vec.workers),
             seed=int(configurations.config.word2vec.seed),
+            embedding_source=str(_get_config_value(embedding, 'source', 'collaborative')).strip().lower(),
+            content_model=normalize_model_name(_normalize_optional_text(_get_config_value(embedding, 'content_model'))),
+            content_reduce_dim=_parse_optional_int(_get_config_value(embedding, 'content_reduce_dim', 128), default=0),
+            normalize_blocks=_parse_bool(_get_config_value(embedding, 'normalize_blocks', True)),
+            mix_alpha=float(_get_config_value(embedding, 'mix_alpha', 0.5)),
             cluster_batch_size=int(configurations.config.cluster.batch_size),
             cluster_max_iter=int(configurations.config.cluster.max_iter),
             cluster_n_init=int(configurations.config.cluster.n_init),
@@ -98,21 +144,33 @@ class Clusterer:
 
     def __init__(self, config: ClustererConfig):
         self.config = config
-        if self.config.vector_size <= 0:
-            raise ValueError(f'word2vec.vector_size must be positive, got {self.config.vector_size}')
-        if self.config.window <= 0:
-            raise ValueError(f'word2vec.window must be positive, got {self.config.window}')
-        if self.config.sg != 1:
-            raise ValueError(f'PyTorch clusterer only supports skip-gram (word2vec.sg=1), got {self.config.sg}')
-        if self.config.min_count != 1:
+        if self.config.embedding_source not in {'collaborative', 'content', 'concat'}:
             raise ValueError(
-                f'PyTorch clusterer currently expects word2vec.min_count=1 to preserve the processed item vocabulary, '
-                f'got {self.config.min_count}'
+                'cluster embedding source must be one of: collaborative, content, concat; '
+                f'got {self.config.embedding_source}'
             )
-        if self.config.patience <= 0:
-            raise ValueError(f'word2vec.patience must be positive, got {self.config.patience}')
-        if self.config.negative <= 0:
-            raise ValueError(f'word2vec.negative must be positive, got {self.config.negative}')
+        if self._uses_content and not self.config.content_model:
+            raise ValueError('cluster_content_model is required when cluster_embedding_source is content or concat')
+        if self.config.content_reduce_dim < 0:
+            raise ValueError(f'content_reduce_dim must be >= 0, got {self.config.content_reduce_dim}')
+        if self.config.embedding_source == 'concat' and not (0.0 <= self.config.mix_alpha <= 1.0):
+            raise ValueError(f'mix_alpha must be in [0, 1], got {self.config.mix_alpha}')
+        if self._uses_collaborative:
+            if self.config.vector_size <= 0:
+                raise ValueError(f'word2vec.vector_size must be positive, got {self.config.vector_size}')
+            if self.config.window <= 0:
+                raise ValueError(f'word2vec.window must be positive, got {self.config.window}')
+            if self.config.sg != 1:
+                raise ValueError(f'PyTorch clusterer only supports skip-gram (word2vec.sg=1), got {self.config.sg}')
+            if self.config.min_count != 1:
+                raise ValueError(
+                    f'PyTorch clusterer currently expects word2vec.min_count=1 to preserve the processed item vocabulary, '
+                    f'got {self.config.min_count}'
+                )
+            if self.config.patience <= 0:
+                raise ValueError(f'word2vec.patience must be positive, got {self.config.patience}')
+            if self.config.negative <= 0:
+                raise ValueError(f'word2vec.negative must be positive, got {self.config.negative}')
 
         torch.manual_seed(self.config.seed)
         np.random.seed(self.config.seed)
@@ -129,8 +187,16 @@ class Clusterer:
         self.valid_histories = self._load_histories(self.processor.valid_set, split_name='valid')
         self.item_frequency = self._count_item_frequency(self.train_histories)
         self.seen_train_items = self._collect_seen_items(self.train_histories)
-        self.train_pair_count = self._count_positive_pairs(self.train_histories, window=self.config.window)
-        self.valid_pair_count = self._count_positive_pairs(self.valid_histories, window=self.config.window)
+        self.train_pair_count = (
+            self._count_positive_pairs(self.train_histories, window=self.config.window)
+            if self._uses_collaborative
+            else 0
+        )
+        self.valid_pair_count = (
+            self._count_positive_pairs(self.valid_histories, window=self.config.window)
+            if self._uses_collaborative
+            else 0
+        )
 
         self.resolved_levels = resolve_uid_cluster_levels(self.config.levels_spec, len(self.item_ids))
         self.prepare_id = self._build_prepare_id()
@@ -146,6 +212,15 @@ class Clusterer:
         self.child_nodes_path = self.output_dir / 'child_nodes.parquet'
         self.leaf_items_path = self.output_dir / 'leaf_items.parquet'
         self.word2vec_summary = None
+        self.embedding_summary = None
+
+    @property
+    def _uses_collaborative(self):
+        return self.config.embedding_source in {'collaborative', 'concat'}
+
+    @property
+    def _uses_content(self):
+        return self.config.embedding_source in {'content', 'concat'}
 
     def _load_histories(self, frame: pd.DataFrame | None, split_name: str):
         if frame is None or frame.empty:
@@ -199,10 +274,37 @@ class Clusterer:
         payload = asdict(self.config).copy()
         payload.pop('seed', None)
         payload['resolved_levels'] = self.resolved_levels
+        if self.config.embedding_source == 'collaborative':
+            payload.pop('embedding_source', None)
+            payload.pop('content_model', None)
+            payload.pop('content_reduce_dim', None)
+            payload.pop('normalize_blocks', None)
+            payload.pop('mix_alpha', None)
+            prefix = 'ptw2v'
+            details = (
+                f'__d{self.config.vector_size}__w{self.config.window}__p{self.config.patience}'
+            )
+        elif self.config.embedding_source == 'content':
+            for key in ('vector_size', 'window', 'patience', 'sg', 'negative', 'min_count', 'workers'):
+                payload.pop(key, None)
+            payload.pop('mix_alpha', None)
+            prefix = 'ptcontent'
+            details = (
+                f'__cm-{self.config.content_model}'
+                f'__pca{self.config.content_reduce_dim}'
+            )
+        else:
+            prefix = 'ptmix'
+            details = (
+                f'__d{self.config.vector_size}__w{self.config.window}__p{self.config.patience}'
+                f'__cm-{self.config.content_model}'
+                f'__pca{self.config.content_reduce_dim}'
+                f'__a{compact_float(self.config.mix_alpha)}'
+            )
         payload_hash = short_config_hash(payload)
         return (
-            f'ptw2v__lv{format_uid_cluster_levels(self.resolved_levels)}'
-            f'__d{self.config.vector_size}__w{self.config.window}__p{self.config.patience}'
+            f'{prefix}__lv{format_uid_cluster_levels(self.resolved_levels)}'
+            f'{details}'
             f'__h{payload_hash}'
         )
 
@@ -229,6 +331,123 @@ class Clusterer:
             and meta.get('resolved_levels') == self.resolved_levels
             and int(meta.get('item_count', -1)) == len(self.item_ids)
         )
+
+    @staticmethod
+    def _l2_normalize(embeddings: np.ndarray):
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-12)
+        return (embeddings / norms).astype(np.float32)
+
+    def _load_content_embeddings(self):
+        from utils.pipeline import ensure_embedded
+
+        ensure_embedded(self.config.data, self.config.content_model)
+        embedding_dir = ArtifactStore(self.config.data).embedded_dir(self.config.content_model)
+        embeddings_path = embedding_dir / 'embeddings.npy'
+        item_ids_path = embedding_dir / 'item_ids.parquet'
+        if not embeddings_path.exists() or not item_ids_path.exists():
+            raise FileNotFoundError(
+                f'embedded artifacts not found for {self.config.data}/{self.config.content_model}: '
+                f'{embeddings_path}, {item_ids_path}'
+            )
+
+        content_embeddings = np.load(embeddings_path).astype(np.float32)
+        item_ids_frame = pd.read_parquet(item_ids_path)
+        id_column = self.processor.IID_COL if self.processor.IID_COL in item_ids_frame.columns else item_ids_frame.columns[0]
+        content_item_ids = [str(item_id) for item_id in item_ids_frame[id_column].tolist()]
+        if len(content_item_ids) != int(content_embeddings.shape[0]):
+            raise ValueError(
+                f'embedded item_ids length mismatch for {self.config.data}/{self.config.content_model}: '
+                f'ids={len(content_item_ids)} embeddings={content_embeddings.shape[0]}'
+            )
+
+        content_index = {item_id: index for index, item_id in enumerate(content_item_ids)}
+        missing_items = [item_id for item_id in self.item_ids if item_id not in content_index]
+        if missing_items:
+            preview = ', '.join(missing_items[:5])
+            raise ValueError(
+                f'content embeddings missing {len(missing_items)} processed items for '
+                f'{self.config.data}/{self.config.content_model}; first missing: {preview}'
+            )
+
+        ordered = np.asarray(
+            [content_embeddings[content_index[item_id]] for item_id in self.item_ids],
+            dtype=np.float32,
+        )
+        if not np.isfinite(ordered).all():
+            raise ValueError(f'content embeddings contain NaN/Inf for {self.config.data}/{self.config.content_model}')
+        return ordered
+
+    def _prepare_content_embeddings(self):
+        content_embeddings = self._load_content_embeddings()
+        original_dim = int(content_embeddings.shape[1])
+        if self.config.normalize_blocks:
+            content_embeddings = self._l2_normalize(content_embeddings)
+
+        pca_dim = int(self.config.content_reduce_dim or 0)
+        explained_variance = None
+        if pca_dim > 0:
+            max_components = min(content_embeddings.shape[0], content_embeddings.shape[1])
+            if pca_dim < max_components:
+                pnt(
+                    f'PCA reducing content embeddings for {self.config.data}/{self.config.content_model} '
+                    f'{original_dim}->{pca_dim}'
+                )
+                pca = PCA(n_components=pca_dim, svd_solver='randomized', random_state=self.config.seed)
+                content_embeddings = pca.fit_transform(content_embeddings).astype(np.float32)
+                explained_variance = float(np.sum(pca.explained_variance_ratio_))
+            else:
+                pnt(
+                    f'skip PCA for {self.config.data}/{self.config.content_model}: '
+                    f'requested {pca_dim} >= max_components {max_components}'
+                )
+
+        return content_embeddings.astype(np.float32), {
+            'content_model': self.config.content_model,
+            'content_original_dim': original_dim,
+            'content_dim': int(content_embeddings.shape[1]),
+            'content_reduce_dim': pca_dim,
+            'content_pca_explained_variance_ratio': explained_variance,
+        }
+
+    def _build_cluster_embeddings(self):
+        source = self.config.embedding_source
+        coll_embeddings = None
+        content_embeddings = None
+        content_summary = None
+
+        if self._uses_collaborative:
+            coll_embeddings = self._fit_word2vec()
+        if self._uses_content:
+            content_embeddings, content_summary = self._prepare_content_embeddings()
+
+        if source == 'collaborative':
+            embeddings = coll_embeddings
+        elif source == 'content':
+            embeddings = content_embeddings
+        else:
+            if self.config.normalize_blocks:
+                coll_embeddings = self._l2_normalize(coll_embeddings)
+            coll_weight = float(np.sqrt(self.config.mix_alpha))
+            content_weight = float(np.sqrt(1.0 - self.config.mix_alpha))
+            embeddings = np.concatenate(
+                [
+                    coll_embeddings * coll_weight,
+                    content_embeddings * content_weight,
+                ],
+                axis=1,
+            ).astype(np.float32)
+
+        self.embedding_summary = {
+            'source': source,
+            'normalize_blocks': self.config.normalize_blocks,
+            'mix_alpha': self.config.mix_alpha if source == 'concat' else None,
+            'collaborative_dim': int(coll_embeddings.shape[1]) if coll_embeddings is not None else None,
+            'final_dim': int(embeddings.shape[1]),
+        }
+        if content_summary:
+            self.embedding_summary.update(content_summary)
+        return embeddings.astype(np.float32)
 
     def _iter_pair_batches(self, histories: list[list[int]], batch_size: int, shuffle: bool, seed_offset: int):
         order = np.arange(len(histories))
@@ -544,6 +763,7 @@ class Clusterer:
             'hierarchy_depth': self.hierarchy_depth,
             'item_count': len(self.item_ids),
             'embedding_dim': int(embeddings.shape[1]),
+            'embedding': self.embedding_summary,
             'word2vec': {
                 'algorithm': 'pytorch-sgns',
                 'vector_size': self.config.vector_size,
@@ -576,7 +796,7 @@ class Clusterer:
             pnt(f'cached cluster hierarchy found at {self.output_dir}')
             return self
 
-        embeddings = self._fit_word2vec()
+        embeddings = self._build_cluster_embeddings()
         item_node_ids, item_labels, node_meta, child_nodes, leaf_items = self._build_hierarchy(embeddings)
 
         pd.DataFrame({self.processor.IID_COL: self.item_ids}).to_parquet(self.item_ids_path, index=False)
@@ -600,8 +820,40 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Build hierarchical uid decoding assets from processed user sequences.')
     parser.add_argument('--data', required=True, help='Dataset name, such as mind.')
     parser.add_argument('--uid_cluster_levels', required=True, help='Hierarchy spec such as 10, 20,20, auto,auto, auto/10,auto/10.')
+    parser.add_argument(
+        '--cluster_embedding_source',
+        default=None,
+        choices=['collaborative', 'content', 'concat'],
+        help='Embedding source for clustering.',
+    )
+    parser.add_argument('--cluster_content_model', default=None, help='Content embedding model, such as pretrain-text.')
+    parser.add_argument(
+        '--cluster_content_reduce_dim',
+        default=None,
+        type=int,
+        help='PCA dimension for content embeddings; 0 disables PCA.',
+    )
+    parser.add_argument('--cluster_normalize_blocks', default=None, help='Whether to L2-normalize blocks before PCA/concat.')
+    parser.add_argument(
+        '--cluster_mix_alpha',
+        default=None,
+        type=float,
+        help='Collaborative block distance weight for concat source.',
+    )
     parser.add_argument('--config', default='config/clusterer.yaml', help='Clusterer config path.')
     args = parser.parse_args()
+
+    kwargs = {
+        'data': args.data.lower(),
+        'uid_cluster_levels': args.uid_cluster_levels,
+        'cluster_embedding_source': args.cluster_embedding_source,
+        'cluster_content_model': args.cluster_content_model,
+        'cluster_content_reduce_dim': args.cluster_content_reduce_dim,
+        'cluster_normalize_blocks': args.cluster_normalize_blocks,
+        'cluster_mix_alpha': args.cluster_mix_alpha,
+        'config': args.config,
+    }
+    kwargs = {key: value for key, value in kwargs.items() if value is not None}
 
     configurations = ConfigInit(
         required_args=['data'],
@@ -609,13 +861,7 @@ if __name__ == '__main__':
             config=args.config,
         ),
         makedirs=[],
-    ).parse_kwargs(
-        {
-            'data': args.data.lower(),
-            'uid_cluster_levels': args.uid_cluster_levels,
-            'config': args.config,
-        }
-    )
+    ).parse_kwargs(kwargs)
     config = ClustererConfig.from_refconfig(configurations)
     clusterer = Clusterer(config)
     clusterer.run()

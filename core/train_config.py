@@ -6,6 +6,7 @@ from utils import model as model_utils
 from utils.compile import CompileConfig, canonicalize_repr_type, compact_float, normalize_model_name, short_config_hash
 from utils.experiment_template import (
     CLUSTERER_CONFIG_DEFAULTS,
+    CLUSTERER_EMBEDDING_DEFAULTS,
     CLUSTERER_WORD2VEC_DEFAULTS,
     HASH_QUANTIZER_CONFIG_DEFAULTS,
     QUANTIZER_TRAINER_DEFAULTS,
@@ -154,6 +155,10 @@ class TrainConfig:
             CLUSTERER_CONFIG_DEFAULTS,
             _plain_section(_get(uid_clusterer, 'cluster'), CLUSTERER_CONFIG_DEFAULTS),
         )
+        uid_cluster_embedding = merge_defaults(
+            CLUSTERER_EMBEDDING_DEFAULTS,
+            _plain_section(_get(uid_clusterer, 'embedding'), CLUSTERER_EMBEDDING_DEFAULTS),
+        )
         sid_coder = str(
             _get(sid_quantizer, 'name', getattr(data_config, 'sid_coder', '')) or ''
         ).strip().lower() or None
@@ -174,6 +179,7 @@ class TrainConfig:
             'hash_embedding_model': _get(hash_section, 'embedding_model', None),
             'hash_quantizer_config': hash_quantizer_config,
             'uid_cluster_levels': uid_cluster_levels,
+            'uid_cluster_embedding': uid_cluster_embedding,
             'uid_cluster_word2vec': uid_cluster_word2vec,
             'uid_cluster_config': uid_cluster_config,
         }

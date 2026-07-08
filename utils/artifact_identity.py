@@ -7,6 +7,7 @@ from typing import Any
 from utils.compile import CompileConfig, normalize_model_name, short_config_hash
 from utils.experiment_template import (
     CLUSTERER_CONFIG_DEFAULTS,
+    CLUSTERER_EMBEDDING_DEFAULTS,
     CLUSTERER_WORD2VEC_DEFAULTS,
     HASH_QUANTIZER_CONFIG_DEFAULTS,
     QUANTIZER_TRAINER_DEFAULTS,
@@ -435,23 +436,41 @@ def quantized_spec_from_meta(meta: dict):
 
 def clustered_spec_from_config(config: Any, resolved_levels: list[int] | None = None):
     levels = list(resolved_levels or [])
+    embedding_payload = _clustered_embedding_payload_from_values(
+        source=_config_get(config, 'embedding_source', CLUSTERER_EMBEDDING_DEFAULTS['source']),
+        content_model=_config_get(config, 'content_model', CLUSTERER_EMBEDDING_DEFAULTS['content_model']),
+        content_reduce_dim=_config_get(
+            config,
+            'content_reduce_dim',
+            CLUSTERER_EMBEDDING_DEFAULTS['content_reduce_dim'],
+        ),
+        normalize_blocks=_config_get(
+            config,
+            'normalize_blocks',
+            CLUSTERER_EMBEDDING_DEFAULTS['normalize_blocks'],
+        ),
+        mix_alpha=_config_get(config, 'mix_alpha', CLUSTERER_EMBEDDING_DEFAULTS['mix_alpha']),
+    )
     payload = {
         'levels_spec': str(_config_get(config, 'levels_spec')).strip().lower(),
         'resolved_levels': levels,
-        'word2vec': {
-            'vector_size': int(_config_get(config, 'vector_size')),
-            'window': int(_config_get(config, 'window')),
-            'patience': int(_config_get(config, 'patience')),
-            'sg': int(_config_get(config, 'sg')),
-            'negative': int(_config_get(config, 'negative')),
-            'min_count': int(_config_get(config, 'min_count')),
-        },
         'cluster': {
             'batch_size': int(_config_get(config, 'cluster_batch_size')),
             'max_iter': int(_config_get(config, 'cluster_max_iter')),
             'n_init': int(_config_get(config, 'cluster_n_init')),
         },
     }
+    if embedding_payload:
+        payload['embedding'] = embedding_payload
+    if not embedding_payload or embedding_payload.get('source') == 'concat':
+        payload['word2vec'] = {
+            'vector_size': int(_config_get(config, 'vector_size')),
+            'window': int(_config_get(config, 'window')),
+            'patience': int(_config_get(config, 'patience')),
+            'sg': int(_config_get(config, 'sg')),
+            'negative': int(_config_get(config, 'negative')),
+            'min_count': int(_config_get(config, 'min_count')),
+        }
     return {
         'stage': 'clustered',
         'schema_version': CLUSTERED_SPEC_VERSION,
@@ -489,17 +508,81 @@ def _int_with_default(value, default):
     return int(default if value is None else value)
 
 
+def _bool_with_default(value, default):
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {'true', '1', 'yes', 'y'}:
+        return True
+    if text in {'false', '0', 'no', 'n'}:
+        return False
+    return bool(value)
+
+
+def _float_with_default(value, default):
+    return float(default if value is None else value)
+
+
+def _clustered_embedding_payload_from_values(
+        *,
+        source,
+        content_model=None,
+        content_reduce_dim=None,
+        normalize_blocks=None,
+        mix_alpha=None,
+):
+    source = str(source or CLUSTERER_EMBEDDING_DEFAULTS['source']).strip().lower()
+    if source == 'collaborative':
+        return None
+    if content_model is not None and str(content_model).strip().lower() in {'', 'none', 'null'}:
+        content_model = None
+    payload = {
+        'source': source,
+        'content_model': normalize_model_name(content_model),
+        'content_reduce_dim': _int_with_default(
+            content_reduce_dim,
+            CLUSTERER_EMBEDDING_DEFAULTS['content_reduce_dim'],
+        ),
+        'normalize_blocks': _bool_with_default(
+            normalize_blocks,
+            CLUSTERER_EMBEDDING_DEFAULTS['normalize_blocks'],
+        ),
+    }
+    if source == 'concat':
+        payload['mix_alpha'] = _float_with_default(mix_alpha, CLUSTERER_EMBEDDING_DEFAULTS['mix_alpha'])
+    return payload
+
+
 def clustered_spec_from_meta(meta: dict):
     word2vec = meta.get('word2vec') or {}
     cluster = meta.get('cluster') or {}
+    embedding = meta.get('embedding') or {}
     legacy = _legacy_clustered_folder_config(meta.get('_legacy_folder') or meta.get('legacy_folder'))
     legacy_word2vec = legacy.get('word2vec') or {}
     resolved_levels = meta.get('resolved_levels') or legacy.get('resolved_levels') or []
     levels_spec = meta.get('levels_spec') or legacy.get('levels_spec')
+    embedding_payload = _clustered_embedding_payload_from_values(
+        source=embedding.get('source'),
+        content_model=embedding.get('content_model'),
+        content_reduce_dim=embedding.get('content_reduce_dim'),
+        normalize_blocks=embedding.get('normalize_blocks'),
+        mix_alpha=embedding.get('mix_alpha'),
+    )
     payload = {
         'levels_spec': str(levels_spec).strip().lower(),
         'resolved_levels': _parse_clustered_levels(resolved_levels),
-        'word2vec': {
+        'cluster': {
+            'batch_size': _int_with_default(cluster.get('batch_size'), CLUSTERER_CONFIG_DEFAULTS['batch_size']),
+            'max_iter': _int_with_default(cluster.get('max_iter'), CLUSTERER_CONFIG_DEFAULTS['max_iter']),
+            'n_init': _int_with_default(cluster.get('n_init'), CLUSTERER_CONFIG_DEFAULTS['n_init']),
+        },
+    }
+    if embedding_payload:
+        payload['embedding'] = embedding_payload
+    if not embedding_payload or embedding_payload.get('source') == 'concat':
+        payload['word2vec'] = {
             'vector_size': _int_with_default(
                 word2vec.get('vector_size', legacy_word2vec.get('vector_size')),
                 CLUSTERER_WORD2VEC_DEFAULTS['vector_size'],
@@ -515,13 +598,7 @@ def clustered_spec_from_meta(meta: dict):
             'sg': _int_with_default(word2vec.get('sg'), CLUSTERER_WORD2VEC_DEFAULTS['sg']),
             'negative': _int_with_default(word2vec.get('negative'), CLUSTERER_WORD2VEC_DEFAULTS['negative']),
             'min_count': _int_with_default(word2vec.get('min_count'), CLUSTERER_WORD2VEC_DEFAULTS['min_count']),
-        },
-        'cluster': {
-            'batch_size': _int_with_default(cluster.get('batch_size'), CLUSTERER_CONFIG_DEFAULTS['batch_size']),
-            'max_iter': _int_with_default(cluster.get('max_iter'), CLUSTERER_CONFIG_DEFAULTS['max_iter']),
-            'n_init': _int_with_default(cluster.get('n_init'), CLUSTERER_CONFIG_DEFAULTS['n_init']),
-        },
-    }
+        }
     return {
         'stage': 'clustered',
         'schema_version': CLUSTERED_SPEC_VERSION,

@@ -115,12 +115,18 @@ def ensure_clustered(data: str, uid_cluster_levels: str, clusterer_spec: dict | 
     from clusterer import Clusterer, ClustererConfig
 
     clusterer_spec = clusterer_spec or {}
+    embedding = clusterer_spec.get('embedding') or {}
     word2vec = clusterer_spec.get('word2vec') or {}
     cluster = clusterer_spec.get('cluster') or {}
 
     kwargs = {
         'data': data,
         'uid_cluster_levels': uid_cluster_levels,
+        'cluster_embedding_source': embedding.get('source'),
+        'cluster_content_model': embedding.get('content_model'),
+        'cluster_content_reduce_dim': embedding.get('content_reduce_dim'),
+        'cluster_normalize_blocks': embedding.get('normalize_blocks'),
+        'cluster_mix_alpha': embedding.get('mix_alpha'),
         'cluster_vector_size': word2vec.get('vector_size'),
         'cluster_window': word2vec.get('window'),
         'cluster_patience': word2vec.get('patience'),

@@ -2,6 +2,13 @@ data:
   name: ${data}$
   levels: ${uid_cluster_levels:auto}$
 
+embedding:
+  source: ${cluster_embedding_source:collaborative}$
+  content_model: ${cluster_content_model:null}$
+  content_reduce_dim: ${cluster_content_reduce_dim:128}$
+  normalize_blocks: ${cluster_normalize_blocks:true}$
+  mix_alpha: ${cluster_mix_alpha:0.5}$
+
 word2vec:
   vector_size: ${cluster_vector_size:64}$
   window: ${cluster_window:5}$

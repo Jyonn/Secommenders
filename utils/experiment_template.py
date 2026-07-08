@@ -65,6 +65,14 @@ CLUSTERER_CONFIG_DEFAULTS = {
     'n_init': 10,
 }
 
+CLUSTERER_EMBEDDING_DEFAULTS = {
+    'source': 'collaborative',
+    'content_model': None,
+    'content_reduce_dim': 128,
+    'normalize_blocks': True,
+    'mix_alpha': 0.5,
+}
+
 
 def normalize_optional_string(value):
     if value is None:
@@ -144,6 +152,15 @@ def build_default_upstreams(flat: dict):
     sid_quantizer_name = str(flat.get('sid_quantizer_name') or flat.get('sid_coder') or 'rqvae').strip().lower()
     hash_quantizer_name = str(flat.get('hash_quantizer_name') or flat.get('hash_coder') or 'simhash').strip().lower()
     uid_cluster_levels = normalize_optional_string(flat.get('uid_cluster_levels')) or 'auto'
+    uid_cluster_embedding = merge_defaults(CLUSTERER_EMBEDDING_DEFAULTS, flat.get('uid_cluster_embedding') or {})
+    uid_cluster_embedding['content_model'] = normalize_model_name(uid_cluster_embedding.get('content_model'))
+    uid_clusterer = {
+        'levels': uid_cluster_levels,
+        'word2vec': merge_defaults(CLUSTERER_WORD2VEC_DEFAULTS, flat.get('uid_cluster_word2vec') or {}),
+        'cluster': merge_defaults(CLUSTERER_CONFIG_DEFAULTS, flat.get('uid_cluster_config') or {}),
+    }
+    if uid_cluster_embedding.get('source') != CLUSTERER_EMBEDDING_DEFAULTS['source']:
+        uid_clusterer['embedding'] = uid_cluster_embedding
     return {
         'sid': {
             'kind': 'quantized',
@@ -170,11 +187,7 @@ def build_default_upstreams(flat: dict):
         },
         'uid': {
             'kind': 'clustered',
-            'clusterer': {
-                'levels': uid_cluster_levels,
-                'word2vec': merge_defaults(CLUSTERER_WORD2VEC_DEFAULTS, flat.get('uid_cluster_word2vec') or {}),
-                'cluster': merge_defaults(CLUSTERER_CONFIG_DEFAULTS, flat.get('uid_cluster_config') or {}),
-            },
+            'clusterer': uid_clusterer,
         },
     }
 

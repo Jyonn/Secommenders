@@ -71,6 +71,12 @@ upstreams:
     kind: clustered
     clusterer:
       levels: ${uid_cluster_levels:auto}$
+      embedding:
+        source: ${uid_cluster_embedding_source:collaborative}$
+        content_model: ${uid_cluster_content_model:null}$
+        content_reduce_dim: ${uid_cluster_content_reduce_dim:128}$
+        normalize_blocks: ${uid_cluster_normalize_blocks:true}$
+        mix_alpha: ${uid_cluster_mix_alpha:0.5}$
       word2vec:
         vector_size: ${cluster_vector_size:64}$
         window: ${cluster_window:5}$
