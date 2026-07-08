@@ -164,6 +164,7 @@ def generic_stage_payload(stage: str, meta: dict):
             'prepare_id': meta.get('prepare_id'),
             'levels_spec': meta.get('levels_spec'),
             'resolved_levels': meta.get('resolved_levels'),
+            'embedding': strip_path_values(meta.get('embedding') or {}),
             'word2vec': strip_path_values(meta.get('word2vec') or {}),
             'cluster': strip_path_values(meta.get('cluster') or {}),
         }

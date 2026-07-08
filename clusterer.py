@@ -441,6 +441,15 @@ class Clusterer:
             self.embedding_summary.update(content_summary)
         return embeddings.astype(np.float32)
 
+    def _embedding_config_meta(self):
+        return {
+            'source': self.config.embedding_source,
+            'content_model': self.config.content_model,
+            'content_reduce_dim': self.config.content_reduce_dim,
+            'normalize_blocks': self.config.normalize_blocks,
+            'mix_alpha': self.config.mix_alpha,
+        }
+
     def _iter_pair_batches(self, histories: list[list[int]], batch_size: int, shuffle: bool, seed_offset: int):
         order = np.arange(len(histories))
         if shuffle:
@@ -755,7 +764,8 @@ class Clusterer:
             'hierarchy_depth': self.hierarchy_depth,
             'item_count': len(self.item_ids),
             'embedding_dim': int(embeddings.shape[1]),
-            'embedding': self.embedding_summary,
+            'embedding': self._embedding_config_meta(),
+            'embedding_summary': self.embedding_summary,
             'word2vec': {
                 'algorithm': 'pytorch-sgns',
                 'vector_size': self.config.vector_size,
