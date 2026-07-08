@@ -126,6 +126,55 @@ def normalize_legacy_train_config(raw_config: dict[str, Any]):
     return config
 
 
+def _nested_dict(value: Any):
+    return value if isinstance(value, dict) else {}
+
+
+def _canonical_train_upstreams(config: dict[str, Any]):
+    existing = _nested_dict(config.get('upstreams'))
+    sid = _nested_dict(existing.get('sid'))
+    sid_quantizer = _nested_dict(sid.get('quantizer'))
+    sid_encoder = _nested_dict(sid.get('encoder'))
+    hash_section = _nested_dict(existing.get('hash'))
+    hash_quantizer = _nested_dict(hash_section.get('quantizer'))
+    uid = _nested_dict(existing.get('uid'))
+    uid_clusterer = _nested_dict(uid.get('clusterer'))
+
+    flat = dict(config)
+    if sid.get('embedding_model') is not None:
+        flat['sid_embedding_model'] = sid.get('embedding_model')
+    if sid.get('export') is not None:
+        flat['sid_export'] = sid.get('export')
+    if sid_quantizer.get('name') is not None:
+        flat['sid_coder'] = sid_quantizer.get('name')
+    if isinstance(sid_quantizer.get('config'), dict):
+        flat['sid_quantizer_config'] = sid_quantizer.get('config')
+    if sid_encoder.get('name') is not None:
+        flat['sid_encoder_name'] = sid_encoder.get('name')
+    if isinstance(sid_encoder.get('config'), dict):
+        flat['sid_encoder_config'] = sid_encoder.get('config')
+    if isinstance(sid.get('trainer'), dict):
+        flat['sid_quantizer_trainer'] = sid.get('trainer')
+
+    if hash_section.get('embedding_model') is not None:
+        flat['hash_embedding_model'] = hash_section.get('embedding_model')
+    if hash_quantizer.get('name') is not None:
+        flat['hash_coder'] = hash_quantizer.get('name')
+    if isinstance(hash_quantizer.get('config'), dict):
+        flat['hash_quantizer_config'] = hash_quantizer.get('config')
+
+    if uid_clusterer.get('levels') is not None:
+        flat['uid_cluster_levels'] = uid_clusterer.get('levels')
+    if isinstance(uid_clusterer.get('embedding'), dict):
+        flat['uid_cluster_embedding'] = uid_clusterer.get('embedding')
+    if isinstance(uid_clusterer.get('word2vec'), dict):
+        flat['uid_cluster_word2vec'] = uid_clusterer.get('word2vec')
+    if isinstance(uid_clusterer.get('cluster'), dict):
+        flat['uid_cluster_config'] = uid_clusterer.get('cluster')
+
+    return build_default_upstreams(flat)
+
+
 class TrainedArtifactRegistryConflict(ValueError):
     def __init__(
         self,
@@ -633,8 +682,7 @@ def compiled_spec_from_meta(meta: dict):
         config['sid_coder'] = quantizer_name
     if quantizer_name and 'hash' in view_text and config.get('hash_coder') is None:
         config['hash_coder'] = quantizer_name
-    if not config.get('upstreams'):
-        config['upstreams'] = build_default_upstreams(config)
+    config['upstreams'] = _canonical_train_upstreams(config)
     compile_config = CompileConfig(
         data=config.get('data') or meta.get('data') or meta.get('dataset'),
         model=config.get('model'),
@@ -1025,6 +1073,8 @@ def _compile_config_from_config(config: Any):
         upstreams = build_default_upstreams(config if isinstance(config, dict) else {
             key: _config_get(config, key) for key in TRAIN_CONFIG_FIELD_NAMES
         })
+    elif isinstance(config, dict):
+        upstreams = _canonical_train_upstreams(config)
     return CompileConfig(
         data=_config_get(config, 'data'),
         model=_config_get(config, 'model'),
@@ -1051,6 +1101,8 @@ def _config_sign_payload(config: Any):
         normalized.update({key: value for key, value in config.items() if key in TRAIN_CONFIG_FIELD_NAMES})
     else:
         normalized.update({key: _config_get(config, key) for key in TRAIN_CONFIG_FIELD_NAMES})
+    if isinstance(normalized.get('upstreams'), dict):
+        normalized['upstreams'] = _canonical_train_upstreams(normalized)
     payload = {key: normalized.get(key) for key in TRAIN_CONFIG_FIELD_NAMES if key in normalized}
     payload.pop('device', None)
     batch_size = int(payload.get('batch_size') or TRAIN_CONFIG_DEFAULTS['batch_size'])
@@ -1359,7 +1411,6 @@ def migrate_train_config_dict(raw_config: dict[str, Any]):
         config['metrics'] = [part.strip().lower() for part in config['metrics'].split(',') if part.strip()]
     if isinstance(config.get('valid_only'), bool):
         config['valid_only'] = -1 if config['valid_only'] else 0
-    if not config.get('upstreams'):
-        config['upstreams'] = build_default_upstreams(config)
+    config['upstreams'] = _canonical_train_upstreams(config)
 
     return {key: config[key] for key in TRAIN_CONFIG_FIELD_NAMES}
