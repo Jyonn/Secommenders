@@ -83,6 +83,8 @@ class CompileConfig:
             upstreams['sid'] = deepcopy(self.upstreams['sid'])
         if 'hash' in self.used_views and self.upstreams.get('hash'):
             upstreams['hash'] = deepcopy(self.upstreams['hash'])
+        if 'uid' in self.used_views and self.upstreams.get('uid'):
+            upstreams['uid'] = deepcopy(self.upstreams['uid'])
         return upstreams
 
     @property
