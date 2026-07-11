@@ -389,7 +389,7 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
     SCALE_SHUFFLE_SEED = 'RECIF'
     SCALE_SHUFFLE_VERSION = 'v1'
 
-    DEFAULT_N_CORE = 3
+    DEFAULT_N_CORE = 10
     DEFAULT_MIN_LENGTH = 5
     DEFAULT_MAX_LENGTH = 50
 
