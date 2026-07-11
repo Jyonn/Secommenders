@@ -424,7 +424,11 @@ def main():
     parser.add_argument('--sample-pairs', type=int, default=100_000)
     parser.add_argument('--negative-per-positive', type=int, default=1)
     parser.add_argument('--embedding-model', default=None, help='Content embedding model under artifacts/embedded/<data>/<model>.')
-    parser.add_argument('--sid-embedding-model', default=None)
+    parser.add_argument(
+        '--sid-embedding-model',
+        default=None,
+        help='Optional override for SID embedding model. Defaults to --embedding-model.',
+    )
     parser.add_argument('--sid-coder', default=None)
     parser.add_argument('--sid-export', default='coll')
     parser.add_argument('--topk', default='20,50,100')
@@ -517,8 +521,9 @@ def main():
         print_retrieval_report(f'embedding:{args.embedding_model}', retrieval_rows)
         reports['spaces'].setdefault(f'embedding:{args.embedding_model}', {})['retrieval'] = retrieval_rows
 
-    if args.sid_embedding_model and args.sid_coder:
-        codes, export_dir = load_sid_codes(data, args.sid_embedding_model, args.sid_coder, args.sid_export, item_ids)
+    sid_embedding_model = args.sid_embedding_model or args.embedding_model
+    if sid_embedding_model and args.sid_coder:
+        codes, export_dir = load_sid_codes(data, sid_embedding_model, args.sid_coder, args.sid_export, item_ids)
         pos_prefix, pos_hamming = sid_pair_features(codes, positive_pairs)
         neg_prefix, neg_hamming = sid_pair_features(codes, negative_pairs)
         prefix_row = describe_scores(f'sid-prefix:{args.sid_coder}/{args.sid_export}', pos_prefix, neg_prefix, higher_is_closer=True)
@@ -547,7 +552,7 @@ def main():
         print_score_report(score_rows)
     else:
         print_section('no representation spaces requested')
-        print('  pass --embedding-model and/or --sid-embedding-model --sid-coder')
+        print('  pass --embedding-model and/or --sid-coder')
 
     if args.json_out:
         output_path = Path(args.json_out)
