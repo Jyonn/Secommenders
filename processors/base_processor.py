@@ -241,7 +241,7 @@ class Processor:
             and processed_meta.get('formatted_version') == formatted_meta.get('version')
             and counts_match
             and float(processed_meta.get('valid_ratio', -1)) == float(self.VALID_RATIO)
-            and str(processed_meta.get('user_order_seed') or '') == str(self.user_order_seed or '')
+            and str(processed_meta.get('user_order_seed') or '') == str(formatted_meta.get('user_order_seed') or '')
         )
 
     def load_formatted(self):

@@ -11,6 +11,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from formatters.base_formatter import BaseFormatter
+from utils.stable_random import stable_shuffle
 
 
 class RecIFVideoFormatter(BaseFormatter):
@@ -94,7 +95,18 @@ class RecIFVideoFormatter(BaseFormatter):
                 'filter_pipeline': ['caption-exists-once', 'n-core-and-length-three-rounds'],
             }
         )
+        meta.update(self._extra_meta())
         meta_path.write_text(json.dumps(meta, indent=2) + '\n')
+
+    def _cache_meta_matches(self, cached_meta):
+        return (
+            cached_meta.get('domain') == self.DOMAIN
+            and cached_meta.get('raw_history_col') == self.RAW_HISTORY_COL
+            and int(cached_meta.get('n_core', -1)) == int(self.n_core)
+            and int(cached_meta.get('min_length', -1)) == int(self.min_length)
+            and int(cached_meta.get('max_length', -1)) == int(self.max_length)
+            and int(cached_meta.get('filter_rounds', -1)) == int(self.FILTER_ROUNDS)
+        )
 
     @staticmethod
     def _normalize_history(value):
@@ -364,3 +376,297 @@ class RecIFAdsXLargeAllFormatter(RecIFAdsFormatter):
     @classmethod
     def get_seed(cls):
         return 'recifadsxlargeall'
+
+
+class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
+    VER = 'v1.0-scale'
+
+    PROVIDES_TEST_SET = True
+    USE_ALL_USERS_IN_PROCESSOR = True
+    SPLIT_RATIO = 0.9
+
+    SCALE_TEST_RATIO = 0.1
+    SCALE_SHUFFLE_SEED = 'RECIF'
+    SCALE_SHUFFLE_VERSION = 'v1'
+
+    def __init__(self, data_dir=None):
+        super().__init__(data_dir=data_dir)
+        self._filtered_test_users: pd.DataFrame | None = None
+
+    @classmethod
+    @abc.abstractmethod
+    def scale_percent(cls) -> int:
+        raise NotImplementedError
+
+    @classmethod
+    def get_seed(cls):
+        return cls.SCALE_SHUFFLE_SEED
+
+    def _extra_meta(self):
+        return {
+            'scale_percent': int(self.scale_percent()),
+            'scale_test_ratio': float(self.SCALE_TEST_RATIO),
+            'scale_shuffle_seed': self.get_seed(),
+            'scale_shuffle_version': self.SCALE_SHUFFLE_VERSION,
+            'scale_split_policy': 'stable-shuffle-prefix-train-tail-test',
+            'filter_pipeline': [
+                'caption-exists',
+                'repeat-three-rounds:item-n-core-and-non-overlap-max-length-chunks',
+                'stable-shuffle-sequences',
+                'prefix-scale-train-tail-test',
+            ],
+        }
+
+    def _cache_meta_matches(self, cached_meta):
+        return (
+            super()._cache_meta_matches(cached_meta)
+            and int(cached_meta.get('scale_percent', -1)) == int(self.scale_percent())
+            and float(cached_meta.get('scale_test_ratio', -1.0)) == float(self.SCALE_TEST_RATIO)
+            and cached_meta.get('scale_shuffle_version') == self.SCALE_SHUFFLE_VERSION
+        )
+
+    def _split_history_chunks(self, history: list):
+        for start in range(0, len(history), self.max_length):
+            chunk = history[start:start + self.max_length]
+            if len(chunk) >= self.min_length:
+                yield chunk
+
+    def _users_to_sequence_records(self, users: pd.DataFrame):
+        records = []
+        iterator = zip(users[self.UID_COL].tolist(), users[self.HIS_COL].tolist())
+        for uid, history in tqdm(iterator, total=len(users), desc='seed-sequences'):
+            normalized = self._normalize_history_ids(history)
+            for chunk in self._split_history_chunks(normalized):
+                records.append({'source_uid': uid, self.HIS_COL: chunk})
+        return records
+
+    def _filter_and_chunk_records(self, records: list[dict], allowed_items: set, desc: str):
+        filtered_records = []
+        for record in tqdm(records, total=len(records), desc=desc):
+            history = [pid for pid in record[self.HIS_COL] if pid in allowed_items]
+            for chunk in self._split_history_chunks(history):
+                filtered_records.append({'source_uid': record['source_uid'], self.HIS_COL: chunk})
+        return filtered_records
+
+    def _records_item_set(self, records: list[dict]) -> set:
+        item_set = set()
+        for record in records:
+            item_set.update(record[self.HIS_COL])
+        return item_set
+
+    def _records_to_users(self, records: list[dict], split: str):
+        rows = []
+        for index, record in enumerate(records):
+            rows.append(
+                {
+                    self.UID_COL: f'{self.get_name()}-{split}-{index:08d}',
+                    self.HIS_COL: record[self.HIS_COL],
+                    'source_uid': record['source_uid'],
+                    'segment_index': index,
+                    'segment_length': len(record[self.HIS_COL]),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def _run_filter_pipeline(self):
+        if (
+            self._filtered_items is not None
+            and self._filtered_users is not None
+            and self._filtered_test_users is not None
+        ):
+            return
+
+        pnt(
+            f'RecIF {self.DOMAIN} scale formatting settings: '
+            f'scale={self.scale_percent()}%, n_core={self.n_core}, '
+            f'min_length={self.min_length}, max_length={self.max_length}, rounds={self.FILTER_ROUNDS}, '
+            f'test_ratio={self.SCALE_TEST_RATIO:g}'
+        )
+
+        users = self._load_raw_users()
+        records = self._users_to_sequence_records(users)
+
+        caption_pid_set = self._stream_caption_pid_set()
+        records = self._filter_and_chunk_records(records, caption_pid_set, desc='caption-filter-sequences')
+        if not records:
+            raise ValueError(f'No RecIF {self.DOMAIN} scale sequences survived caption filtering')
+
+        for round_index in range(self.FILTER_ROUNDS):
+            counts = self._count_items(record[self.HIS_COL] for record in records)
+            allowed = {pid for pid, count in counts.items() if count >= self.n_core}
+            pnt(
+                f'scale round {round_index + 1}/{self.FILTER_ROUNDS}: '
+                f'{len(allowed)} items survive n_core>={self.n_core}'
+            )
+            records = self._filter_and_chunk_records(
+                records,
+                allowed,
+                desc=f'ncore-sequence-filter@{round_index + 1}',
+            )
+            if not records:
+                raise ValueError(
+                    f'No RecIF {self.DOMAIN} scale sequences survived round {round_index + 1}; '
+                    'try a smaller n_core or min_length'
+                )
+
+        final_item_ids = self._records_item_set(records)
+        items = self._load_caption_rows(final_item_ids)
+        final_item_set = set(items[self.IID_COL].tolist())
+        records = self._filter_and_chunk_records(records, final_item_set, desc='final-caption-align-sequences')
+        if not records:
+            raise ValueError(f'No RecIF {self.DOMAIN} scale sequences survived final item alignment')
+
+        records = stable_shuffle(records, seed=self.get_seed())
+        test_start = int(len(records) * (1.0 - self.SCALE_TEST_RATIO))
+        if len(records) > 1:
+            test_start = min(max(test_start, 1), len(records) - 1)
+        train_limit = int(len(records) * (self.scale_percent() / 100.0))
+        train_limit = min(train_limit, test_start)
+        if train_limit <= 0:
+            raise ValueError(f'scale={self.scale_percent()}% produced no train sequences from {len(records)} records')
+
+        train_records = records[:train_limit]
+        test_records = records[test_start:]
+        if not test_records:
+            raise ValueError(f'scale split produced no test sequences from {len(records)} records')
+
+        self._filtered_items = items.sort_values(self.IID_COL).reset_index(drop=True)
+        self._filtered_users = self._records_to_users(train_records, split='train')
+        self._filtered_test_users = self._records_to_users(test_records, split='test')
+
+        pnt(
+            f'RecIF {self.DOMAIN} scale formatting complete with items={len(self._filtered_items)} '
+            f'train_sequences={len(self._filtered_users)} test_sequences={len(self._filtered_test_users)} '
+            f'total_sequences={len(records)}'
+        )
+
+    def load_test_users(self) -> pd.DataFrame:
+        self._run_filter_pipeline()
+        return cast(pd.DataFrame, self._filtered_test_users)
+
+
+class RecIFVideoScaleFormatter(RecIFScaleFormatter, abc.ABC):
+    DOMAIN = 'video'
+    RAW_HISTORY_COL = 'hist_video_pid'
+    OFFICIAL_TEST_DIR = 'video'
+    OFFICIAL_TEST_HISTORY_COL = 'hist_pid'
+
+
+class RecIFAdsScaleFormatter(RecIFScaleFormatter, abc.ABC):
+    DOMAIN = 'ad'
+    RAW_HISTORY_COL = 'hist_ad_pid'
+    OFFICIAL_TEST_DIR = 'ad'
+    OFFICIAL_TEST_HISTORY_COL = 'hist_ad'
+
+    def _normalize_item_id(self, value):
+        if pd.isna(value):
+            return value
+        return int(value)
+
+
+class RV10Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 10
+
+
+class RV20Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 20
+
+
+class RV30Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 30
+
+
+class RV40Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 40
+
+
+class RV50Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 50
+
+
+class RV60Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 60
+
+
+class RV70Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 70
+
+
+class RV80Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 80
+
+
+class RV90Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 90
+
+
+class RA10Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 10
+
+
+class RA20Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 20
+
+
+class RA30Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 30
+
+
+class RA40Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 40
+
+
+class RA50Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 50
+
+
+class RA60Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 60
+
+
+class RA70Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 70
+
+
+class RA80Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 80
+
+
+class RA90Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 90

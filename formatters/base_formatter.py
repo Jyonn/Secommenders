@@ -80,6 +80,12 @@ class BaseFormatter(abc.ABC):
             'stats': base_dir / 'stats.json',
         }
 
+    def _extra_meta(self):
+        return {}
+
+    def _cache_meta_matches(self, cached_meta):
+        return True
+
     def _save_meta(self):
         meta_path = self._paths()['meta']
         meta = {
@@ -98,6 +104,7 @@ class BaseFormatter(abc.ABC):
             'use_all_users_in_processor': bool(self.USE_ALL_USERS_IN_PROCESSOR),
             'split_ratio': float(self.SPLIT_RATIO),
         }
+        meta.update(self._extra_meta())
         meta_path.write_text(json.dumps(meta, indent=2) + '\n')
 
     def _save_stats(self):
@@ -181,6 +188,7 @@ class BaseFormatter(abc.ABC):
                     and bool(cached_meta.get('use_all_users_in_processor', False))
                     == bool(self.USE_ALL_USERS_IN_PROCESSOR)
                     and float(cached_meta.get('split_ratio', -1.0)) == float(self.SPLIT_RATIO)
+                    and self._cache_meta_matches(cached_meta)
                 )
             except json.JSONDecodeError:
                 cache_meta_valid = False
