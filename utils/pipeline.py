@@ -7,6 +7,7 @@ from utils.config_init import ConfigInit
 from utils.data import get_data_dir
 from utils.function import load_formatter, load_processor
 from utils.logging import setup_logging
+from utils.artifact_identity import compiled_signature_from_config
 
 
 def ensure_formatted(data: str):
@@ -161,7 +162,8 @@ def ensure_clustered(data: str, uid_cluster_levels: str, clusterer_spec: dict | 
 
 def ensure_compiled(config: CompileConfig):
     setup_logging()
-    pnt(f'auto preparing compiled artifacts for {config.data}/{config.prepare_id}')
+    signature = compiled_signature_from_config(config)
+    pnt(f'auto preparing compiled artifacts for {config.data}/{signature} (legacy prepare_id={config.prepare_id})')
     from compiler import Compiler
 
     compiler = Compiler(config)
