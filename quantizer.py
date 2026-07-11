@@ -330,6 +330,7 @@ class Quantizer:
         self.load_embedding_matrix()
         dataloaders = self.build_dataloaders()
         self.build_model()
+        _print_pipeline_trace(self.model)
         trainer = self.build_trainer()
 
         pnt(f'training {self.quantizer_name} on {self.data}/{self.embedding_model}')
@@ -587,6 +588,7 @@ class Quantizer:
             set_seed(int(self.config.trainer.seed))
             self.load_embedding_matrix()
             self.build_model()
+            _print_pipeline_trace(self.model)
             self.export_hash_indexer()
             return
         self.train()
