@@ -163,7 +163,7 @@ def ensure_clustered(data: str, uid_cluster_levels: str, clusterer_spec: dict | 
 def ensure_compiled(config: CompileConfig):
     setup_logging()
     signature = compiled_signature_from_config(config)
-    pnt(f'auto preparing compiled artifacts for {config.data}/{signature} (legacy prepare_id={config.prepare_id})')
+    pnt(f'auto preparing compiled artifacts for {config.data}/{signature}')
     from compiler import Compiler
 
     compiler = Compiler(config)
