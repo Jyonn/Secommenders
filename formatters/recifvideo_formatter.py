@@ -389,6 +389,10 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
     SCALE_SHUFFLE_SEED = 'RECIF'
     SCALE_SHUFFLE_VERSION = 'v1'
 
+    DEFAULT_N_CORE = 3
+    DEFAULT_MIN_LENGTH = 5
+    DEFAULT_MAX_LENGTH = 50
+
     def __init__(self, data_dir=None):
         super().__init__(data_dir=data_dir)
         self._filtered_test_users: pd.DataFrame | None = None
