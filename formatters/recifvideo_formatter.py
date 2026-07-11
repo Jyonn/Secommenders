@@ -396,6 +396,10 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
     def __init__(self, data_dir=None):
         super().__init__(data_dir=data_dir)
         self._filtered_test_users: pd.DataFrame | None = None
+        self._scale_total_sequences: int | None = None
+        self._scale_test_start: int | None = None
+        self._scale_train_limit: int | None = None
+        self._scale_reused_from: str | None = None
 
     @classmethod
     @abc.abstractmethod
@@ -407,7 +411,7 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
         return cls.SCALE_SHUFFLE_SEED
 
     def _extra_meta(self):
-        return {
+        meta = {
             'scale_percent': int(self.scale_percent()),
             'scale_test_ratio': float(self.SCALE_TEST_RATIO),
             'scale_shuffle_seed': self.get_seed(),
@@ -420,14 +424,161 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
                 'prefix-scale-train-tail-test',
             ],
         }
+        if self._scale_total_sequences is not None:
+            meta.update(
+                {
+                    'scale_total_sequences': int(self._scale_total_sequences),
+                    'scale_test_start': int(self._scale_test_start),
+                    'scale_train_limit': int(self._scale_train_limit),
+                }
+            )
+        if self._scale_reused_from is not None:
+            meta['scale_reused_from'] = self._scale_reused_from
+        return meta
 
     def _cache_meta_matches(self, cached_meta):
         return (
             super()._cache_meta_matches(cached_meta)
             and int(cached_meta.get('scale_percent', -1)) == int(self.scale_percent())
             and float(cached_meta.get('scale_test_ratio', -1.0)) == float(self.SCALE_TEST_RATIO)
+            and cached_meta.get('scale_shuffle_seed') == self.get_seed()
             and cached_meta.get('scale_shuffle_version') == self.SCALE_SHUFFLE_VERSION
+            and cached_meta.get('scale_total_sequences') is not None
+            and cached_meta.get('scale_test_start') is not None
+            and cached_meta.get('scale_train_limit') is not None
         )
+
+    @classmethod
+    def _scale_dataset_prefix(cls):
+        return 'ra' if cls.DOMAIN == 'ad' else 'rv'
+
+    @classmethod
+    def _parse_scale_dataset(cls, dataset: str):
+        prefix = cls._scale_dataset_prefix()
+        dataset = str(dataset).lower()
+        if not dataset.startswith(prefix):
+            return None
+        suffix = dataset[len(prefix):]
+        if not suffix.isdigit():
+            return None
+        return int(suffix)
+
+    def _scale_split_points(self, total_sequences: int):
+        test_start = int(total_sequences * (1.0 - self.SCALE_TEST_RATIO))
+        if total_sequences > 1:
+            test_start = min(max(test_start, 1), total_sequences - 1)
+        train_limit = int(total_sequences * (self.scale_percent() / 100.0))
+        train_limit = min(train_limit, test_start)
+        return test_start, train_limit
+
+    def _scale_meta_compatible(self, meta: dict):
+        return (
+            meta.get('version') == self.VER
+            and meta.get('domain') == self.DOMAIN
+            and meta.get('raw_history_col') == self.RAW_HISTORY_COL
+            and str(meta.get('data_dir')) == str(self.data_dir)
+            and int(meta.get('n_core', -1)) == int(self.n_core)
+            and int(meta.get('min_length', -1)) == int(self.min_length)
+            and int(meta.get('max_length', -1)) == int(self.max_length)
+            and int(meta.get('filter_rounds', -1)) == int(self.FILTER_ROUNDS)
+            and float(meta.get('scale_test_ratio', -1.0)) == float(self.SCALE_TEST_RATIO)
+            and meta.get('scale_shuffle_seed') == self.get_seed()
+            and meta.get('scale_shuffle_version') == self.SCALE_SHUFFLE_VERSION
+            and meta.get('scale_total_sequences') is not None
+            and meta.get('scale_test_start') is not None
+        )
+
+    @staticmethod
+    def _safe_int(value):
+        if value is None or pd.isna(value):
+            return None
+        return int(value)
+
+    def _iter_larger_scale_candidates(self):
+        target_percent = int(self.scale_percent())
+        formatted_root = Path(self.store_dir).parent
+        prefix = self._scale_dataset_prefix()
+        candidates = []
+        for meta_path in formatted_root.glob(f'{prefix}*/meta.json'):
+            dataset = meta_path.parent.name.lower()
+            if dataset == self.get_name():
+                continue
+            scale_percent = self._parse_scale_dataset(dataset)
+            if scale_percent is None or scale_percent <= target_percent:
+                continue
+            candidates.append((scale_percent, dataset, meta_path))
+        return sorted(candidates, key=lambda item: item[0])
+
+    def _records_to_users_from_frame(self, frame: pd.DataFrame, split: str):
+        rows = []
+        for index, row in enumerate(frame.to_dict('records')):
+            history = self._normalize_history_ids(row[self.HIS_COL])
+            source_uid = row.get('source_uid') or row.get(self.UID_COL)
+            output_row = {
+                self.UID_COL: f'{self.get_name()}-{split}-{index:08d}',
+                self.HIS_COL: history,
+                'source_uid': source_uid,
+                'segment_index': index,
+                'segment_length': len(history),
+            }
+            if 'global_sequence_index' in row:
+                global_sequence_index = self._safe_int(row['global_sequence_index'])
+                if global_sequence_index is not None:
+                    output_row['global_sequence_index'] = global_sequence_index
+            rows.append(output_row)
+        return pd.DataFrame(rows)
+
+    def _try_load_from_larger_scale(self):
+        for source_percent, dataset, meta_path in self._iter_larger_scale_candidates():
+            try:
+                meta = json.loads(meta_path.read_text())
+            except json.JSONDecodeError:
+                continue
+            if not self._scale_meta_compatible(meta):
+                continue
+            if int(meta.get('scale_percent', -1)) != int(source_percent):
+                continue
+
+            source_dir = meta_path.parent
+            items_path = source_dir / 'items.parquet'
+            users_path = source_dir / 'users.parquet'
+            test_users_path = source_dir / 'test_users.parquet'
+            if not (items_path.exists() and users_path.exists() and test_users_path.exists()):
+                continue
+
+            total_sequences = int(meta['scale_total_sequences'])
+            test_start, train_limit = self._scale_split_points(total_sequences)
+            if train_limit <= 0:
+                continue
+
+            users = pd.read_parquet(users_path)
+            test_users = pd.read_parquet(test_users_path)
+            if len(users) < train_limit:
+                continue
+
+            source_train_limit = int(meta.get('scale_train_limit', len(users)))
+            source_test_start = int(meta.get('scale_test_start'))
+            if (
+                source_train_limit < train_limit
+                or source_test_start != test_start
+                or len(test_users) != total_sequences - test_start
+            ):
+                continue
+
+            self._filtered_items = pd.read_parquet(items_path).reset_index(drop=True)
+            self._filtered_users = self._records_to_users_from_frame(users.iloc[:train_limit], split='train')
+            self._filtered_test_users = self._records_to_users_from_frame(test_users, split='test')
+            self._scale_total_sequences = total_sequences
+            self._scale_test_start = test_start
+            self._scale_train_limit = train_limit
+            self._scale_reused_from = dataset
+            pnt(
+                f'RecIF {self.DOMAIN} scale reused formatted {dataset} ({source_percent}%) '
+                f'for {self.get_name()} ({self.scale_percent()}%) train_sequences={train_limit} '
+                f'test_sequences={len(self._filtered_test_users)} total_sequences={total_sequences}'
+            )
+            return True
+        return False
 
     def _split_history_chunks(self, history: list):
         for start in range(0, len(history), self.max_length):
@@ -461,15 +612,18 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
     def _records_to_users(self, records: list[dict], split: str):
         rows = []
         for index, record in enumerate(records):
-            rows.append(
-                {
-                    self.UID_COL: f'{self.get_name()}-{split}-{index:08d}',
-                    self.HIS_COL: record[self.HIS_COL],
-                    'source_uid': record['source_uid'],
-                    'segment_index': index,
-                    'segment_length': len(record[self.HIS_COL]),
-                }
-            )
+            row = {
+                self.UID_COL: f'{self.get_name()}-{split}-{index:08d}',
+                self.HIS_COL: record[self.HIS_COL],
+                'source_uid': record['source_uid'],
+                'segment_index': index,
+                'segment_length': len(record[self.HIS_COL]),
+            }
+            if 'global_sequence_index' in record:
+                global_sequence_index = self._safe_int(record['global_sequence_index'])
+                if global_sequence_index is not None:
+                    row['global_sequence_index'] = global_sequence_index
+            rows.append(row)
         return pd.DataFrame(rows)
 
     def _run_filter_pipeline(self):
@@ -486,6 +640,9 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
             f'min_length={self.min_length}, max_length={self.max_length}, rounds={self.FILTER_ROUNDS}, '
             f'test_ratio={self.SCALE_TEST_RATIO:g}'
         )
+
+        if self._try_load_from_larger_scale():
+            return
 
         users = self._load_raw_users()
         records = self._users_to_sequence_records(users)
@@ -521,11 +678,9 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
             raise ValueError(f'No RecIF {self.DOMAIN} scale sequences survived final item alignment')
 
         records = stable_shuffle(records, seed=self.get_seed())
-        test_start = int(len(records) * (1.0 - self.SCALE_TEST_RATIO))
-        if len(records) > 1:
-            test_start = min(max(test_start, 1), len(records) - 1)
-        train_limit = int(len(records) * (self.scale_percent() / 100.0))
-        train_limit = min(train_limit, test_start)
+        for index, record in enumerate(records):
+            record['global_sequence_index'] = index
+        test_start, train_limit = self._scale_split_points(len(records))
         if train_limit <= 0:
             raise ValueError(f'scale={self.scale_percent()}% produced no train sequences from {len(records)} records')
 
@@ -537,6 +692,9 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
         self._filtered_items = items.sort_values(self.IID_COL).reset_index(drop=True)
         self._filtered_users = self._records_to_users(train_records, split='train')
         self._filtered_test_users = self._records_to_users(test_records, split='test')
+        self._scale_total_sequences = len(records)
+        self._scale_test_start = test_start
+        self._scale_train_limit = train_limit
 
         pnt(
             f'RecIF {self.DOMAIN} scale formatting complete with items={len(self._filtered_items)} '
