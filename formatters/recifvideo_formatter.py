@@ -494,6 +494,12 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
             return None
         return int(value)
 
+    @staticmethod
+    def _safe_str(value):
+        if value is None or pd.isna(value):
+            return None
+        return str(value)
+
     def _iter_larger_scale_candidates(self):
         target_percent = int(self.scale_percent())
         formatted_root = Path(self.store_dir).parent
@@ -513,7 +519,9 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
         rows = []
         for index, row in enumerate(frame.to_dict('records')):
             history = self._normalize_history_ids(row[self.HIS_COL])
-            source_uid = row.get('source_uid') or row.get(self.UID_COL)
+            source_uid = self._safe_str(row.get('source_uid'))
+            if source_uid is None:
+                source_uid = self._safe_str(row.get(self.UID_COL))
             output_row = {
                 self.UID_COL: f'{self.get_name()}-{split}-{index:08d}',
                 self.HIS_COL: history,
@@ -615,7 +623,7 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
             row = {
                 self.UID_COL: f'{self.get_name()}-{split}-{index:08d}',
                 self.HIS_COL: record[self.HIS_COL],
-                'source_uid': record['source_uid'],
+                'source_uid': str(record['source_uid']),
                 'segment_index': index,
                 'segment_length': len(record[self.HIS_COL]),
             }
