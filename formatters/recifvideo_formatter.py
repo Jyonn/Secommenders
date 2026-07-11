@@ -379,7 +379,7 @@ class RecIFAdsXLargeAllFormatter(RecIFAdsFormatter):
 
 
 class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
-    VER = 'v1.0-scale'
+    VER = 'v1.1-scale'
 
     PROVIDES_TEST_SET = True
     USE_ALL_USERS_IN_PROCESSOR = True
@@ -432,8 +432,6 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
                     'scale_train_limit': int(self._scale_train_limit),
                 }
             )
-        if self._scale_reused_from is not None:
-            meta['scale_reused_from'] = self._scale_reused_from
         return meta
 
     def _cache_meta_matches(self, cached_meta):
