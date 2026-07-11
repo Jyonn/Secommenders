@@ -385,7 +385,7 @@ class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
     USE_ALL_USERS_IN_PROCESSOR = True
     SPLIT_RATIO = 0.9
 
-    SCALE_TEST_RATIO = 0.1
+    SCALE_TEST_RATIO = 0.03
     SCALE_SHUFFLE_SEED = 'RECIF'
     SCALE_SHUFFLE_VERSION = 'v1'
 
