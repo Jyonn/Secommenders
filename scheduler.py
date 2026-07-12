@@ -467,10 +467,10 @@ class Scheduler:
         )
         report_command = report_command_from_args(canonical_logical_args)
         identity_payload = {
+            'schema_version': 'evaluation.v2',
             'effective_batch_size': self.effective_batch_size,
             'logical_train_args': canonical_logical_args,
             'trained_signature': trained_signature_from_config(config),
-            'compile_prepare_id': config.compile_config.prepare_id,
         }
         payload = {
             'plan_name': self.plan_name,
