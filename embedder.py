@@ -55,12 +55,35 @@ class Embedder:
             'embedding_dim': int(embeddings.shape[1]),
             'content_attrs': list(self.processor.default_attrs),
             'processed_items_path': str(self.items_path),
+            'normalize': bool(self.conf.normalize),
         }
         if hasattr(self.caller, 'embed_items'):
             meta['source'] = 'recif-pretrain-parquet'
             meta['data_dir'] = self.data_dir
             meta['embedding_columns'] = list(getattr(self.caller, 'EMBEDDING_COLUMNS', ()))
             meta['pretrain_stats'] = getattr(self.caller, 'pretrain_stats', {})
+        self.meta_path.write_text(json.dumps(meta, indent=2))
+
+    def save_subset_reuse_meta(self, embeddings, source_dataset: str, source_dir: Path, source_meta: dict):
+        meta = {
+            'dataset': self.data,
+            'model': self.model_name,
+            'model_key': self.caller.key,
+            'item_count': int(len(self.processor.items)),
+            'embedding_dim': int(embeddings.shape[1]),
+            'content_attrs': list(self.processor.default_attrs),
+            'processed_items_path': str(self.items_path),
+            'normalize': bool(self.conf.normalize),
+            'reuse_mode': 'scale-subset',
+            'source_dataset': source_dataset,
+            'source_embedding_dir': str(source_dir),
+            'source_item_count': int(source_meta.get('item_count', embeddings.shape[0])),
+        }
+        if hasattr(self.caller, 'embed_items'):
+            meta['source'] = source_meta.get('source', 'recif-pretrain-parquet')
+            meta['data_dir'] = self.data_dir
+            meta['embedding_columns'] = list(getattr(self.caller, 'EMBEDDING_COLUMNS', ()))
+            meta['source_pretrain_stats'] = source_meta.get('pretrain_stats', {})
         self.meta_path.write_text(json.dumps(meta, indent=2))
 
     def is_cached(self):
@@ -91,9 +114,118 @@ class Embedder:
         frame = self.processor._stringify(frame)
         return frame[self.processor.IID_COL].tolist()
 
+    @staticmethod
+    def _scale_dataset_info(dataset: str):
+        dataset = str(dataset).lower()
+        prefix = dataset[:2]
+        suffix = dataset[2:]
+        if prefix not in {'rv', 'ra'} or not suffix.isdigit():
+            return None
+        return prefix, int(suffix)
+
+    def _iter_larger_scale_embedding_candidates(self):
+        target = self._scale_dataset_info(self.data)
+        if target is None:
+            return []
+        prefix, target_percent = target
+        embedded_root = ArtifactStore.ROOT / 'embedded'
+        candidates = []
+        for dataset_dir in embedded_root.glob(f'{prefix}*'):
+            if not dataset_dir.is_dir():
+                continue
+            source = self._scale_dataset_info(dataset_dir.name)
+            if source is None:
+                continue
+            _, source_percent = source
+            if source_percent <= target_percent:
+                continue
+            embedding_dir = dataset_dir / self.model_name
+            candidates.append((source_percent, dataset_dir.name.lower(), embedding_dir))
+        return sorted(candidates, key=lambda item: item[0])
+
+    def _load_item_ids_from_path(self, path: Path):
+        frame = pd.read_parquet(path)
+        if self.processor.IID_COL in frame.columns:
+            column = self.processor.IID_COL
+        else:
+            column = frame.columns[0]
+        return frame[column].tolist()
+
+    def _embedding_meta_compatible(self, meta: dict, embeddings: np.ndarray):
+        if meta.get('model') != self.model_name:
+            return False
+        if meta.get('model_key') != self.caller.key:
+            return False
+        if bool(meta.get('normalize', False)) != bool(self.conf.normalize):
+            return False
+        if int(meta.get('item_count', -1)) != int(embeddings.shape[0]):
+            return False
+        if int(meta.get('embedding_dim', -1)) != int(embeddings.shape[1]):
+            return False
+        if hasattr(self.caller, 'embed_items'):
+            expected_columns = list(getattr(self.caller, 'EMBEDDING_COLUMNS', ()))
+            if list(meta.get('embedding_columns', [])) != expected_columns:
+                return False
+            if meta.get('data_dir') is not None and str(meta.get('data_dir')) != str(self.data_dir):
+                return False
+        return True
+
+    def try_reuse_larger_scale_embeddings(self):
+        target_item_ids = self.processor.items[self.processor.IID_COL].tolist()
+        target_keys = [str(item_id) for item_id in target_item_ids]
+        for _, source_dataset, source_dir in self._iter_larger_scale_embedding_candidates():
+            embedding_path = source_dir / 'embeddings.npy'
+            item_ids_path = source_dir / 'item_ids.parquet'
+            meta_path = source_dir / 'meta.json'
+            if not (embedding_path.exists() and item_ids_path.exists() and meta_path.exists()):
+                continue
+            try:
+                source_meta = json.loads(meta_path.read_text())
+            except json.JSONDecodeError:
+                continue
+            source_embeddings = np.load(embedding_path, mmap_mode='r')
+            if not self._embedding_meta_compatible(source_meta, source_embeddings):
+                continue
+            source_item_ids = self._load_item_ids_from_path(item_ids_path)
+            if len(source_item_ids) != source_embeddings.shape[0]:
+                continue
+            positions = {}
+            for index, item_id in enumerate(source_item_ids):
+                positions.setdefault(str(item_id), index)
+            missing = [key for key in target_keys if key not in positions]
+            if missing:
+                pnt(
+                    f'scale embedding candidate {source_dataset}/{self.model_name} misses '
+                    f'{len(missing)}/{len(target_keys)} target items; rebuilding'
+                )
+                continue
+            gather_indices = np.asarray([positions[key] for key in target_keys], dtype=np.int64)
+            embeddings = np.lib.format.open_memmap(
+                self.embedding_path,
+                mode='w+',
+                dtype=np.float32,
+                shape=(len(gather_indices), int(source_embeddings.shape[1])),
+            )
+            chunk_size = 100_000
+            for start in range(0, len(gather_indices), chunk_size):
+                end = min(start + chunk_size, len(gather_indices))
+                embeddings[start:end] = np.asarray(source_embeddings[gather_indices[start:end]], dtype=np.float32)
+            embeddings.flush()
+            self.processor.items[[self.processor.IID_COL]].to_parquet(self.item_ids_path, index=False)
+            self.save_subset_reuse_meta(embeddings, source_dataset, source_dir, source_meta)
+            pnt(
+                f'reused embeddings from {source_dataset}/{self.model_name} for {self.data}/{self.model_name} '
+                f'items={len(target_item_ids)}'
+            )
+            return True
+        return False
+
     def embed(self):
         if self.is_cached() and not self.conf.overwrite:
             pnt(f'cached embeddings found at {self.embedding_path}')
+            return
+
+        if self.try_reuse_larger_scale_embeddings():
             return
 
         if hasattr(self.caller, 'embed_items'):
