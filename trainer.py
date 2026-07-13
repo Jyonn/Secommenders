@@ -750,6 +750,52 @@ def _completed_run_status(config: TrainConfig, run_dir: Path):
     return complete, status, meta
 
 
+def _pid_is_alive(pid):
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _active_running_record(run_dir: Path, meta: dict):
+    if str(meta.get('status') or '').lower() != 'running':
+        return None
+    pid_record = _read_json_if_exists(run_dir / 'pid.json') or {}
+    pid = pid_record.get('pid') or meta.get('pid')
+    hostname = pid_record.get('hostname') or meta.get('hostname')
+    current_hostname = socket.gethostname()
+    if hostname and str(hostname) != current_hostname:
+        return None
+    if not _pid_is_alive(pid):
+        return None
+    return {
+        'pid': int(pid),
+        'hostname': hostname or current_hostname,
+        'command': pid_record.get('command') or meta.get('command') or '-',
+        'started_at': meta.get('started_at') or pid_record.get('created_at') or '-',
+    }
+
+
+def _print_running_run_summary(run_dir: Path, record: dict, overwrite: str):
+    pnt(
+        f'trainer run is already running at {run_dir}; '
+        f'pid={record["pid"]} hostname={record["hostname"]} overwrite={overwrite}, skipping. '
+        'Use --overwrite true to rerun anyway.'
+    )
+    pnt(f'running started_at={record.get("started_at", "-")} command={record.get("command", "-")}')
+
+
 def _format_metric_summary(metrics: dict | None):
     if not isinstance(metrics, dict) or not metrics:
         return '-'
@@ -788,6 +834,10 @@ def _should_skip_completed_run(config: TrainConfig, run_dir: Path):
     complete, status, meta = _completed_run_status(config, run_dir)
     if overwrite == 'true':
         return False
+    active_record = _active_running_record(run_dir, meta)
+    if active_record is not None:
+        _print_running_run_summary(run_dir, active_record, overwrite)
+        return True
     if overwrite == 'false' and run_dir.exists():
         raise RuntimeError(
             f'trainer run exists at {run_dir} with status={status or "unknown"}; '
