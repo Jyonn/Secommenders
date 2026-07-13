@@ -8,12 +8,14 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+import numpy as np
 from pigmento import pnt
 from tqdm import tqdm
 
 
 FILTERED_EMBEDDINGS_NAME = 'filtered.parquet'
 FILTERED_EMBEDDINGS_META_NAME = 'filtered.meta.json'
+FILTERED_EMBEDDINGS_VERSION = 'v2-mean-pooled'
 REQUIRED_EMBEDDING_COLUMNS = ('pid', 'vision_emb', 'text_emb')
 
 
@@ -66,7 +68,8 @@ def _cache_matches(output_path: Path, candidate_pids: set | None) -> bool:
     except json.JSONDecodeError:
         return False
     return (
-        meta.get('candidate_scope') == 'provided'
+        meta.get('version') == FILTERED_EMBEDDINGS_VERSION
+        and meta.get('candidate_scope') == 'provided'
         and int(meta.get('candidate_count', -1)) == int(candidate_count)
         and meta.get('candidate_hash') == candidate_hash
     )
@@ -76,6 +79,49 @@ def _candidate_array(candidate_pids: set | None):
     if candidate_pids is None:
         return None
     return pa.array(list(candidate_pids))
+
+
+def _as_vector(value):
+    if value is None:
+        raise ValueError('embedding value is null')
+    if hasattr(value, 'as_py'):
+        value = value.as_py()
+    if isinstance(value, np.ndarray) and value.dtype == object and value.ndim == 1:
+        vectors = [_as_vector(item) for item in value.tolist() if item is not None]
+        if not vectors:
+            raise ValueError('embedding value is empty')
+        dims = {int(vector.shape[0]) for vector in vectors}
+        if len(dims) == 1 and len(vectors) > 1:
+            return np.stack(vectors, axis=0).mean(axis=0).astype(np.float32)
+        if len(vectors) == 1:
+            return vectors[0]
+    if isinstance(value, (list, tuple)) and value and any(isinstance(item, (list, tuple, np.ndarray)) for item in value):
+        vectors = [_as_vector(item) for item in value if item is not None]
+        if not vectors:
+            raise ValueError('embedding value is empty')
+        dims = {int(vector.shape[0]) for vector in vectors}
+        if len(dims) == 1 and len(vectors) > 1:
+            return np.stack(vectors, axis=0).mean(axis=0).astype(np.float32)
+        if len(vectors) == 1:
+            return vectors[0]
+
+    def flatten(item):
+        if hasattr(item, 'as_py'):
+            item = item.as_py()
+        if isinstance(item, np.ndarray):
+            item = item.tolist()
+        if isinstance(item, (list, tuple)):
+            for child in item:
+                yield from flatten(child)
+            return
+        if item is None:
+            return
+        yield float(item)
+
+    vector = np.fromiter(flatten(value), dtype=np.float32)
+    if vector.size == 0:
+        raise ValueError('embedding value is empty')
+    return vector
 
 
 def _filter_embedding_table(path: Path, candidate_values):
@@ -102,7 +148,24 @@ def _filter_embedding_table(path: Path, candidate_values):
         text_mask,
     )
     filtered = table.filter(mask)
-    return path, table.num_rows, filtered.num_rows, filtered
+    rows = []
+    for row in filtered.to_pylist():
+        try:
+            rows.append(
+                {
+                    'pid': row['pid'],
+                    'vision_emb': _as_vector(row['vision_emb']).tolist(),
+                    'text_emb': _as_vector(row['text_emb']).tolist(),
+                }
+            )
+        except ValueError:
+            continue
+    pooled = pa.Table.from_pylist(rows, schema=pa.schema([
+        ('pid', table['pid'].type),
+        ('vision_emb', pa.list_(pa.float32())),
+        ('text_emb', pa.list_(pa.float32())),
+    ]))
+    return path, table.num_rows, pooled.num_rows, pooled
 
 
 def ensure_filtered_recif_embeddings(
@@ -193,6 +256,7 @@ def ensure_filtered_recif_embeddings(
     temp_path.replace(output_path)
     meta = {
         'created_at': datetime.now(timezone.utc).isoformat(),
+        'version': FILTERED_EMBEDDINGS_VERSION,
         'source_dir': str(embeddings_dir),
         'source_files': len(parquet_paths),
         'completed_files': int(completed_files),
@@ -205,6 +269,7 @@ def ensure_filtered_recif_embeddings(
         'kept_rows': int(kept_rows),
         'invalid_candidate_rows': int(matched_rows - kept_rows),
         'complete_policy': 'pid must be non-null; vision_emb and text_emb must be non-null and non-empty',
+        'storage_policy': 'vision_emb is mean-pooled to one vector; text_emb is stored as one vector',
     }
     meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + '\n')
     pnt(

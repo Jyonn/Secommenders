@@ -6,7 +6,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from embedders.base_model import BaseModel
-from utils.recif_embedding_cache import filtered_embeddings_path, raw_embedding_paths
+from utils.recif_embedding_cache import filtered_embeddings_path
 
 
 class RecIFPretrainModel(BaseModel):
@@ -33,78 +33,19 @@ class RecIFPretrainModel(BaseModel):
     def _as_vector(value):
         if value is None:
             raise ValueError('embedding value is null')
+        if hasattr(value, 'as_py'):
+            value = value.as_py()
+        if isinstance(value, np.ndarray):
+            value = value.tolist()
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(f'embedding value must be a flat vector, got {type(value).__name__}')
+        if any(isinstance(item, (list, tuple, np.ndarray)) for item in value):
+            raise ValueError('embedding value must already be mean-pooled before embedder loads it')
 
-        if isinstance(value, np.ndarray) and value.dtype == object and value.ndim == 1:
-            vectors = []
-            for item in value.tolist():
-                try:
-                    vectors.append(RecIFPretrainModel._as_vector(item))
-                except ValueError as exc:
-                    if 'null' in str(exc) or 'empty' in str(exc):
-                        continue
-                    raise
-            if not vectors:
-                raise ValueError('embedding value is empty')
-            dims = {int(vector.shape[0]) for vector in vectors}
-            if len(dims) == 1 and len(vectors) > 1:
-                return np.stack(vectors, axis=0).mean(axis=0).astype(np.float32)
-            if len(vectors) == 1:
-                return vectors[0]
-
-        if isinstance(value, (list, tuple)) and value:
-            vectors = []
-            for item in value:
-                try:
-                    vectors.append(RecIFPretrainModel._as_vector(item))
-                except ValueError as exc:
-                    if 'null' in str(exc) or 'empty' in str(exc):
-                        continue
-                    raise
-            if not vectors:
-                raise ValueError('embedding value is empty')
-            dims = {int(vector.shape[0]) for vector in vectors}
-            if len(dims) == 1 and len(vectors) > 1:
-                return np.stack(vectors, axis=0).mean(axis=0).astype(np.float32)
-            if len(vectors) == 1:
-                return vectors[0]
-
-        def flatten(item):
-            if hasattr(item, 'as_py'):
-                item = item.as_py()
-            if isinstance(item, np.ndarray):
-                item = item.tolist()
-            if isinstance(item, (list, tuple)):
-                for child in item:
-                    yield from flatten(child)
-                return
-            if item is None:
-                return
-            yield float(item)
-
-        vector = np.fromiter(flatten(value), dtype=np.float32)
+        vector = np.asarray(value, dtype=np.float32)
         if vector.size == 0:
             raise ValueError('embedding value is empty')
         return vector
-
-    def _merge_vectors(self, row: dict):
-        vectors = []
-        item_id = row.get('pid')
-        for column in self.EMBEDDING_COLUMNS:
-            try:
-                vectors.append(self._as_vector(row[column]))
-            except Exception as exc:
-                raise ValueError(f'failed to parse {column} for pid={item_id}: {exc}') from exc
-        if len(vectors) == 1:
-            return vectors[0]
-        return np.concatenate(vectors, axis=0)
-
-    @staticmethod
-    def _mean_vector(vectors, *, column: str):
-        dims = {int(vector.shape[0]) for vector in vectors}
-        if len(dims) != 1:
-            preview = ', '.join(str(dim) for dim in sorted(dims)[:10])
-            raise ValueError(f'RecIF pretrain {column} embeddings have inconsistent dimensions: {preview}')
-        return np.stack(list(vectors), axis=0).mean(axis=0).astype(np.float32)
 
     def embed_items(self, item_ids: list, data_dir: str | Path, normalize=False):
         if not self.EMBEDDING_COLUMNS:
@@ -123,15 +64,17 @@ class RecIFPretrainModel(BaseModel):
         parse_errors = {column: {} for column in self.EMBEDDING_COLUMNS}
         filtered_path = filtered_embeddings_path(data_dir)
         using_filtered_cache = filtered_path.exists()
-        parquet_paths = [filtered_path] if using_filtered_cache else raw_embedding_paths(data_dir)
-        if not parquet_paths:
-            raise FileNotFoundError(f'No parquet files found in RecIF pretrain embedding directory: {embeddings_dir}')
+        if not using_filtered_cache:
+            raise FileNotFoundError(
+                f'RecIF filtered embedding cache not found: {filtered_path}. '
+                'Run a RecIF scale formatter first so embeddings are filtered and mean-pooled.'
+            )
+        parquet_paths = [filtered_path]
 
         columns = ['pid', *self.EMBEDDING_COLUMNS]
-        source_label = 'filtered cache' if using_filtered_cache else 'raw shards'
         pnt(
             f'loading RecIF pretrain embeddings columns={list(self.EMBEDDING_COLUMNS)} '
-            f'items={len(item_positions)} files={len(parquet_paths)} source={source_label}'
+            f'items={len(item_positions)} files={len(parquet_paths)} source=filtered cache'
         )
         batch_size = max(int(self.batch_size or 0), self.READ_BATCH_SIZE)
         for path in tqdm(parquet_paths, desc='pretrain-embeddings'):
@@ -158,39 +101,23 @@ class RecIFPretrainModel(BaseModel):
         missing = [item_id for item_id in normalized_item_ids if item_id not in row_seen]
         if missing:
             preview = ', '.join(str(item_id) for item_id in missing[:10])
-            if using_filtered_cache:
-                raise ValueError(
-                    f'RecIF filtered embedding cache is missing {len(missing)}/{len(normalized_item_ids)} '
-                    f'processed items; first missing: {preview}. Regenerate formatted artifacts with the '
-                    'embedding completeness filter, or remove embeddings/filtered.parquet to scan raw shards.'
-                )
             raise ValueError(
-                f'RecIF pretrain embedding rows missing {len(missing)}/{len(normalized_item_ids)} processed items; '
-                f'first missing: {preview}'
+                f'RecIF filtered embedding cache is missing {len(missing)}/{len(normalized_item_ids)} '
+                f'processed items; first missing: {preview}. Regenerate formatted artifacts with the '
+                'embedding completeness filter.'
             )
 
-        imputed_by_column = {}
         for column in self.EMBEDDING_COLUMNS:
             found = found_by_column[column]
             if not found:
                 raise ValueError(f'RecIF pretrain column {column} has no valid embeddings')
-            fallback = self._mean_vector(found.values(), column=column)
             missing_column_items = [item_id for item_id in normalized_item_ids if item_id not in found]
-            if using_filtered_cache and missing_column_items:
-                preview = ', '.join(str(item_id) for item_id in missing_column_items[:10])
-                raise ValueError(
-                    f'RecIF filtered embedding cache has invalid {column} values for '
-                    f'{len(missing_column_items)}/{len(normalized_item_ids)} processed items; '
-                    f'first invalid: {preview}. Regenerate embeddings/filtered.parquet.'
-                )
-            for item_id in missing_column_items:
-                found[item_id] = fallback
-            imputed_by_column[column] = len(missing_column_items)
             if missing_column_items:
                 preview = ', '.join(str(item_id) for item_id in missing_column_items[:10])
-                pnt(
-                    f'imputed {len(missing_column_items)} missing {column} embeddings with global mean; '
-                    f'first missing: {preview}'
+                raise ValueError(
+                    f'RecIF pretrain embeddings have invalid {column} values for '
+                    f'{len(missing_column_items)}/{len(normalized_item_ids)} processed items; '
+                    f'first invalid: {preview}. Regenerate embeddings/filtered.parquet from formatter.'
                 )
 
         merged = []
@@ -207,7 +134,7 @@ class RecIFPretrainModel(BaseModel):
             raise ValueError(f'RecIF pretrain embeddings have inconsistent dimensions: {preview}')
 
         self.pretrain_stats = {
-            'imputed_by_column': imputed_by_column,
+            'imputed_by_column': {column: 0 for column in self.EMBEDDING_COLUMNS},
             'parse_error_count_by_column': {
                 column: len(errors)
                 for column, errors in parse_errors.items()
