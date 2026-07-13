@@ -8,11 +8,12 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from formatters.recif_base import RecIFBaseFormatter
+from utils.recif_embedding_cache import filtered_embeddings_path, load_filtered_embedding_pids
 from utils.stable_random import stable_shuffle
 
 
 class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
-    VER = 'v1.2-scale'
+    VER = 'v1.3-scale'
 
     PROVIDES_TEST_SET = True
     USE_ALL_USERS_IN_PROCESSOR = True
@@ -53,9 +54,12 @@ class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
             'filter_pipeline': [
                 'caption-exists',
                 'repeat-three-rounds:item-n-core-and-non-overlap-max-length-chunks',
+                'complete-pretrain-embedding-filter',
                 'stable-shuffle-sequences',
                 'prefix-scale-train-tail-test',
             ],
+            'embedding_filter_cache': str(filtered_embeddings_path(self.data_dir)),
+            'embedding_filter_policy': 'drop items without complete text and vision embeddings',
         }
         if self._scale_total_sequences is not None:
             meta.update(
@@ -248,6 +252,10 @@ class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
             item_set.update(record[self.HIS_COL])
         return item_set
 
+    def _load_complete_embedding_item_set(self) -> set:
+        raw_pids = load_filtered_embedding_pids(self.data_dir)
+        return {self._normalize_item_id(pid) for pid in raw_pids}
+
     def _records_to_users(self, records: list[dict], split: str):
         rows = []
         for index, record in enumerate(records):
@@ -308,6 +316,24 @@ class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
                     f'No RecIF {self.DOMAIN} scale sequences survived round {round_index + 1}; '
                     'try a smaller n_core or min_length'
                 )
+
+        embedding_item_set = self._load_complete_embedding_item_set()
+        before_items = len(self._records_item_set(records))
+        records = self._filter_and_chunk_records(
+            records,
+            embedding_item_set,
+            desc='embedding-complete-filter-sequences',
+        )
+        if not records:
+            raise ValueError(
+                f'No RecIF {self.DOMAIN} scale sequences survived complete embedding filtering; '
+                'check RecIF embeddings/filtered.parquet'
+            )
+        after_items = len(self._records_item_set(records))
+        pnt(
+            f'embedding completeness filter kept {after_items}/{before_items} items '
+            f'and {len(records)} sequences with min_length>={self.min_length}'
+        )
 
         final_item_ids = self._records_item_set(records)
         items = self._load_caption_rows(final_item_ids)

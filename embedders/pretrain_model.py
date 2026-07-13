@@ -6,6 +6,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from embedders.base_model import BaseModel
+from utils.recif_embedding_cache import filtered_embeddings_path, raw_embedding_paths
 
 
 class RecIFPretrainModel(BaseModel):
@@ -120,14 +121,17 @@ class RecIFPretrainModel(BaseModel):
         row_seen = set()
         found_by_column = {column: {} for column in self.EMBEDDING_COLUMNS}
         parse_errors = {column: {} for column in self.EMBEDDING_COLUMNS}
-        parquet_paths = sorted(embeddings_dir.glob('*.parquet'))
+        filtered_path = filtered_embeddings_path(data_dir)
+        using_filtered_cache = filtered_path.exists()
+        parquet_paths = [filtered_path] if using_filtered_cache else raw_embedding_paths(data_dir)
         if not parquet_paths:
             raise FileNotFoundError(f'No parquet files found in RecIF pretrain embedding directory: {embeddings_dir}')
 
         columns = ['pid', *self.EMBEDDING_COLUMNS]
+        source_label = 'filtered cache' if using_filtered_cache else 'raw shards'
         pnt(
             f'loading RecIF pretrain embeddings columns={list(self.EMBEDDING_COLUMNS)} '
-            f'items={len(item_positions)} files={len(parquet_paths)}'
+            f'items={len(item_positions)} files={len(parquet_paths)} source={source_label}'
         )
         batch_size = max(int(self.batch_size or 0), self.READ_BATCH_SIZE)
         for path in tqdm(parquet_paths, desc='pretrain-embeddings'):
@@ -154,6 +158,12 @@ class RecIFPretrainModel(BaseModel):
         missing = [item_id for item_id in normalized_item_ids if item_id not in row_seen]
         if missing:
             preview = ', '.join(str(item_id) for item_id in missing[:10])
+            if using_filtered_cache:
+                raise ValueError(
+                    f'RecIF filtered embedding cache is missing {len(missing)}/{len(normalized_item_ids)} '
+                    f'processed items; first missing: {preview}. Regenerate formatted artifacts with the '
+                    'embedding completeness filter, or remove embeddings/filtered.parquet to scan raw shards.'
+                )
             raise ValueError(
                 f'RecIF pretrain embedding rows missing {len(missing)}/{len(normalized_item_ids)} processed items; '
                 f'first missing: {preview}'
@@ -166,6 +176,13 @@ class RecIFPretrainModel(BaseModel):
                 raise ValueError(f'RecIF pretrain column {column} has no valid embeddings')
             fallback = self._mean_vector(found.values(), column=column)
             missing_column_items = [item_id for item_id in normalized_item_ids if item_id not in found]
+            if using_filtered_cache and missing_column_items:
+                preview = ', '.join(str(item_id) for item_id in missing_column_items[:10])
+                raise ValueError(
+                    f'RecIF filtered embedding cache has invalid {column} values for '
+                    f'{len(missing_column_items)}/{len(normalized_item_ids)} processed items; '
+                    f'first invalid: {preview}. Regenerate embeddings/filtered.parquet.'
+                )
             for item_id in missing_column_items:
                 found[item_id] = fallback
             imputed_by_column[column] = len(missing_column_items)
