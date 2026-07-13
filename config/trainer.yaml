@@ -8,7 +8,7 @@ representation:
   target: ${task_type}$
   source_model: ${repr_source_model:null}$
   combine: ${repr_combine:concat}$
-  max_items: ${maxitems:20}$
+  max_items: ${maxitems:50}$
   model_max_length: ${model_max_length:0}$
   item_text_max_tokens: ${item_text_max_tokens:20}$
 
@@ -20,7 +20,7 @@ upstreams:
     quantizer:
       name: ${sid_coder:rqvae}$
       config:
-        latent_dim: ${sid_latent_dim:32}$
+        latent_dim: ${sid_latent_dim:64}$
         reconstruction_loss: ${sid_reconstruction_loss:mse}$
         codebook_size: ${sid_codebook_size:256}$
         commitment_weight: ${sid_commitment_weight:0.25}$
@@ -40,7 +40,7 @@ upstreams:
     encoder:
       name: ${sid_encoder_name:mlp}$
       config:
-        hidden_dims: ${sid_hidden_dims:2048,1024,512,256,128,64}$
+        hidden_dims: ${sid_hidden_dims:2048,1024,512,256,128}$
         activation: ${sid_activation:relu}$
         use_bias: ${sid_use_bias:true}$
     trainer:
@@ -141,6 +141,6 @@ trainer:
   alignment: ${alignment:0}$
 
 evaluator:
-  main_metric: ${main_metric:loss}$
+  main_metric: ${main_metric:ndcg@10}$
   patience: ${patience:3}$
   metrics: ${metrics:ndcg@5,ndcg@10,ndcg@20,hr@5,hr@10,hr@20,mrr}$

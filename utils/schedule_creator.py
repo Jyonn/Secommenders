@@ -461,7 +461,7 @@ class Job:
             sid_coder=self._args.get('sid_coder'),
             hash_coder=self._args.get('hash_coder'),
             task_type=self._args['task_type'],
-            maxitems=int(self._args.get('maxitems', 20)),
+            maxitems=int(self._args.get('maxitems', 50)),
             model_max_length=self._args.get('model_max_length'),
             item_text_max_tokens=int(self._args.get('item_text_max_tokens', 20)),
             repr_combine=self._args.get('repr_combine', 'concat'),

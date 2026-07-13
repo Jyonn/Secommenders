@@ -1,7 +1,7 @@
 quantizer:
   name: ${quantizer_name:rqvae}
   config:
-    latent_dim: ${latent_dim:32}$
+    latent_dim: ${latent_dim:64}$
     reconstruction_loss: mse
     codebook_size: ${codebook_size:256}$
     commitment_weight: ${commitment_weight:0.25}$
@@ -32,7 +32,7 @@ hash:
 encoder:
   name: mlp
   config:
-    hidden_dims: ${hidden_dims:2048,1024,512,256,128,64}$
+    hidden_dims: ${hidden_dims:2048,1024,512,256,128}$
     activation: relu
     use_bias: true
 

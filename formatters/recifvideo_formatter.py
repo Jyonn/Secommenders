@@ -379,17 +379,17 @@ class RecIFAdsXLargeAllFormatter(RecIFAdsFormatter):
 
 
 class RecIFScaleFormatter(RecIFVideoFormatter, abc.ABC):
-    VER = 'v1.1-scale'
+    VER = 'v1.2-scale'
 
     PROVIDES_TEST_SET = True
     USE_ALL_USERS_IN_PROCESSOR = True
     SPLIT_RATIO = 0.9
 
-    SCALE_TEST_RATIO = 0.03
+    SCALE_TEST_RATIO = 0.003
     SCALE_SHUFFLE_SEED = 'RECIF'
     SCALE_SHUFFLE_VERSION = 'v1'
 
-    DEFAULT_N_CORE = 10
+    DEFAULT_N_CORE = 20
     DEFAULT_MIN_LENGTH = 5
     DEFAULT_MAX_LENGTH = 50
 
@@ -732,6 +732,24 @@ class RecIFAdsScaleFormatter(RecIFScaleFormatter, abc.ABC):
         return int(value)
 
 
+class RV1Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 1
+
+
+class RV2Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 2
+
+
+class RV5Formatter(RecIFVideoScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 5
+
+
 class RV10Formatter(RecIFVideoScaleFormatter):
     @classmethod
     def scale_percent(cls) -> int:
@@ -784,6 +802,24 @@ class RV90Formatter(RecIFVideoScaleFormatter):
     @classmethod
     def scale_percent(cls) -> int:
         return 90
+
+
+class RA1Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 1
+
+
+class RA2Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 2
+
+
+class RA5Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 5
 
 
 class RA10Formatter(RecIFAdsScaleFormatter):

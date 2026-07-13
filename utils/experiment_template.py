@@ -4,7 +4,7 @@ from utils.compile import normalize_model_name
 
 
 SID_QUANTIZER_CONFIG_DEFAULTS = {
-    'latent_dim': 32,
+    'latent_dim': 64,
     'reconstruction_loss': 'mse',
     'codebook_size': 256,
     'commitment_weight': 0.25,
@@ -33,7 +33,7 @@ HASH_QUANTIZER_CONFIG_DEFAULTS = {
 }
 
 SID_ENCODER_CONFIG_DEFAULTS = {
-    'hidden_dims': [2048, 1024, 512, 256, 128, 64],
+    'hidden_dims': [2048, 1024, 512, 256, 128],
     'activation': 'relu',
     'use_bias': True,
 }
