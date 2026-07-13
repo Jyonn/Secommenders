@@ -20,7 +20,7 @@ LLM_HISTORIES = ['uid', 'text', 'sid', 'embedding']
 SCRATCH_HISTORIES = ['uid', 'sid', 'embedding']
 SID_VARIANTS = [('rqvae', 'recon')]
 UID_VARIANTS = ['flat', ('hierarchical', '20', '3,20')]
-RECIF_SCALE_PERCENTS = [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90]
+RECIF_SCALE_PERCENTS = [1, 2, 5, 10, 20, 40]
 RECIF_SCALE_SOURCE_MODEL = 'pretrain-multimodal'
 RECIF_SCALE_SID_VARIANTS = [('rqvae', 'coll')]
 RECIF_SCALE_REPRESENTATIONS = [
@@ -28,8 +28,8 @@ RECIF_SCALE_REPRESENTATIONS = [
     ('sid', 'sid'),
     ('uid+embedding', ('uid', 'embedding')),
     ('sid+embedding', ('sid', 'embedding')),
-    ('sid+text', ('sid', 'text')),
-    ('uid+text', ('uid', 'text')),
+    # ('sid+text', ('sid', 'text')),
+    # ('uid+text', ('uid', 'text')),
 ]
 RECIF_SCALE_SCRATCH_REPRESENTATIONS = [
     representation
@@ -106,9 +106,9 @@ def build_simple_schedule():
     ).export(Path('config/simple_scheduler.yaml'))
 
 
-def _recif_scale_datasets(scales=None):
+def _recif_scale_datasets(scales=None, prefixes=('rv', 'ra')):
     scales = RECIF_SCALE_PERCENTS if scales is None else list(scales)
-    return [f'{prefix}{scale}' for prefix in ('rv', 'ra') for scale in scales]
+    return [f'{prefix}{scale}' for prefix in prefixes for scale in scales]
 
 
 def _group_representations(representations):
@@ -121,10 +121,6 @@ def _group_representations(representations):
 
 def build_recif_scaling_schedule(scales=None):
     datasets = _recif_scale_datasets(scales)
-    sid_args = {
-        'sid_embedding_model': RECIF_SCALE_SOURCE_MODEL,
-        'sid_codebook_size': 512,
-    }
     schedule = (
         Schedule(
             name='recif_scaling',
@@ -136,25 +132,51 @@ def build_recif_scaling_schedule(scales=None):
         .uid_variants('flat')
     )
 
+    def sid_args(prefix: str):
+        return {
+            'sid_embedding_model': RECIF_SCALE_SOURCE_MODEL,
+            'sid_codebook_size': 128 if prefix == 'ra' else 512,
+        }
+
     for target, histories in _group_representations(RECIF_SCALE_SCRATCH_REPRESENTATIONS).items():
-        schedule.grid(
-            f'recif_scaling_scratch_{target}',
-            datasets=datasets,
-            models=['scratch'],
-            targets=[target],
-            histories=histories,
-            args=sid_args if target == 'sid' else None,
-        )
+        if target == 'sid':
+            for prefix in ('rv', 'ra'):
+                schedule.grid(
+                    f'recif_scaling_scratch_{target}_{prefix}',
+                    datasets=_recif_scale_datasets(scales, prefixes=(prefix,)),
+                    models=['scratch'],
+                    targets=[target],
+                    histories=histories,
+                    args=sid_args(prefix),
+                )
+        else:
+            schedule.grid(
+                f'recif_scaling_scratch_{target}',
+                datasets=datasets,
+                models=['scratch'],
+                targets=[target],
+                histories=histories,
+            )
 
     for target, histories in _group_representations(RECIF_SCALE_REPRESENTATIONS).items():
-        schedule.grid(
-            f'recif_scaling_qwen35th08b_{target}',
-            datasets=datasets,
-            models=['qwen35th08b'],
-            targets=[target],
-            histories=histories,
-            args=sid_args if target == 'sid' else None,
-        )
+        if target == 'sid':
+            for prefix in ('rv', 'ra'):
+                schedule.grid(
+                    f'recif_scaling_qwen35th08b_{target}_{prefix}',
+                    datasets=_recif_scale_datasets(scales, prefixes=(prefix,)),
+                    models=['qwen35th08b'],
+                    targets=[target],
+                    histories=histories,
+                    args=sid_args(prefix),
+                )
+        else:
+            schedule.grid(
+                f'recif_scaling_qwen35th08b_{target}',
+                datasets=datasets,
+                models=['qwen35th08b'],
+                targets=[target],
+                histories=histories,
+            )
 
     return schedule.export(Path('config/recif_scaling_scheduler.yaml'))
 
