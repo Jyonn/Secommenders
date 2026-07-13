@@ -20,6 +20,22 @@ LLM_HISTORIES = ['uid', 'text', 'sid', 'embedding']
 SCRATCH_HISTORIES = ['uid', 'sid', 'embedding']
 SID_VARIANTS = [('rqvae', 'recon')]
 UID_VARIANTS = ['flat', ('hierarchical', '20', '3,20')]
+RECIF_SCALE_PERCENTS = [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90]
+RECIF_SCALE_SOURCE_MODEL = 'pretrain-multimodal'
+RECIF_SCALE_SID_VARIANTS = [('rqvae', 'coll')]
+RECIF_SCALE_REPRESENTATIONS = [
+    ('uid', 'uid'),
+    ('sid', 'sid'),
+    ('uid+embedding', ('uid', 'embedding')),
+    ('sid+embedding', ('sid', 'embedding')),
+    ('sid+text', ('sid', 'text')),
+    ('uid+text', ('uid', 'text')),
+]
+RECIF_SCALE_SCRATCH_REPRESENTATIONS = [
+    representation
+    for representation in RECIF_SCALE_REPRESENTATIONS
+    if 'text' not in representation[0].split('+')
+]
 
 
 def build_basic_schedule(dataset: str):
@@ -90,7 +106,61 @@ def build_simple_schedule():
     ).export(Path('config/simple_scheduler.yaml'))
 
 
+def _recif_scale_datasets(scales=None):
+    scales = RECIF_SCALE_PERCENTS if scales is None else list(scales)
+    return [f'{prefix}{scale}' for prefix in ('rv', 'ra') for scale in scales]
+
+
+def _group_representations(representations):
+    grouped = {}
+    for label, history in representations:
+        target = label.split('+', 1)[0]
+        grouped.setdefault(target, []).append(history)
+    return grouped
+
+
+def build_recif_scaling_schedule(scales=None):
+    datasets = _recif_scale_datasets(scales)
+    sid_args = {
+        'sid_embedding_model': RECIF_SCALE_SOURCE_MODEL,
+        'sid_codebook_size': 512,
+    }
+    schedule = (
+        Schedule(
+            name='recif_scaling',
+            effective_batch_size=64,
+        )
+        .main_metric('ndcg@10')
+        .source_models(RECIF_SCALE_SOURCE_MODEL)
+        .sid_variants(*RECIF_SCALE_SID_VARIANTS)
+        .uid_variants('flat')
+    )
+
+    for target, histories in _group_representations(RECIF_SCALE_SCRATCH_REPRESENTATIONS).items():
+        schedule.grid(
+            f'recif_scaling_scratch_{target}',
+            datasets=datasets,
+            models=['scratch'],
+            targets=[target],
+            histories=histories,
+            args=sid_args if target == 'sid' else None,
+        )
+
+    for target, histories in _group_representations(RECIF_SCALE_REPRESENTATIONS).items():
+        schedule.grid(
+            f'recif_scaling_qwen35th08b_{target}',
+            datasets=datasets,
+            models=['qwen35th08b'],
+            targets=[target],
+            histories=histories,
+            args=sid_args if target == 'sid' else None,
+        )
+
+    return schedule.export(Path('config/recif_scaling_scheduler.yaml'))
+
+
 if __name__ == '__main__':
     # build_simple_schedule()
     # build_basic_schedules()
-    build_basic_schedule('recifvideoxlargeall')
+    # build_basic_schedule('recifvideoxlargeall')
+    build_recif_scaling_schedule()

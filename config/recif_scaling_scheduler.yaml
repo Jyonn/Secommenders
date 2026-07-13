@@ -1,0 +1,2452 @@
+name: recif_scaling
+poll_interval_seconds: 15
+effective_batch_size: 64
+experiments:
+- name: recif_scaling_scratch_uid_rv1_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv1
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv1_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv1
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv2_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv2
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv2_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv2
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv5_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv5
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv5_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv5
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv10_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv10
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv10_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv10
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv20_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv20
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv20_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv20
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv30_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv30
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv30_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv30
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv40_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv40
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv40_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv40
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv50_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv50
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv50_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv50
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv60_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv60
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv60_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv60
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv70_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv70
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv70_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv70
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv80_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv80
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv80_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv80
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv90_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv90
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_rv90_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv90
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra1_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra1
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra1_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra1
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra2_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra2
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra2_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra2
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra5_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra5
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra5_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra5
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra10_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra10
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra10_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra10
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra20_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra20
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra20_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra20
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra30_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra30
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra30_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra30
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra40_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra40
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra40_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra40
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra50_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra50
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra50_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra50
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra60_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra60
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra60_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra60
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra70_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra70
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra70_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra70
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra80_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra80
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra80_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra80
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra90_scratch_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra90
+    model: scratch
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_scratch_uid_ra90_scratch_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra90
+    model: scratch
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_scratch_sid_rv1_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv1
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv1_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv1
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv2_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv2
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv2_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv2
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv5_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv5
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv5_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv5
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv10_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv10
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv10_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv10
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv20_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv20
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv20_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv20
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv30_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv30
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv30_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv30
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv40_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv40
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv40_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv40
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv50_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv50
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv50_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv50
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv60_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv60
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv60_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv60
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv70_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv70
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv70_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv70
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv80_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv80
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv80_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv80
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv90_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv90
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_rv90_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv90
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra1_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra1
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra1_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra1
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra2_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra2
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra2_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra2
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra5_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra5
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra5_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra5
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra10_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra10
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra10_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra10
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra20_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra20
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra20_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra20
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra30_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra30
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra30_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra30
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra40_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra40
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra40_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra40
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra50_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra50
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra50_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra50
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra60_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra60
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra60_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra60
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra70_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra70
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra70_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra70
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra80_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra80
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra80_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra80
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra90_scratch_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra90
+    model: scratch
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_scratch_sid_ra90_scratch_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra90
+    model: scratch
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_uid_rv1_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv1
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv1_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv1
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv1_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv1
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv2_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv2
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv2_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv2
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv2_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv2
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv5_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv5
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv5_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv5
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv5_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv5
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv10_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv10
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv10_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv10
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv10_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv10
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv20_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv20
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv20_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv20
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv20_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv20
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv30_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv30
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv30_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv30
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv30_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv30
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv40_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv40
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv40_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv40
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv40_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv40
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv50_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv50
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv50_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv50
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv50_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv50
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv60_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv60
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv60_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv60
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv60_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv60
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv70_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv70
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv70_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv70
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv70_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv70
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv80_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv80
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv80_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv80
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv80_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv80
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv90_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv90
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv90_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: rv90
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_rv90_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: rv90
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra1_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra1
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra1_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra1
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra1_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra1
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra2_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra2
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra2_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra2
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra2_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra2
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra5_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra5
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra5_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra5
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra5_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra5
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra10_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra10
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra10_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra10
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra10_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra10
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra20_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra20
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra20_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra20
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra20_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra20
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra30_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra30
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra30_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra30
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra30_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra30
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra40_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra40
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra40_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra40
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra40_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra40
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra50_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra50
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra50_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra50
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra50_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra50
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra60_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra60
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra60_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra60
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra60_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra60
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra70_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra70
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra70_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra70
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra70_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra70
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra80_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra80
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra80_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra80
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra80_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra80
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra90_qwen35th08b_uid2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra90
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra90_qwen35th08b_uid+embedding2uid_pretrain-multimodal_flat
+  args:
+    main_metric: ndcg@10
+    data: ra90
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+embedding
+    repr_source_model: pretrain-multimodal
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_uid_ra90_qwen35th08b_uid+text2uid_flat
+  args:
+    main_metric: ndcg@10
+    data: ra90
+    model: qwen35th08b
+    task_type: uid
+    repr_type: uid+text
+    uid_decoding: flat
+- name: recif_scaling_qwen35th08b_sid_rv1_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv1
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv1_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv1
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv1_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv1
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv2_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv2
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv2_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv2
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv2_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv2
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv5_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv5
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv5_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv5
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv5_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv5
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv10_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv10
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv10_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv10
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv10_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv10
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv20_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv20
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv20_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv20
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv20_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv20
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv30_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv30
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv30_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv30
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv30_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv30
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv40_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv40
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv40_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv40
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv40_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv40
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv50_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv50
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv50_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv50
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv50_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv50
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv60_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv60
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv60_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv60
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv60_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv60
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv70_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv70
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv70_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv70
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv70_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv70
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv80_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv80
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv80_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv80
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv80_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv80
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv90_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv90
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv90_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv90
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_rv90_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: rv90
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra1_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra1
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra1_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra1
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra1_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra1
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra2_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra2
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra2_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra2
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra2_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra2
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra5_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra5
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra5_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra5
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra5_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra5
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra10_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra10
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra10_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra10
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra10_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra10
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra20_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra20
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra20_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra20
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra20_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra20
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra30_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra30
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra30_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra30
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra30_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra30
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra40_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra40
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra40_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra40
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra40_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra40
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra50_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra50
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra50_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra50
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra50_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra50
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra60_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra60
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra60_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra60
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra60_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra60
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra70_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra70
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra70_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra70
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra70_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra70
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra80_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra80
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra80_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra80
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra80_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra80
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra90_qwen35th08b_sid2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra90
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra90_qwen35th08b_sid+embedding2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra90
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+embedding
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
+- name: recif_scaling_qwen35th08b_sid_ra90_qwen35th08b_sid+text2sid_pretrain-multimodal_rqvae_coll
+  args:
+    main_metric: ndcg@10
+    sid_embedding_model: pretrain-multimodal
+    sid_codebook_size: 512
+    data: ra90
+    model: qwen35th08b
+    task_type: sid
+    repr_type: sid+text
+    repr_source_model: pretrain-multimodal
+    sid_coder: rqvae
+    sid_export: coll
