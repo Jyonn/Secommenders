@@ -252,8 +252,8 @@ class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
             item_set.update(record[self.HIS_COL])
         return item_set
 
-    def _load_complete_embedding_item_set(self) -> set:
-        raw_pids = load_filtered_embedding_pids(self.data_dir)
+    def _load_complete_embedding_item_set(self, candidate_item_ids: set) -> set:
+        raw_pids = load_filtered_embedding_pids(self.data_dir, candidate_pids=candidate_item_ids)
         return {self._normalize_item_id(pid) for pid in raw_pids}
 
     def _records_to_users(self, records: list[dict], split: str):
@@ -317,8 +317,9 @@ class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
                     'try a smaller n_core or min_length'
                 )
 
-        embedding_item_set = self._load_complete_embedding_item_set()
-        before_items = len(self._records_item_set(records))
+        candidate_item_ids = self._records_item_set(records)
+        before_items = len(candidate_item_ids)
+        embedding_item_set = self._load_complete_embedding_item_set(candidate_item_ids)
         records = self._filter_and_chunk_records(
             records,
             embedding_item_set,
