@@ -599,6 +599,56 @@ class Scheduler:
         exp.update(self._build_remote_spec(raw_exp, index, base_args, batch_size))
         return exp
 
+    def _normalize_plan_experiments(self):
+        raw_experiments = self.plan.get('experiments') or []
+        if not raw_experiments:
+            raise ValueError(f'No experiments found in plan {self.plan_path}')
+        return [
+            self._normalize_experiment(raw_exp, index)
+            for index, raw_exp in enumerate(raw_experiments, start=1)
+        ]
+
+    def _experiment_key(self, exp: dict):
+        signature = exp.get('report_signature')
+        seed = exp.get('report_seed')
+        if signature is not None and seed is not None:
+            return f'{signature}:{seed}'
+        base_args = exp.get('base_args') or {}
+        payload = {
+            'base_args': canonical_report_args(base_args, effective_batch_size=self.effective_batch_size),
+            'name': exp.get('name'),
+        }
+        return short_config_hash(payload, length=16)
+
+    @staticmethod
+    def _merge_existing_experiment_state(existing: dict, current: dict):
+        preserved_keys = {
+            'status',
+            'batch_size',
+            'phase',
+            'retries',
+            'test_retries',
+            'run_dir',
+            'ckpt_path',
+            'log_path',
+            'last_error',
+            'started_at',
+            'finished_at',
+            'notification_marks',
+            'external_pid',
+            'external_hostname',
+            'external_command',
+            'external_started_at',
+            'report_session',
+            'report_uploaded_at',
+            'report_upload_error',
+        }
+        merged = deepcopy(current)
+        for key in preserved_keys:
+            if key in existing:
+                merged[key] = existing[key]
+        return merged
+
     def _migrate_experiment_state(self, exp: dict):
         base_args = exp.get('base_args') or {}
         if not base_args:
@@ -639,12 +689,14 @@ class Scheduler:
         return exp
 
     def _load_or_initialize_state(self):
+        current_experiments = self._normalize_plan_experiments()
         if self.state_path.exists():
             state = json.loads(self.state_path.read_text())
-            experiments = state.get('experiments', [])
-            for exp in experiments:
+            migrated_experiments = []
+            for exp in state.get('experiments', []):
                 exp = self._migrate_experiment_state(exp)
                 if exp.get('status') == 'done' and exp.get('run_dir') and run_dir_completed(Path(exp['run_dir'])):
+                    migrated_experiments.append(exp)
                     continue
                 if exp.get('status') == 'done' and exp.get('run_dir') and not run_dir_completed(Path(exp['run_dir'])):
                     exp['status'] = 'pending'
@@ -652,14 +704,48 @@ class Scheduler:
                 if exp.get('status') == 'running':
                     exp['status'] = 'pending'
                     exp['last_error'] = 'scheduler restarted while job was running'
+                migrated_experiments.append(exp)
+
+            existing_by_key = {}
+            experiments = []
+            duplicated = 0
+            for exp in migrated_experiments:
+                key = self._experiment_key(exp)
+                if key in existing_by_key:
+                    print(f'warning: duplicated scheduler experiment key in state, keeping first: {key}')
+                    duplicated += 1
+                    continue
+                existing_by_key[key] = exp
+                experiments.append(exp)
+
+            appended = 0
+            refreshed = 0
+            for current in current_experiments:
+                key = self._experiment_key(current)
+                existing = existing_by_key.get(key)
+                if existing is None:
+                    existing_by_key[key] = current
+                    experiments.append(current)
+                    appended += 1
+                    continue
+                merged = self._merge_existing_experiment_state(existing, current)
+                if merged != existing:
+                    index = experiments.index(existing)
+                    experiments[index] = merged
+                    existing_by_key[key] = merged
+                    refreshed += 1
+
+            if appended or refreshed or duplicated:
+                print(
+                    f'scheduler state merged for plan={self.plan_name}: '
+                    f'refreshed={refreshed} appended={appended} deduped={duplicated} '
+                    f'total={len(experiments)}'
+                )
+                self._save_state(experiments)
             return experiments
 
-        raw_experiments = self.plan.get('experiments') or []
-        if not raw_experiments:
-            raise ValueError(f'No experiments found in plan {self.plan_path}')
-        experiments = [self._normalize_experiment(raw_exp, index) for index, raw_exp in enumerate(raw_experiments, start=1)]
-        self._save_state(experiments)
-        return experiments
+        self._save_state(current_experiments)
+        return current_experiments
 
     @staticmethod
     def _notification_marked(exp: dict, key: str):
