@@ -460,20 +460,20 @@ def needs_oom_precheck(base_args: dict):
 
 
 class Scheduler:
-    def __init__(self, plan_path: Path, *, skip_backend: bool = False):
+    def __init__(self, plan_path: Path, *, local_only: bool = False):
         self.plan_path = Path(plan_path)
         self.plan = yaml.safe_load(self.plan_path.read_text())
         self.plan_name = sanitize_name(self.plan.get('name') or self.plan_path.stem)
         self.poll_interval = int(self.plan.get('poll_interval_seconds', 15))
         self.effective_batch_size = int(self.plan.get('effective_batch_size', 64))
-        self.skip_backend = bool(skip_backend)
+        self.local_only = bool(local_only)
         self.output_dir = ARTIFACT_ROOT / self.plan_name
         self.logs_dir = self.output_dir / 'logs'
         self.state_path = self.output_dir / 'state.json'
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
-        self.server = self._build_server(self.plan.get('backend'), skip_backend=self.skip_backend)
+        self.server = self._build_server(self.plan.get('backend'), local_only=self.local_only)
         notificator_conf = self.plan.get('notificator')
         if not notificator_conf:
             print('warning: notificator config is missing; scheduler notifications are disabled')
@@ -482,14 +482,14 @@ class Scheduler:
         self.active_jobs = {}
 
     @staticmethod
-    def _build_server(backend_conf: dict | None, *, skip_backend: bool):
-        if skip_backend:
-            print('warning: backend reporting disabled by --skip-backend; experiments will run without upload')
+    def _build_server(backend_conf: dict | None, *, local_only: bool):
+        if local_only:
+            print('warning: backend reporting disabled by --local-only; experiments will run without upload')
             return None
         if not backend_conf:
             raise ValueError(
                 'scheduler backend config is missing. Add `backend:` to the plan config, '
-                'or pass --skip-backend to run locally without uploading results.'
+                'or pass --local-only to run locally without uploading results.'
             )
 
         uri = backend_conf.get('uri')
@@ -507,7 +507,7 @@ class Scheduler:
                 'scheduler backend config is incomplete '
                 f'(uri={"set" if uri else "missing"}, auth={"set" if auth else "missing"}, '
                 f'uri_env={uri_env!r}, auth_env={auth_env!r}). '
-                'Fix the backend config or pass --skip-backend to run locally without uploading results.'
+                'Fix the backend config or pass --local-only to run locally without uploading results.'
             )
         return Server(uri=uri, auth=auth)
 
@@ -1326,7 +1326,7 @@ class Scheduler:
 
     def run(self):
         print(f'scheduler plan={self.plan_name} experiments={len(self.experiments)} output={self.output_dir}')
-        if not self.skip_backend and self.server is None and self._has_unsynced_completed_experiments():
+        if not self.local_only and self.server is None and self._has_unsynced_completed_experiments():
             print(
                 'warning: terminal experiments still need remote sync, '
                 'but backend reporting is unavailable for this plan'
@@ -1353,13 +1353,13 @@ def main():
     parser = argparse.ArgumentParser(description='Batch experiment scheduler for Secommenders.')
     parser.add_argument('--plan', required=True, help='Path to scheduler plan YAML file.')
     parser.add_argument(
-        '--skip-backend',
+        '--local-only',
         action='store_true',
-        help='Run locally without backend upload. Required when the plan config does not provide backend.',
+        help='Run experiments locally without backend upload. Required when the plan config does not provide backend.',
     )
     args = parser.parse_args()
 
-    scheduler = Scheduler(Path(args.plan), skip_backend=args.skip_backend)
+    scheduler = Scheduler(Path(args.plan), local_only=args.local_only)
     scheduler.run()
 
 
