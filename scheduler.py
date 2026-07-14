@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import time
@@ -277,6 +278,17 @@ def run_dir_completed(run_dir: Path):
     return isinstance(meta, dict) and 'test_metrics' in meta
 
 
+def run_dir_completed_for_phase(run_dir: Path, phase: str):
+    meta = read_json_if_exists(run_dir / 'meta.json') or {}
+    status = str(meta.get('status') or '').lower()
+    phase = str(phase or 'train').lower()
+    if phase == 'precheck':
+        return status == 'valid_only_finished'
+    if phase == 'test':
+        return status == 'test_only_finished'
+    return run_dir_completed(run_dir)
+
+
 def read_json_if_exists(path: Path):
     if not path.exists():
         return None
@@ -284,6 +296,44 @@ def read_json_if_exists(path: Path):
         return json.loads(path.read_text())
     except json.JSONDecodeError:
         return None
+
+
+def pid_is_alive(pid):
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def active_running_record(run_dir: Path):
+    meta = read_json_if_exists(run_dir / 'meta.json') or {}
+    if str(meta.get('status') or '').lower() != 'running':
+        return None
+    pid_record = read_json_if_exists(run_dir / 'pid.json') or {}
+    pid = pid_record.get('pid') or meta.get('pid')
+    hostname = pid_record.get('hostname') or meta.get('hostname')
+    current_hostname = socket.gethostname()
+    if hostname and str(hostname) != current_hostname:
+        return None
+    if not pid_is_alive(pid):
+        return None
+    return {
+        'pid': int(pid),
+        'hostname': hostname or current_hostname,
+        'command': pid_record.get('command') or meta.get('command') or '-',
+        'started_at': meta.get('started_at') or pid_record.get('created_at') or '-',
+    }
 
 
 def looks_like_tqdm_progress(line: str):
@@ -541,6 +591,10 @@ class Scheduler:
             'started_at': None,
             'finished_at': utc_now_iso() if status == 'done' else None,
             'notification_marks': {},
+            'external_pid': None,
+            'external_hostname': None,
+            'external_command': None,
+            'external_started_at': None,
         }
         exp.update(self._build_remote_spec(raw_exp, index, base_args, batch_size))
         return exp
@@ -561,6 +615,10 @@ class Scheduler:
         exp.setdefault('started_at', None)
         exp.setdefault('finished_at', None)
         exp.setdefault('notification_marks', {})
+        exp.setdefault('external_pid', None)
+        exp.setdefault('external_hostname', None)
+        exp.setdefault('external_command', None)
+        exp.setdefault('external_started_at', None)
         exp.setdefault('report_session', None)
         exp.setdefault('report_uploaded_at', None)
         exp.setdefault('report_upload_error', None)
@@ -633,6 +691,72 @@ class Scheduler:
             return True
         return False
 
+    def _logical_args_for_exp(self, exp: dict):
+        return build_args_for_phase(
+            exp['base_args'],
+            batch_size=int(exp['batch_size']),
+            effective_batch_size=self.effective_batch_size,
+            phase=str(exp['phase']),
+            load_ckpt=exp.get('ckpt_path'),
+        )
+
+    def _mark_waiting_external(self, exp: dict, run_dir: Path, record: dict):
+        exp['status'] = 'waiting_external'
+        exp['run_dir'] = str(run_dir)
+        exp['external_pid'] = record.get('pid')
+        exp['external_hostname'] = record.get('hostname')
+        exp['external_command'] = record.get('command')
+        exp['external_started_at'] = record.get('started_at')
+        exp['last_error'] = 'external_run_active'
+        exp['finished_at'] = None
+        exp['report_upload_error'] = None
+        print(
+            f'scheduler waiting for external run name={exp["name"]} '
+            f'phase={exp.get("phase")} pid={record.get("pid")} run_dir={run_dir}'
+        )
+        self._notify(
+            exp,
+            f'external-wait:{record.get("pid")}',
+            'Waiting External Run',
+            '\n'.join(
+                [
+                    f'name={exp["name"]}',
+                    f'phase={exp.get("phase")}',
+                    f'pid={record.get("pid")}',
+                    f'run_dir={run_dir}',
+                ]
+            ),
+        )
+
+    def _clear_external_record(self, exp: dict):
+        exp['external_pid'] = None
+        exp['external_hostname'] = None
+        exp['external_command'] = None
+        exp['external_started_at'] = None
+
+    def _adopt_existing_run_if_needed(self, exp: dict):
+        overwrite = str((exp.get('base_args') or {}).get('overwrite') or 'auto').strip().lower()
+        if overwrite == 'true':
+            return False
+
+        logical_args = self._logical_args_for_exp(exp)
+        run_dir = run_dir_for_args(logical_args)
+        if run_dir_completed_for_phase(run_dir, str(exp.get('phase'))):
+            exp['run_dir'] = str(run_dir)
+            self._clear_external_record(exp)
+            print(
+                f'scheduler found completed external run name={exp["name"]} '
+                f'phase={exp.get("phase")} run_dir={run_dir}'
+            )
+            self._handle_success(exp)
+            return True
+
+        record = active_running_record(run_dir)
+        if record is not None:
+            self._mark_waiting_external(exp, run_dir, record)
+            return True
+        return False
+
     def _save_state(self, experiments=None):
         payload = {
             'name': self.plan_name,
@@ -647,6 +771,12 @@ class Scheduler:
     def _pending_experiments(self):
         return sorted(
             [exp for exp in self.experiments if exp['status'] == 'pending'],
+            key=lambda exp: (-exp['priority'], exp['name']),
+        )
+
+    def _waiting_external_experiments(self):
+        return sorted(
+            [exp for exp in self.experiments if exp['status'] == 'waiting_external'],
             key=lambda exp: (-exp['priority'], exp['name']),
         )
 
@@ -767,13 +897,7 @@ class Scheduler:
             self._save_state()
 
     def _launch(self, exp: dict, gpu: dict):
-        logical_args = build_args_for_phase(
-            exp['base_args'],
-            batch_size=int(exp['batch_size']),
-            effective_batch_size=self.effective_batch_size,
-            phase=str(exp['phase']),
-            load_ckpt=exp.get('ckpt_path'),
-        )
+        logical_args = self._logical_args_for_exp(exp)
         args = deepcopy(logical_args)
         args['device'] = f'cuda:{gpu["index"]}'
         session = self._ensure_remote_session(exp)
@@ -859,6 +983,7 @@ class Scheduler:
         exp['finished_at'] = utc_now_iso()
         exp['report_uploaded_at'] = None
         exp['report_upload_error'] = None
+        self._clear_external_record(exp)
         self._notify(
             exp,
             f'failed:{exp.get("phase")}:{error[:80]}',
@@ -874,6 +999,7 @@ class Scheduler:
         )
 
     def _handle_success(self, exp: dict):
+        self._clear_external_record(exp)
         if exp['phase'] == 'precheck':
             exp['phase'] = 'train'
             exp['status'] = 'pending'
@@ -894,6 +1020,7 @@ class Scheduler:
             exp['test_retries'] = int(exp.get('test_retries', 0)) + 1
             exp['status'] = 'pending'
             exp['finished_at'] = utc_now_iso()
+            self._clear_external_record(exp)
             self._notify(
                 exp,
                 f'oom-test-{current_batch_size}-to-{smaller_batch}',
@@ -921,6 +1048,7 @@ class Scheduler:
                 exp['test_retries'] = int(exp.get('test_retries', 0)) + 1
                 exp['status'] = 'pending'
                 exp['finished_at'] = utc_now_iso()
+                self._clear_external_record(exp)
                 self._notify(
                     exp,
                     f'oom-train-to-test-{current_batch_size}-to-{smaller_batch}',
@@ -945,6 +1073,7 @@ class Scheduler:
         exp['status'] = 'pending'
         exp['retries'] = int(exp.get('retries', 0)) + 1
         exp['finished_at'] = utc_now_iso()
+        self._clear_external_record(exp)
         self._notify(
             exp,
             f'oom-precheck-{current_batch_size}-to-{smaller_batch}',
@@ -966,6 +1095,24 @@ class Scheduler:
         preview = log_tail.strip().splitlines()[-1] if log_tail.strip() else f'process exited {returncode}'
         self._mark_failed(exp, preview[:500])
 
+    def _handle_zero_exit(self, exp: dict):
+        run_dir_text = exp.get('run_dir')
+        run_dir = Path(run_dir_text) if run_dir_text else run_dir_for_args(self._logical_args_for_exp(exp))
+        phase = str(exp.get('phase') or 'train')
+        if run_dir_completed_for_phase(run_dir, phase):
+            self._handle_success(exp)
+            return
+
+        record = active_running_record(run_dir)
+        if record is not None:
+            self._mark_waiting_external(exp, run_dir, record)
+            return
+
+        self._mark_failed(
+            exp,
+            f'process exited 0 but run metadata is incomplete for phase={phase} run_dir={run_dir}',
+        )
+
     def _poll_active_jobs(self):
         finished_pids = []
         for pid, record in list(self.active_jobs.items()):
@@ -977,7 +1124,7 @@ class Scheduler:
             exp = record['experiment']
             log_tail = read_log_tail(Path(exp['log_path'])) if exp.get('log_path') else ''
             if returncode == 0:
-                self._handle_success(exp)
+                self._handle_zero_exit(exp)
             else:
                 self._handle_failure(exp, returncode, log_tail)
         for pid in finished_pids:
@@ -985,10 +1132,85 @@ class Scheduler:
         if finished_pids:
             self._save_state()
 
+    def _poll_external_jobs(self):
+        updated = False
+        for exp in self._waiting_external_experiments():
+            run_dir_text = exp.get('run_dir')
+            if not run_dir_text:
+                exp['status'] = 'pending'
+                exp['last_error'] = 'waiting_external missing run_dir'
+                self._clear_external_record(exp)
+                updated = True
+                continue
+
+            run_dir = Path(run_dir_text)
+            phase = str(exp.get('phase') or 'train')
+            if run_dir_completed_for_phase(run_dir, phase):
+                print(
+                    f'scheduler external run completed name={exp["name"]} '
+                    f'phase={phase} run_dir={run_dir}'
+                )
+                self._clear_external_record(exp)
+                self._handle_success(exp)
+                updated = True
+                continue
+
+            record = active_running_record(run_dir)
+            if record is not None:
+                exp['external_pid'] = record.get('pid')
+                exp['external_hostname'] = record.get('hostname')
+                exp['external_command'] = record.get('command')
+                exp['external_started_at'] = record.get('started_at')
+                continue
+
+            exp['status'] = 'pending'
+            exp['last_error'] = 'external_run_stopped_without_completion'
+            exp['finished_at'] = utc_now_iso()
+            self._clear_external_record(exp)
+            print(
+                f'scheduler external run stopped incomplete name={exp["name"]} '
+                f'phase={phase} run_dir={run_dir}; returning to pending'
+            )
+            self._notify(
+                exp,
+                f'external-stopped:{phase}:{run_dir}',
+                'External Run Stopped',
+                '\n'.join(
+                    [
+                        f'name={exp["name"]}',
+                        f'phase={phase}',
+                        f'run_dir={run_dir}',
+                        'action=return to pending',
+                    ]
+                ),
+            )
+            updated = True
+        if updated:
+            self._save_state()
+
     def _launch_pending_jobs(self):
-        available_gpus = [gpu for gpu in query_gpus() if gpu['index'] not in {record['gpu'] for record in self.active_jobs.values()}]
         pending = self._pending_experiments()
+        if not pending:
+            return
+
+        available_gpus = None
+        updated = False
         for exp in pending:
+            try:
+                if self._adopt_existing_run_if_needed(exp):
+                    updated = True
+                    continue
+            except Exception as exc:
+                self._mark_failed(exp, f'existing-run check failed: {exc}')
+                updated = True
+                continue
+
+            if available_gpus is None:
+                active_gpu_indexes = {record['gpu'] for record in self.active_jobs.values()}
+                available_gpus = [
+                    gpu for gpu in query_gpus()
+                    if gpu['index'] not in active_gpu_indexes
+                ]
             eligible_index = next(
                 (
                     index for index, gpu in enumerate(available_gpus)
@@ -1004,6 +1226,8 @@ class Scheduler:
             except Exception as exc:
                 self._mark_failed(exp, f'launch failed: {exc}')
                 self._save_state()
+        if updated:
+            self._save_state()
 
     def run(self):
         print(f'scheduler plan={self.plan_name} experiments={len(self.experiments)} output={self.output_dir}')
@@ -1015,6 +1239,7 @@ class Scheduler:
         self._sync_terminal_experiments()
         while not self._all_terminal():
             self._poll_active_jobs()
+            self._poll_external_jobs()
             self._sync_terminal_experiments()
             self._launch_pending_jobs()
             if self._all_terminal():
@@ -1025,7 +1250,8 @@ class Scheduler:
         self._save_state()
         done = sum(1 for exp in self.experiments if exp['status'] == 'done')
         failed = sum(1 for exp in self.experiments if exp['status'] == 'failed')
-        print(f'scheduler finished done={done} failed={failed} state={self.state_path}')
+        waiting = sum(1 for exp in self.experiments if exp['status'] == 'waiting_external')
+        print(f'scheduler finished done={done} failed={failed} waiting_external={waiting} state={self.state_path}')
 
 
 def main():
