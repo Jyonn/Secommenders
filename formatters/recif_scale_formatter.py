@@ -111,7 +111,6 @@ class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
             meta.get('version') == self.VER
             and meta.get('domain') == self.DOMAIN
             and meta.get('raw_history_col') == self.RAW_HISTORY_COL
-            and str(meta.get('data_dir')) == str(self.data_dir)
             and int(meta.get('n_core', -1)) == int(self.n_core)
             and int(meta.get('min_length', -1)) == int(self.min_length)
             and int(meta.get('max_length', -1)) == int(self.max_length)

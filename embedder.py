@@ -166,8 +166,6 @@ class Embedder:
             expected_columns = list(getattr(self.caller, 'EMBEDDING_COLUMNS', ()))
             if list(meta.get('embedding_columns', [])) != expected_columns:
                 return False
-            if meta.get('data_dir') is not None and str(meta.get('data_dir')) != str(self.data_dir):
-                return False
         return True
 
     def try_reuse_larger_scale_embeddings(self):
