@@ -533,3 +533,9 @@ class RA90Formatter(RecIFAdsScaleFormatter):
     @classmethod
     def scale_percent(cls) -> int:
         return 90
+
+
+class RA99Formatter(RecIFAdsScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 99

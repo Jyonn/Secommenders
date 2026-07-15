@@ -20,7 +20,7 @@ LLM_HISTORIES = ['uid', 'text', 'sid', 'embedding']
 SCRATCH_HISTORIES = ['uid', 'sid', 'embedding']
 SID_VARIANTS = [('rqvae', 'recon')]
 UID_VARIANTS = ['flat', ('hierarchical', '20', '3,20')]
-RECIF_SCALE_PERCENTS = [1, 2, 5, 10, 20, 40]
+RECIF_SCALE_PERCENTS = [1, 2, 5, 10]
 RECIF_SCALE_SOURCE_MODEL = 'pretrain-multimodal'
 RECIF_SCALE_SID_VARIANTS = [('rqvae', 'coll')]
 RECIF_SCALE_REPRESENTATIONS = [
@@ -28,8 +28,8 @@ RECIF_SCALE_REPRESENTATIONS = [
     ('sid', 'sid'),
     ('uid+embedding', ('uid', 'embedding')),
     ('sid+embedding', ('sid', 'embedding')),
-    # ('sid+text', ('sid', 'text')),
-    # ('uid+text', ('uid', 'text')),
+    ('sid+text', ('sid', 'text')),
+    ('uid+text', ('uid', 'text')),
 ]
 RECIF_SCALE_SCRATCH_REPRESENTATIONS = [
     representation
@@ -106,7 +106,7 @@ def build_simple_schedule():
     ).export(Path('config/simple_scheduler.yaml'))
 
 
-def _recif_scale_datasets(scales=None, prefixes=('rv', 'ra')):
+def _recif_scale_datasets(scales=None, prefixes=('ra',)):
     scales = RECIF_SCALE_PERCENTS if scales is None else list(scales)
     return [f'{prefix}{scale}' for prefix in prefixes for scale in scales]
 
@@ -140,7 +140,7 @@ def build_recif_scaling_schedule(scales=None):
 
     for target, histories in _group_representations(RECIF_SCALE_SCRATCH_REPRESENTATIONS).items():
         if target == 'sid':
-            for prefix in ('rv', 'ra'):
+            for prefix in ('ra',):
                 schedule.grid(
                     f'recif_scaling_scratch_{target}_{prefix}',
                     datasets=_recif_scale_datasets(scales, prefixes=(prefix,)),
@@ -160,7 +160,7 @@ def build_recif_scaling_schedule(scales=None):
 
     for target, histories in _group_representations(RECIF_SCALE_REPRESENTATIONS).items():
         if target == 'sid':
-            for prefix in ('rv', 'ra'):
+            for prefix in ('ra',):
                 schedule.grid(
                     f'recif_scaling_qwen35th08b_{target}_{prefix}',
                     datasets=_recif_scale_datasets(scales, prefixes=(prefix,)),
@@ -178,7 +178,7 @@ def build_recif_scaling_schedule(scales=None):
                 histories=histories,
             )
 
-    return schedule.export(Path('config/recif_scaling_scheduler.yaml'))
+    return schedule.export(Path('config/recif_scaling_ra_scheduler.yaml'))
 
 
 if __name__ == '__main__':
