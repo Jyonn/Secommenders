@@ -199,6 +199,71 @@ def print_histogram(title, values, *, bins=20, width=48):
         print(f'    [{left:>8.2f}, {right:>8.2f}] {str(count).rjust(8)} | {bar}')
 
 
+def parse_count_bucket_spec(spec: str | None):
+    if not spec:
+        return None
+    buckets = []
+    tokens = [token.strip() for token in spec.replace('/', ',').split(',') if token.strip()]
+    for token in tokens:
+        if token.endswith('+'):
+            left_text = token[:-1].strip()
+            if not left_text:
+                raise ValueError(f'invalid bucket token: {token!r}')
+            left = int(left_text)
+            buckets.append((left, None, f'{left}+'))
+            continue
+        if '-' in token:
+            left_text, right_text = [part.strip() for part in token.split('-', 1)]
+            left = int(left_text)
+            right = int(right_text)
+            if right < left:
+                raise ValueError(f'invalid bucket token with descending range: {token!r}')
+            buckets.append((left, right, f'{left}-{right}'))
+            continue
+        value = int(token)
+        buckets.append((value, value, str(value)))
+    if not buckets:
+        return None
+    return buckets
+
+
+def count_bucket_histogram(values, bucket_spec):
+    if not bucket_spec:
+        return []
+    series = pd.Series(values)
+    series = pd.to_numeric(series, errors='coerce').dropna().astype(int)
+    if series.empty:
+        return []
+    hist = []
+    total_matched = 0
+    for left, right, label in bucket_spec:
+        if right is None:
+            mask = series >= left
+        else:
+            mask = (series >= left) & (series <= right)
+        count = int(mask.sum())
+        total_matched += count
+        hist.append((label, count))
+    unmatched = int(series.shape[0]) - total_matched
+    if unmatched:
+        hist.append(('unmatched', unmatched))
+    return hist
+
+
+def print_count_bucket_histogram(title, values, *, bucket_spec, width=48):
+    hist = count_bucket_histogram(values, bucket_spec)
+    if not hist:
+        print(f'  {title}: no histogram values')
+        return hist
+    max_count = max(count for _, count in hist) or 1
+    print(f'  {title}:')
+    for label, count in hist:
+        bar_len = int(round(width * count / max_count))
+        bar = '#' * bar_len
+        print(f'    {label.rjust(12)} {str(count).rjust(8)} | {bar}')
+    return hist
+
+
 def top_counter(counter: Counter, topk: int):
     return counter.most_common(topk)
 
@@ -343,6 +408,7 @@ def analyze_user_frame(
     bins: int,
     width: int,
     topk: int,
+    popularity_bucket_spec=None,
 ):
     print_section(f'{name} rows')
     rows = [
@@ -393,7 +459,16 @@ def analyze_user_frame(
         print_numeric_summary(f'{name} unique-history-item count summary', unique_lengths)
         popularity_values = list(item_counter.values())
         print_numeric_summary(f'{name} item popularity summary', popularity_values)
-        print_histogram(f'{name} item popularity histogram', popularity_values, bins=bins, width=width)
+        popularity_histogram = None
+        if popularity_bucket_spec:
+            popularity_histogram = print_count_bucket_histogram(
+                f'{name} item popularity histogram',
+                popularity_values,
+                bucket_spec=popularity_bucket_spec,
+                width=width,
+            )
+        else:
+            print_histogram(f'{name} item popularity histogram', popularity_values, bins=bins, width=width)
         top_rows = [[item, fmt_number(count)] for item, count in top_counter(item_counter, topk)]
         if top_rows:
             print_section(f'{name} top {topk} items by history frequency')
@@ -408,6 +483,7 @@ def analyze_user_frame(
             'missing_history_items': int(len(missing_items)),
             'history_length': describe_numeric(lengths),
             'item_popularity': describe_numeric(popularity_values),
+            'item_popularity_buckets': popularity_histogram,
             'top_items': top_counter(item_counter, topk),
         }
 
@@ -482,7 +558,7 @@ def overlap_report(frames: dict[str, pd.DataFrame], user_col: str | None, histor
         print('  no comparable split overlap data')
 
 
-def analyze_stage(data: str, stage: str, *, bins: int, width: int, topk: int):
+def analyze_stage(data: str, stage: str, *, bins: int, width: int, topk: int, popularity_bucket_spec=None):
     stage_dir = ARTIFACT_ROOT / stage / data
     if not stage_dir.exists():
         raise FileNotFoundError(f'{stage} artifact directory not found: {stage_dir}')
@@ -554,6 +630,7 @@ def analyze_stage(data: str, stage: str, *, bins: int, width: int, topk: int):
             bins=bins,
             width=width,
             topk=topk,
+            popularity_bucket_spec=popularity_bucket_spec,
         )
     overlap_report(frames, user_col, history_col)
     return report
@@ -566,13 +643,26 @@ def main():
     parser.add_argument('--bins', type=int, default=20, help='Histogram bin count.')
     parser.add_argument('--width', type=int, default=48, help='Histogram bar width.')
     parser.add_argument('--topk', type=int, default=20, help='Top-K frequent values to show.')
+    parser.add_argument(
+        '--popularity-buckets',
+        default=None,
+        help='Custom item popularity buckets, e.g. "1/2/3/4/5/6/7/8/9/10+" or "1,2,3,4,5-9,10+".',
+    )
     parser.add_argument('--json-out', default=None, help='Optional path to save machine-readable summary JSON.')
     args = parser.parse_args()
 
+    popularity_bucket_spec = parse_count_bucket_spec(args.popularity_buckets)
     stages = ['formatted', 'processed'] if args.stage == 'all' else [args.stage]
     reports = {}
     for stage in stages:
-        reports[stage] = analyze_stage(args.data.lower(), stage, bins=args.bins, width=args.width, topk=args.topk)
+        reports[stage] = analyze_stage(
+            args.data.lower(),
+            stage,
+            bins=args.bins,
+            width=args.width,
+            topk=args.topk,
+            popularity_bucket_spec=popularity_bucket_spec,
+        )
 
     if args.json_out:
         path = Path(args.json_out)
