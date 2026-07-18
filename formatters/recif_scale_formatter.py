@@ -382,6 +382,7 @@ class RecIFVideoScaleFormatter(RecIFScaleFormatter, abc.ABC):
 class RecIFVideoSmallScaleFormatter(RecIFVideoScaleFormatter, abc.ABC):
     VER = 'v1.0-video-small-scale'
     FILTER_ROUNDS = 0
+    SCALE_TEST_RATIO = 0.03
 
     @classmethod
     def _scale_dataset_prefix(cls):
@@ -702,10 +703,10 @@ class RVS90Formatter(RecIFVideoSmallScaleFormatter):
         return 90
 
 
-class RVS99Formatter(RecIFVideoSmallScaleFormatter):
+class RVS95Formatter(RecIFVideoSmallScaleFormatter):
     @classmethod
     def scale_percent(cls) -> int:
-        return 99
+        return 95
 
 
 class RA1Formatter(RecIFAdsScaleFormatter):
