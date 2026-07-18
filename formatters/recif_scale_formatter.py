@@ -379,6 +379,173 @@ class RecIFVideoScaleFormatter(RecIFScaleFormatter, abc.ABC):
     OFFICIAL_TEST_HISTORY_COL = 'hist_pid'
 
 
+class RecIFVideoSmallScaleFormatter(RecIFVideoScaleFormatter, abc.ABC):
+    VER = 'v1.0-video-small-scale'
+    FILTER_ROUNDS = 0
+
+    @classmethod
+    def _scale_dataset_prefix(cls):
+        return 'rvs'
+
+    def _extra_meta(self):
+        meta = super()._extra_meta()
+        meta.update(
+            {
+                'small_scale_policy': 'one-latest-sequence-per-user-with-valid-item-backfill',
+                'filter_rounds_policy': 'until-stable' if int(self.FILTER_ROUNDS) <= 0 else 'fixed',
+                'filter_pipeline': [
+                    'caption-exists',
+                    'latest-max-length-one-sequence-per-user',
+                    'repeat-until-stable:item-n-core-with-valid-item-backfill',
+                    'complete-pretrain-embedding-filter',
+                    'repeat-until-stable:item-n-core-with-valid-item-backfill',
+                    'stable-shuffle-sequences',
+                    'prefix-scale-train-tail-test',
+                ],
+            }
+        )
+        return meta
+
+    def _latest_valid_record(self, uid, raw_history: list, allowed_items: set):
+        selected = []
+        for pid in reversed(raw_history):
+            if pid not in allowed_items:
+                continue
+            selected.append(pid)
+            if len(selected) >= self.max_length:
+                break
+        if len(selected) < self.min_length:
+            return None
+        selected.reverse()
+        return {'source_uid': uid, self.HIS_COL: selected}
+
+    def _build_latest_records(self, raw_users: pd.DataFrame, allowed_items: set, desc: str):
+        records = []
+        iterator = zip(raw_users[self.UID_COL].tolist(), raw_users[self.HIS_COL].tolist())
+        for uid, raw_history in tqdm(iterator, total=len(raw_users), desc=desc):
+            record = self._latest_valid_record(uid, raw_history, allowed_items)
+            if record is not None:
+                records.append(record)
+        return records
+
+    def _stabilize_latest_records(self, raw_users: pd.DataFrame, allowed_items: set, stage: str):
+        current_allowed = set(allowed_items)
+        max_rounds = None if int(self.FILTER_ROUNDS) <= 0 else int(self.FILTER_ROUNDS)
+        round_index = 0
+        records = []
+
+        while True:
+            records = self._build_latest_records(
+                raw_users,
+                current_allowed,
+                desc=f'{stage}-latest-sequences@{round_index + 1}',
+            )
+            if not records:
+                raise ValueError(
+                    f'No RecIF {self.DOMAIN} small-scale sequences survived {stage} round {round_index + 1}; '
+                    'try a smaller n_core or min_length'
+                )
+
+            counts = self._count_items(record[self.HIS_COL] for record in records)
+            next_allowed = {pid for pid, count in counts.items() if count >= self.n_core}
+            pnt(
+                f'{stage} small round {round_index + 1}: '
+                f'{len(next_allowed)} items survive n_core>={self.n_core} '
+                f'from {len(records)} one-sequence users'
+            )
+
+            round_index += 1
+            if next_allowed == current_allowed:
+                return records, current_allowed, round_index
+
+            current_allowed = next_allowed
+            if max_rounds is not None and round_index >= max_rounds:
+                records = self._build_latest_records(
+                    raw_users,
+                    current_allowed,
+                    desc=f'{stage}-latest-sequences-final',
+                )
+                if not records:
+                    raise ValueError(
+                        f'No RecIF {self.DOMAIN} small-scale sequences survived {stage} final rebuild; '
+                        'try a smaller n_core or min_length'
+                    )
+                return records, current_allowed, round_index
+
+    def _run_filter_pipeline(self):
+        if (
+            self._filtered_items is not None
+            and self._filtered_users is not None
+            and self._filtered_test_users is not None
+        ):
+            return
+
+        pnt(
+            f'RecIF {self.DOMAIN} small-scale formatting settings: '
+            f'scale={self.scale_percent()}%, n_core={self.n_core}, '
+            f'min_length={self.min_length}, max_length={self.max_length}, rounds={self.FILTER_ROUNDS}, '
+            f'test_ratio={self.SCALE_TEST_RATIO:g}'
+        )
+
+        if self._try_load_from_larger_scale():
+            return
+
+        raw_users = self._load_raw_users()
+        caption_pid_set = self._stream_caption_pid_set()
+        records, allowed_items, ncore_rounds = self._stabilize_latest_records(
+            raw_users,
+            caption_pid_set,
+            stage='caption-ncore',
+        )
+
+        candidate_item_ids = self._records_item_set(records)
+        before_items = len(candidate_item_ids)
+        embedding_item_set = self._load_complete_embedding_item_set(candidate_item_ids)
+        allowed_items = allowed_items & embedding_item_set
+        records, allowed_items, embedding_rounds = self._stabilize_latest_records(
+            raw_users,
+            allowed_items,
+            stage='embedding-ncore',
+        )
+        after_items = len(self._records_item_set(records))
+        pnt(
+            f'embedding completeness filter kept {after_items}/{before_items} items '
+            f'after backfill and ncore restabilization rounds={embedding_rounds}'
+        )
+
+        final_item_ids = self._records_item_set(records)
+        items = self._load_caption_rows(final_item_ids)
+        final_item_set = set(items[self.IID_COL].tolist())
+        records = self._build_latest_records(raw_users, final_item_set, desc='final-caption-align-latest-sequences')
+        if not records:
+            raise ValueError(f'No RecIF {self.DOMAIN} small-scale sequences survived final item alignment')
+
+        records = stable_shuffle(records, seed=self.get_seed())
+        for index, record in enumerate(records):
+            record['global_sequence_index'] = index
+        test_start, train_limit = self._scale_split_points(len(records))
+        if train_limit <= 0:
+            raise ValueError(f'scale={self.scale_percent()}% produced no train sequences from {len(records)} records')
+
+        train_records = records[:train_limit]
+        test_records = records[test_start:]
+        if not test_records:
+            raise ValueError(f'scale split produced no test sequences from {len(records)} records')
+
+        self._filtered_items = items.sort_values(self.IID_COL).reset_index(drop=True)
+        self._filtered_users = self._records_to_users(train_records, split='train')
+        self._filtered_test_users = self._records_to_users(test_records, split='test')
+        self._scale_total_sequences = len(records)
+        self._scale_test_start = test_start
+        self._scale_train_limit = train_limit
+
+        pnt(
+            f'RecIF {self.DOMAIN} small-scale formatting complete with items={len(self._filtered_items)} '
+            f'train_sequences={len(self._filtered_users)} test_sequences={len(self._filtered_test_users)} '
+            f'total_sequences={len(records)} ncore_rounds={ncore_rounds} embedding_rounds={embedding_rounds}'
+        )
+
+
 class RecIFAdsScaleFormatter(RecIFScaleFormatter, abc.ABC):
     DOMAIN = 'ad'
     RAW_HISTORY_COL = 'hist_ad_pid'
@@ -461,6 +628,84 @@ class RV90Formatter(RecIFVideoScaleFormatter):
     @classmethod
     def scale_percent(cls) -> int:
         return 90
+
+
+class RVS1Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 1
+
+
+class RVS2Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 2
+
+
+class RVS5Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 5
+
+
+class RVS10Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 10
+
+
+class RVS20Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 20
+
+
+class RVS30Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 30
+
+
+class RVS40Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 40
+
+
+class RVS50Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 50
+
+
+class RVS60Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 60
+
+
+class RVS70Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 70
+
+
+class RVS80Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 80
+
+
+class RVS90Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 90
+
+
+class RVS99Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 99
 
 
 class RA1Formatter(RecIFAdsScaleFormatter):

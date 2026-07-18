@@ -28,4 +28,6 @@ def get_data_dir(dataset):
         return DATA_DIRS['recif']
     if dataset[:2] in {'rv', 'ra'} and dataset[2:].isdigit() and 'recif' in DATA_DIRS:
         return DATA_DIRS['recif']
+    if dataset.startswith('rvs') and dataset[3:].isdigit() and 'recif' in DATA_DIRS:
+        return DATA_DIRS['recif']
     return None
