@@ -379,14 +379,9 @@ class RecIFVideoScaleFormatter(RecIFScaleFormatter, abc.ABC):
     OFFICIAL_TEST_HISTORY_COL = 'hist_pid'
 
 
-class RecIFVideoSmallScaleFormatter(RecIFVideoScaleFormatter, abc.ABC):
-    VER = 'v1.0-video-small-scale'
+class RecIFSmallScaleFormatter(RecIFScaleFormatter, abc.ABC):
     FILTER_ROUNDS = 0
     SCALE_TEST_RATIO = 0.03
-
-    @classmethod
-    def _scale_dataset_prefix(cls):
-        return 'rvs'
 
     def _extra_meta(self):
         meta = super()._extra_meta()
@@ -547,6 +542,14 @@ class RecIFVideoSmallScaleFormatter(RecIFVideoScaleFormatter, abc.ABC):
         )
 
 
+class RecIFVideoSmallScaleFormatter(RecIFSmallScaleFormatter, RecIFVideoScaleFormatter, abc.ABC):
+    VER = 'v1.0-video-small-scale'
+
+    @classmethod
+    def _scale_dataset_prefix(cls):
+        return 'rvs'
+
+
 class RecIFAdsScaleFormatter(RecIFScaleFormatter, abc.ABC):
     DOMAIN = 'ad'
     RAW_HISTORY_COL = 'hist_ad_pid'
@@ -557,6 +560,14 @@ class RecIFAdsScaleFormatter(RecIFScaleFormatter, abc.ABC):
         if pd.isna(value):
             return value
         return int(value)
+
+
+class RecIFAdsSmallScaleFormatter(RecIFSmallScaleFormatter, RecIFAdsScaleFormatter, abc.ABC):
+    VER = 'v1.0-ads-small-scale'
+
+    @classmethod
+    def _scale_dataset_prefix(cls):
+        return 'ras'
 
 
 class RV1Formatter(RecIFVideoScaleFormatter):
@@ -704,6 +715,84 @@ class RVS90Formatter(RecIFVideoSmallScaleFormatter):
 
 
 class RVS95Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 95
+
+
+class RAS1Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 1
+
+
+class RAS2Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 2
+
+
+class RAS5Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 5
+
+
+class RAS10Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 10
+
+
+class RAS20Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 20
+
+
+class RAS30Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 30
+
+
+class RAS40Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 40
+
+
+class RAS50Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 50
+
+
+class RAS60Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 60
+
+
+class RAS70Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 70
+
+
+class RAS80Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 80
+
+
+class RAS90Formatter(RecIFAdsSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 90
+
+
+class RAS95Formatter(RecIFAdsSmallScaleFormatter):
     @classmethod
     def scale_percent(cls) -> int:
         return 95
