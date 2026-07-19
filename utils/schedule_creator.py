@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
 
 from utils.compile import CompileConfig, normalize_model_name
 from utils.experiment_template import build_default_upstreams
@@ -825,5 +829,9 @@ class Schedule:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = self.to_dict(path=path)
-        path.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True))
+        if yaml is not None:
+            text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+        else:
+            text = json.dumps(payload, indent=2, ensure_ascii=False) + '\n'
+        path.write_text(text)
         return path
