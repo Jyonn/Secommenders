@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import curses
 import json
+import string
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,50 +24,27 @@ DATASET_CHOICES = [
     *[f'rvs{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95]],
 ]
 
-MODEL_CHOICES = [
-    'scratch',
-    'qwen35th08b',
-    'qwen35th4b',
-    'qwen35th9b',
-    'llama3',
+MODEL_CHOICES = ['scratch', 'qwen35th08b', 'qwen35th4b', 'qwen35th9b', 'llama3']
+SOURCE_MODEL_CHOICES = ['pretrain-multimodal', 'pretrain-text', 'pretrain-vision', 'llama3', 'qwen3embedding06b']
+
+REPRESENTATION_PAIR_CHOICES = [
+    'uid2uid',
+    'sid2sid',
+    'hash2hash',
+    'embedding2embedding',
+    'uid+embedding2uid',
+    'uid+text2uid',
+    'uid+sid2uid',
+    'uid+hash2uid',
+    'sid+embedding2sid',
+    'sid+text2sid',
+    'sid+uid2sid',
+    'hash+embedding2hash',
+    'embedding+uid2embedding',
 ]
 
-SOURCE_MODEL_CHOICES = [
-    'pretrain-multimodal',
-    'pretrain-text',
-    'pretrain-vision',
-    'llama3',
-    'qwen3embedding06b',
-]
-
-TASK_CHOICES = ['uid', 'sid', 'hash', 'embedding']
-HISTORY_CHOICES = [
-    'uid',
-    'sid',
-    'hash',
-    'embedding',
-    'text',
-    'uid+embedding',
-    'uid+text',
-    'sid+embedding',
-    'sid+text',
-    'hash+embedding',
-]
-
-SID_VARIANT_CHOICES = [
-    'rqvae/coll',
-    'rqvae/recon',
-    'pqvae/coll',
-    'opqvae/coll',
-]
-
-UID_VARIANT_CHOICES = [
-    'flat',
-    'hierarchical:auto:20',
-    'hierarchical:auto:3,20',
-    'hierarchical:20:3,20',
-]
-
+SID_VARIANT_CHOICES = ['rqvae/coll', 'rqvae/recon', 'pqvae/coll', 'opqvae/coll']
+UID_VARIANT_CHOICES = ['flat', 'hierarchical:auto:20', 'hierarchical:auto:3,20', 'hierarchical:20:3,20']
 HASH_CODER_CHOICES = ['simhash', 'lsh', 'pcahash', 'itq']
 
 GROUPS = {
@@ -153,18 +131,39 @@ GROUPS = {
 
 
 @dataclass
+class ChoiceStep:
+    key: str
+    title: str
+    choices: list[str]
+    selected: list[str]
+    multi: bool = True
+    required: bool = True
+    allow_custom: bool = True
+    query: str = ''
+    cursor: int = 0
+    offset: int = 0
+    hint: str = ''
+
+
+@dataclass
 class PlanSelections:
     name: str
     output: Path
     datasets: list[str]
     models: list[str]
-    targets: list[str]
-    histories: list[str]
+    representation_pairs: list[str]
     source_models: list[str]
     sid_variants: list[str]
     uid_variants: list[str]
     hash_coders: list[str]
     params: dict[str, Any]
+
+
+def _defaults():
+    params = {}
+    for values in GROUPS.values():
+        params.update(deepcopy(values))
+    return params
 
 
 def _coerce_value(raw: str):
@@ -207,20 +206,47 @@ def _read_models_from_dotfile(root: Path):
     return models
 
 
-def _draw_lines(stdscr, lines: list[str]):
-    stdscr.erase()
+def _parse_csv(value: str | None):
+    if not value:
+        return []
+    return [part.strip().lower() for part in value.split(',') if part.strip()]
+
+
+def _ensure_color():
+    if not curses.has_colors():
+        return
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_CYAN, -1)
+    curses.init_pair(2, curses.COLOR_GREEN, -1)
+    curses.init_pair(3, curses.COLOR_YELLOW, -1)
+    curses.init_pair(4, curses.COLOR_RED, -1)
+    curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_CYAN)
+
+
+def _attr(pair: int, fallback=0):
+    if curses.has_colors():
+        return curses.color_pair(pair)
+    return fallback
+
+
+def _safe_add(stdscr, row: int, col: int, text: str, attr=0):
     height, width = stdscr.getmaxyx()
-    for row, line in enumerate(lines[:height - 1]):
-        stdscr.addnstr(row, 0, line, width - 1)
-    stdscr.refresh()
+    if row < 0 or row >= height or col >= width:
+        return
+    stdscr.addnstr(row, col, text, max(0, width - col - 1), attr)
 
 
 def prompt_text(stdscr, title: str, default: str = ''):
     curses.echo()
     curses.curs_set(1)
     try:
-        _draw_lines(stdscr, [title, '', f'default: {default}', 'input: '])
-        value = stdscr.getstr(3, 7).decode('utf-8').strip()
+        stdscr.erase()
+        _safe_add(stdscr, 1, 2, title, _attr(1, curses.A_BOLD))
+        _safe_add(stdscr, 3, 2, f'default: {default or "-"}', _attr(3))
+        _safe_add(stdscr, 5, 2, 'input: ')
+        stdscr.refresh()
+        value = stdscr.getstr(5, 9).decode('utf-8').strip()
     finally:
         curses.noecho()
         curses.curs_set(0)
@@ -239,151 +265,281 @@ def prompt_confirm(stdscr, title: str, default: bool = True):
             return False
 
 
-def _filtered_choices(choices: list[str], query: str):
-    if not query:
-        return list(choices)
-    needle = query.lower()
-    return [choice for choice in choices if needle in choice.lower()]
+def _visible_choices(step: ChoiceStep):
+    if not step.query:
+        return list(step.choices)
+    needle = step.query.lower()
+    return [choice for choice in step.choices if needle in choice.lower()]
 
 
-def select_choices(
-    stdscr,
-    title: str,
-    choices: list[str],
-    *,
-    multi: bool,
-    allow_custom: bool = True,
-    selected: list[str] | None = None,
-):
-    selected_set = set(selected or [])
-    cursor = 0
-    offset = 0
-    query = ''
+def _selected_ordered(step: ChoiceStep):
+    selected = set(step.selected)
+    return [choice for choice in step.choices if choice in selected]
 
-    while True:
-        visible = _filtered_choices(choices, query)
-        if cursor >= len(visible):
-            cursor = max(0, len(visible) - 1)
-        height, width = stdscr.getmaxyx()
-        page_size = max(5, height - 6)
-        if cursor < offset:
-            offset = cursor
-        if cursor >= offset + page_size:
-            offset = cursor - page_size + 1
 
-        lines = [
-            title,
-            '↑/↓ move  space toggle  enter confirm  / filter  i manual  a all  c clear  q cancel',
-            f'filter: {query or "-"}    selected: {len(selected_set)}',
-            '',
-        ]
-        for index, choice in enumerate(visible[offset:offset + page_size], start=offset):
-            marker = '●' if choice in selected_set else '○'
-            pointer = '>' if index == cursor else ' '
-            if not multi:
-                marker = '●' if index == cursor else '○'
-            lines.append(f'{pointer} {marker} {choice}')
-        if not visible:
-            lines.append('  no matches')
-        _draw_lines(stdscr, lines)
+def _step_valid(step: ChoiceStep):
+    return not step.required or bool(step.selected)
 
-        key = stdscr.getch()
-        if key in {curses.KEY_UP, ord('k')}:
-            cursor = max(0, cursor - 1)
-        elif key in {curses.KEY_DOWN, ord('j')}:
-            cursor = min(max(0, len(visible) - 1), cursor + 1)
-        elif key == ord('/'):
-            query = prompt_text(stdscr, f'Filter {title}', query)
-            cursor = 0
-            offset = 0
-        elif key == ord('i') and allow_custom:
-            raw = prompt_text(stdscr, f'Manual input for {title} (comma separated)', '')
-            values = [part.strip().lower() for part in raw.split(',') if part.strip()]
-            for value in values:
-                if value not in choices:
-                    choices.append(value)
-                if multi:
-                    selected_set.add(value)
-                else:
-                    return [value]
-        elif key == ord('a') and multi:
-            selected_set.update(visible)
-        elif key == ord('c') and multi:
-            selected_set.clear()
-        elif key == ord(' ') and multi and visible:
-            choice = visible[cursor]
-            if choice in selected_set:
-                selected_set.remove(choice)
+
+def _wizard_validation_error(step: ChoiceStep, steps: list[ChoiceStep]):
+    if not _step_valid(step):
+        return f'{step.title} is required before continuing.'
+    if step.key == 'representation_pairs':
+        for pair in step.selected:
+            try:
+                _parse_representation_pair(pair)
+            except ValueError as exc:
+                return str(exc)
+        selected_by_key = {item.key: item.selected for item in steps}
+        if 'scratch' in selected_by_key.get('models', []):
+            for pair in step.selected:
+                _, history = _parse_representation_pair(pair)
+                if 'text' in history:
+                    return 'scratch model does not support representation pairs containing text.'
+    return None
+
+
+def _draw_chrome(stdscr, steps: list[ChoiceStep], index: int, message: str = ''):
+    height, width = stdscr.getmaxyx()
+    stdscr.erase()
+    title = ' Secommenders Schedule Planner '
+    _safe_add(stdscr, 0, 0, title.ljust(width - 1), _attr(5, curses.A_REVERSE))
+    progress = []
+    for i, step in enumerate(steps):
+        mark = '✓' if _step_valid(step) else '!'
+        label = f'{mark} {step.title}'
+        if i == index:
+            label = f'[{label}]'
+        progress.append(label)
+    _safe_add(stdscr, 2, 2, '  >  '.join(progress), _attr(1))
+    if message:
+        _safe_add(stdscr, height - 3, 2, message, _attr(4))
+    _safe_add(
+        stdscr,
+        height - 2,
+        2,
+        'type to filter | ↑/↓ move | space select | enter/right next | left previous | i manual | a all | c clear | backspace edit filter',
+        _attr(3),
+    )
+
+
+def _draw_choice_step(stdscr, step: ChoiceStep, steps: list[ChoiceStep], index: int, message: str = ''):
+    _draw_chrome(stdscr, steps, index, message)
+    height, width = stdscr.getmaxyx()
+    visible = _visible_choices(step)
+    window_size = min(10, max(4, height - 11))
+    if step.cursor >= len(visible):
+        step.cursor = max(0, len(visible) - 1)
+    if step.cursor < step.offset:
+        step.offset = step.cursor
+    if step.cursor >= step.offset + window_size:
+        step.offset = step.cursor - window_size + 1
+
+    _safe_add(stdscr, 4, 2, step.title, _attr(1, curses.A_BOLD))
+    _safe_add(stdscr, 5, 2, step.hint)
+    _safe_add(stdscr, 6, 2, f'filter: {step.query or ""}', _attr(3))
+    _safe_add(stdscr, 6, max(30, width - 28), f'selected: {len(step.selected)}', _attr(2))
+
+    top = 8
+    if not visible:
+        _safe_add(stdscr, top, 4, 'No matches. Type different filter or press i for manual input.', _attr(4))
+    for row, choice_index in enumerate(range(step.offset, min(len(visible), step.offset + window_size)), start=top):
+        choice = visible[choice_index]
+        active = choice_index == step.cursor
+        selected = choice in set(step.selected)
+        pointer = '❯' if active else ' '
+        marker = '●' if selected else '○'
+        attr = _attr(5) if active else (_attr(2) if selected else 0)
+        _safe_add(stdscr, row, 4, f'{pointer} {marker} {choice}', attr)
+
+    footer = f'{step.offset + 1 if visible else 0}-{min(len(visible), step.offset + window_size)} / {len(visible)}'
+    _safe_add(stdscr, top + window_size + 1, 4, footer, _attr(3))
+    if step.selected:
+        preview = ', '.join(step.selected[:6])
+        if len(step.selected) > 6:
+            preview += f', ... +{len(step.selected) - 6}'
+        _safe_add(stdscr, top + window_size + 2, 4, f'selected: {preview}', _attr(2))
+    stdscr.refresh()
+
+
+def _manual_add(stdscr, step: ChoiceStep):
+    raw = prompt_text(stdscr, f'Manual input for {step.title} (comma separated)', '')
+    values = [part.strip().lower() for part in raw.split(',') if part.strip()]
+    for value in values:
+        if value not in step.choices:
+            step.choices.append(value)
+        if step.multi:
+            if value not in step.selected:
+                step.selected.append(value)
+        else:
+            step.selected = [value]
+
+
+def _handle_choice_key(stdscr, step: ChoiceStep, key: int):
+    visible = _visible_choices(step)
+    if key in {curses.KEY_UP, ord('k')}:
+        step.cursor = max(0, step.cursor - 1)
+    elif key in {curses.KEY_DOWN, ord('j')}:
+        step.cursor = min(max(0, len(visible) - 1), step.cursor + 1)
+    elif key == curses.KEY_NPAGE:
+        step.cursor = min(max(0, len(visible) - 1), step.cursor + 10)
+    elif key == curses.KEY_PPAGE:
+        step.cursor = max(0, step.cursor - 10)
+    elif key in {curses.KEY_BACKSPACE, 127, 8}:
+        step.query = step.query[:-1]
+        step.cursor = 0
+        step.offset = 0
+    elif key == ord('i') and step.allow_custom:
+        _manual_add(stdscr, step)
+    elif key == ord('a') and step.multi:
+        for choice in visible:
+            if choice not in step.selected:
+                step.selected.append(choice)
+    elif key == ord('c') and step.multi:
+        step.selected = []
+    elif key == ord(' ') and visible:
+        choice = visible[step.cursor]
+        if step.multi:
+            if choice in step.selected:
+                step.selected.remove(choice)
             else:
-                selected_set.add(choice)
-        elif key in {10, 13}:
-            if multi:
-                return [choice for choice in choices if choice in selected_set]
-            if visible:
-                return [visible[cursor]]
-        elif key == ord('q'):
-            return [choice for choice in choices if choice in selected_set]
+                step.selected.append(choice)
+        else:
+            step.selected = [choice]
+    elif 0 <= key <= 255 and chr(key) in string.printable and chr(key) not in {'\n', '\r', '\t'}:
+        char = chr(key)
+        if char == '/':
+            step.query = ''
+        elif char not in {' '}:
+            step.query += char
+        step.cursor = 0
+        step.offset = 0
+
+
+def run_choice_wizard(stdscr, steps: list[ChoiceStep]):
+    index = 0
+    message = ''
+    while 0 <= index < len(steps):
+        step = steps[index]
+        _draw_choice_step(stdscr, step, steps, index, message)
+        message = ''
+        key = stdscr.getch()
+        if key in {curses.KEY_LEFT, ord('h')}:
+            index = max(0, index - 1)
+        elif key in {curses.KEY_RIGHT, 10, 13, ord('l')}:
+            error = _wizard_validation_error(step, steps)
+            if error:
+                message = error
+                continue
+            index += 1
+        elif key == 27:
+            raise SystemExit('cancelled')
+        else:
+            _handle_choice_key(stdscr, step, key)
+    return {step.key: _selected_ordered(step) for step in steps}
 
 
 def edit_parameters(stdscr, params: dict[str, Any]):
-    flat_items = []
-    for group, values in GROUPS.items():
-        for key in values:
-            flat_items.append((group, key))
-    cursor = 0
-    offset = 0
+    groups = list(GROUPS)
+    group_index = 0
+    cursors = {group: 0 for group in groups}
+    offsets = {group: 0 for group in groups}
     query = ''
+    message = ''
 
     while True:
-        visible = [
-            (group, key)
-            for group, key in flat_items
-            if not query or query.lower() in group.lower() or query.lower() in key.lower()
-        ]
+        group = groups[group_index]
+        keys = list(GROUPS[group])
+        visible = [key for key in keys if not query or query.lower() in key.lower() or query.lower() in group.lower()]
+        cursor = cursors[group]
         if cursor >= len(visible):
             cursor = max(0, len(visible) - 1)
         height, width = stdscr.getmaxyx()
-        page_size = max(5, height - 7)
+        page_size = min(10, max(4, height - 11))
+        offset = offsets[group]
         if cursor < offset:
             offset = cursor
         if cursor >= offset + page_size:
             offset = cursor - page_size + 1
+        cursors[group] = cursor
+        offsets[group] = offset
 
-        lines = [
-            'Edit Default Hyperparameters',
-            '↑/↓ move  enter edit  / filter  d reset  q done',
-            f'filter: {query or "-"}',
-            '',
-        ]
-        for index, (group, key) in enumerate(visible[offset:offset + page_size], start=offset):
-            pointer = '>' if index == cursor else ' '
-            default_value = GROUPS[group][key]
-            value = params.get(key, default_value)
+        stdscr.erase()
+        _safe_add(stdscr, 0, 0, ' Hyperparameter Groups '.ljust(width - 1), _attr(5, curses.A_REVERSE))
+        tabs = []
+        for i, name in enumerate(groups):
+            changed = any(params.get(key) != GROUPS[name][key] for key in GROUPS[name])
+            label = f'{name}{"*" if changed else ""}'
+            tabs.append(f'[{label}]' if i == group_index else label)
+        _safe_add(stdscr, 2, 2, '  '.join(tabs), _attr(1))
+        _safe_add(stdscr, 4, 2, f'filter: {query}', _attr(3))
+        if message:
+            _safe_add(stdscr, height - 3, 2, message, _attr(4))
+        _safe_add(stdscr, height - 2, 2, '←/→ group | ↑/↓ move | enter edit | type filter | backspace | d reset | q done', _attr(3))
+
+        top = 6
+        for row, key_index in enumerate(range(offset, min(len(visible), offset + page_size)), start=top):
+            param_key = visible[key_index]
+            active = key_index == cursor
+            default_value = GROUPS[group][param_key]
+            value = params.get(param_key, default_value)
             changed = '*' if value != default_value else ' '
-            lines.append(f'{pointer} {changed} [{group}] {key} = {_value_to_text(value)}')
+            attr = _attr(5) if active else (_attr(2) if changed == '*' else 0)
+            _safe_add(stdscr, row, 4, f'{"❯" if active else " "} {changed} {param_key:<34} {_value_to_text(value)}', attr)
         if not visible:
-            lines.append('  no matches')
-        _draw_lines(stdscr, lines)
+            _safe_add(stdscr, top, 4, 'No matching parameters.', _attr(4))
+        stdscr.refresh()
 
         key_code = stdscr.getch()
-        if key_code in {curses.KEY_UP, ord('k')}:
-            cursor = max(0, cursor - 1)
+        message = ''
+        if key_code in {curses.KEY_LEFT, ord('h')}:
+            group_index = max(0, group_index - 1)
+        elif key_code in {curses.KEY_RIGHT, ord('l')}:
+            group_index = min(len(groups) - 1, group_index + 1)
+        elif key_code in {curses.KEY_UP, ord('k')}:
+            cursors[group] = max(0, cursor - 1)
         elif key_code in {curses.KEY_DOWN, ord('j')}:
-            cursor = min(max(0, len(visible) - 1), cursor + 1)
-        elif key_code == ord('/'):
-            query = prompt_text(stdscr, 'Filter hyperparameters', query)
-            cursor = 0
-            offset = 0
+            cursors[group] = min(max(0, len(visible) - 1), cursor + 1)
+        elif key_code in {curses.KEY_BACKSPACE, 127, 8}:
+            query = query[:-1]
+            cursors[group] = 0
+            offsets[group] = 0
         elif key_code == ord('d') and visible:
-            group, param_key = visible[cursor]
-            params[param_key] = deepcopy(GROUPS[group][param_key])
+            params[visible[cursor]] = deepcopy(GROUPS[group][visible[cursor]])
         elif key_code in {10, 13} and visible:
-            _, param_key = visible[cursor]
-            old_value = params.get(param_key)
-            raw = prompt_text(stdscr, f'Edit {param_key}', _value_to_text(old_value))
+            param_key = visible[cursor]
+            raw = prompt_text(stdscr, f'Edit {param_key}', _value_to_text(params.get(param_key)))
             params[param_key] = _coerce_value(raw)
         elif key_code == ord('q'):
             return params
+        elif 0 <= key_code <= 255 and chr(key_code) in string.printable and chr(key_code) not in {'\n', '\r', '\t'}:
+            char = chr(key_code)
+            if char == '/':
+                query = ''
+            elif char != ' ':
+                query += char
+            cursors[group] = 0
+            offsets[group] = 0
+
+
+def _parse_representation_pair(value: str):
+    text = value.strip().lower()
+    if '2' not in text:
+        raise ValueError(f'Invalid representation pair: {value}')
+    history_text, target = text.rsplit('2', 1)
+    history = tuple(part.strip() for part in history_text.split('+') if part.strip())
+    if not history or not target:
+        raise ValueError(f'Invalid representation pair: {value}')
+    return target, history
+
+
+def _used_views(representation_pairs: list[str]):
+    used = set()
+    for pair in representation_pairs:
+        target, history = _parse_representation_pair(pair)
+        used.add(target)
+        used.update(history)
+    return used
 
 
 def _parse_sid_variants(values: list[str]):
@@ -415,13 +571,6 @@ def _parse_uid_variants(values: list[str]):
     return variants
 
 
-def _history_uses_semantic(histories: list[str], targets: list[str]):
-    used = set(targets)
-    for history in histories:
-        used.update(part.strip().lower() for part in history.split('+') if part.strip())
-    return bool(used & {'sid', 'hash', 'embedding'})
-
-
 def _compact_args(params: dict[str, Any]):
     excluded = {
         'effective_batch_size',
@@ -436,9 +585,7 @@ def _compact_args(params: dict[str, Any]):
         'notificator_token',
         'notificator_bark',
     }
-    defaults = {}
-    for values in GROUPS.values():
-        defaults.update(values)
+    defaults = _defaults()
     args = {}
     for key, value in params.items():
         if key in excluded or value is None:
@@ -447,6 +594,14 @@ def _compact_args(params: dict[str, Any]):
             continue
         args[key] = value
     return args
+
+
+def _group_pairs_by_target(representation_pairs: list[str]):
+    grouped: dict[str, list[tuple[str, ...]]] = {}
+    for pair in representation_pairs:
+        target, history = _parse_representation_pair(pair)
+        grouped.setdefault(target, []).append(history)
+    return grouped
 
 
 def build_payload(selection: PlanSelections):
@@ -462,26 +617,30 @@ def build_payload(selection: PlanSelections):
         backend_host_env=params.get('backend_uri_env'),
         backend_auth_env=params.get('backend_auth_env'),
     )
-    schedule_args = _compact_args(params)
-    schedule.defaults(**schedule_args)
+    schedule.defaults(**_compact_args(params))
     if params.get('priority') is not None or params.get('batch_size_cap') is not None:
-        schedule.plan_defaults(
-            priority=params.get('priority'),
-            batch_size_cap=params.get('batch_size_cap'),
-        )
+        schedule.plan_defaults(priority=params.get('priority'), batch_size_cap=params.get('batch_size_cap'))
 
-    source_models = selection.source_models if _history_uses_semantic(selection.histories, selection.targets) else None
-    schedule.grid(
-        selection.name,
-        datasets=selection.datasets,
-        models=selection.models,
-        targets=selection.targets,
-        histories=selection.histories,
-        source_models=source_models,
-        sid_variants=_parse_sid_variants(selection.sid_variants),
-        uid_variants=_parse_uid_variants(selection.uid_variants),
-        hash_coders=selection.hash_coders,
-    )
+    used_views = _used_views(selection.representation_pairs)
+    source_models = selection.source_models if used_views & {'sid', 'hash', 'embedding'} else None
+    sid_variants = _parse_sid_variants(selection.sid_variants) if 'sid' in used_views else None
+    hash_coders = selection.hash_coders if 'hash' in used_views else None
+    uid_variants = _parse_uid_variants(selection.uid_variants) if any(
+        _parse_representation_pair(pair)[0] == 'uid' for pair in selection.representation_pairs
+    ) else None
+
+    for target, histories in _group_pairs_by_target(selection.representation_pairs).items():
+        schedule.grid(
+            f'{selection.name}_{target}',
+            datasets=selection.datasets,
+            models=selection.models,
+            targets=[target],
+            histories=histories,
+            source_models=source_models,
+            sid_variants=sid_variants,
+            uid_variants=uid_variants,
+            hash_coders=hash_coders,
+        )
     payload = schedule.to_dict(path=selection.output)
 
     notificator = {
@@ -516,6 +675,7 @@ def preview_payload(stdscr, selection: PlanSelections):
             f'name: {payload["name"]}',
             f'output: {selection.output}',
             f'experiments: {len(payload["experiments"])}',
+            f'pairs: {", ".join(selection.representation_pairs)}',
             f'backend: {"yes" if payload.get("backend") else "no"}',
             f'notificator: {"yes" if payload.get("notificator") else "no"}',
             '',
@@ -526,93 +686,128 @@ def preview_payload(stdscr, selection: PlanSelections):
         if len(payload['experiments']) > 8:
             lines.append(f'  ... {len(payload["experiments"]) - 8} more')
         lines.extend(['', 'press any key'])
+        attr = _attr(2)
     except Exception as exc:
         lines = ['Plan Preview Failed', '', repr(exc), '', 'press any key']
-    _draw_lines(stdscr, lines)
+        attr = _attr(4)
+
+    stdscr.erase()
+    for row, line in enumerate(lines):
+        _safe_add(stdscr, row + 1, 2, line, attr if row == 0 else 0)
+    stdscr.refresh()
     stdscr.getch()
+
+
+def _dynamic_steps(args, model_choices: list[str]):
+    base_steps = [
+        ChoiceStep(
+            key='datasets',
+            title='Datasets',
+            choices=list(DATASET_CHOICES),
+            selected=_parse_csv(args.datasets),
+            hint='Choose one or more datasets. Type "ra" or "rvs" to narrow RecIF scales.',
+        ),
+        ChoiceStep(
+            key='models',
+            title='Models',
+            choices=model_choices,
+            selected=_parse_csv(args.models),
+            hint='Choose scratch or LLM backbones. Manual aliases from .model are supported.',
+        ),
+        ChoiceStep(
+            key='representation_pairs',
+            title='Representation Pairs',
+            choices=list(REPRESENTATION_PAIR_CHOICES),
+            selected=_parse_csv(args.representations) or _pairs_from_legacy_args(args),
+            hint='Each option is atomic, e.g. uid2uid or sid2sid. No task/history cross product is created.',
+        ),
+    ]
+    return base_steps
+
+
+def _pairs_from_legacy_args(args):
+    targets = _parse_csv(args.targets)
+    histories = _parse_csv(args.histories)
+    if not targets or not histories:
+        return []
+    pairs = []
+    for target in targets:
+        for history in histories:
+            pairs.append(f'{history}2{target}')
+    return pairs
+
+
+def _conditional_steps(args, selected: dict[str, list[str]]):
+    views = _used_views(selected['representation_pairs'])
+    steps = []
+    if views & {'sid', 'hash', 'embedding'}:
+        steps.append(
+            ChoiceStep(
+                key='source_models',
+                title='Source Models',
+                choices=list(SOURCE_MODEL_CHOICES),
+                selected=_parse_csv(args.source_models) or ['pretrain-multimodal'],
+                hint='Required for sid/hash/embedding views.',
+            )
+        )
+    if 'sid' in views:
+        steps.append(
+            ChoiceStep(
+                key='sid_variants',
+                title='SID Variants',
+                choices=list(SID_VARIANT_CHOICES),
+                selected=_parse_csv(args.sid_variants) or ['rqvae/coll'],
+                hint='Format: coder/export. Use i to type custom values.',
+            )
+        )
+    if any(_parse_representation_pair(pair)[0] == 'uid' for pair in selected['representation_pairs']):
+        steps.append(
+            ChoiceStep(
+                key='uid_variants',
+                title='UID Decoding',
+                choices=list(UID_VARIANT_CHOICES),
+                selected=_parse_csv(args.uid_variants) or ['flat'],
+                hint='Format: flat or hierarchical:levels:topk.',
+            )
+        )
+    if 'hash' in views:
+        steps.append(
+            ChoiceStep(
+                key='hash_coders',
+                title='Hash Coders',
+                choices=list(HASH_CODER_CHOICES),
+                selected=_parse_csv(args.hash_coders) or ['simhash'],
+                hint='Required when any pair uses hash.',
+            )
+        )
+    return steps
 
 
 def collect_selection(stdscr, args):
     curses.curs_set(0)
+    _ensure_color()
     root = Path(__file__).resolve().parent
     model_choices = sorted(set(MODEL_CHOICES + _read_models_from_dotfile(root)))
 
     name = prompt_text(stdscr, 'Schedule name', args.name or 'interactive')
     output = Path(prompt_text(stdscr, 'Output yaml path', args.output or f'config/{name}_scheduler.yaml'))
 
-    datasets = select_choices(
-        stdscr,
-        'Select datasets',
-        list(DATASET_CHOICES),
-        multi=True,
-        selected=args.datasets.split(',') if args.datasets else [],
-    )
-    models = select_choices(stdscr, 'Select models', model_choices, multi=True, selected=args.models.split(',') if args.models else [])
-    targets = select_choices(stdscr, 'Select task_type targets', list(TASK_CHOICES), multi=True, selected=args.targets.split(',') if args.targets else ['uid'])
-    histories = select_choices(
-        stdscr,
-        'Select history representations',
-        list(HISTORY_CHOICES),
-        multi=True,
-        selected=args.histories.split(',') if args.histories else ['uid'],
-    )
+    primary = run_choice_wizard(stdscr, _dynamic_steps(args, model_choices))
+    conditional = run_choice_wizard(stdscr, _conditional_steps(args, primary))
 
-    source_models = []
-    if _history_uses_semantic(histories, targets):
-        source_models = select_choices(
-            stdscr,
-            'Select semantic/source embedding models',
-            list(SOURCE_MODEL_CHOICES),
-            multi=True,
-            selected=args.source_models.split(',') if args.source_models else ['pretrain-multimodal'],
-        )
-
-    sid_variants = ['rqvae/coll']
-    if 'sid' in set(targets) or any('sid' in history.split('+') for history in histories):
-        sid_variants = select_choices(
-            stdscr,
-            'Select SID variants as coder/export',
-            list(SID_VARIANT_CHOICES),
-            multi=True,
-            selected=args.sid_variants.split(',') if args.sid_variants else ['rqvae/coll'],
-        )
-
-    uid_variants = ['flat']
-    if 'uid' in targets:
-        uid_variants = select_choices(
-            stdscr,
-            'Select UID decoding variants',
-            list(UID_VARIANT_CHOICES),
-            multi=True,
-            selected=args.uid_variants.split(',') if args.uid_variants else ['flat'],
-        )
-
-    hash_coders = ['simhash']
-    if 'hash' in set(targets) or any('hash' in history.split('+') for history in histories):
-        hash_coders = select_choices(
-            stdscr,
-            'Select hash coders',
-            list(HASH_CODER_CHOICES),
-            multi=True,
-            selected=args.hash_coders.split(',') if args.hash_coders else ['simhash'],
-        )
-
-    params = {}
-    for values in GROUPS.values():
-        params.update(deepcopy(values))
+    params = _defaults()
     edit_parameters(stdscr, params)
 
     selection = PlanSelections(
         name=name,
         output=output,
-        datasets=datasets,
-        models=models,
-        targets=targets,
-        histories=histories,
-        source_models=source_models,
-        sid_variants=sid_variants,
-        uid_variants=uid_variants,
-        hash_coders=hash_coders,
+        datasets=primary['datasets'],
+        models=primary['models'],
+        representation_pairs=primary['representation_pairs'],
+        source_models=conditional.get('source_models', []),
+        sid_variants=conditional.get('sid_variants', ['rqvae/coll']),
+        uid_variants=conditional.get('uid_variants', ['flat']),
+        hash_coders=conditional.get('hash_coders', ['simhash']),
         params=params,
     )
     preview_payload(stdscr, selection)
@@ -627,8 +822,9 @@ def build_parser():
     parser.add_argument('--output', default=None)
     parser.add_argument('--datasets', default=None, help='Optional comma-separated preselection.')
     parser.add_argument('--models', default=None, help='Optional comma-separated preselection.')
-    parser.add_argument('--targets', default=None, help='Optional comma-separated preselection.')
-    parser.add_argument('--histories', default=None, help='Optional comma-separated preselection.')
+    parser.add_argument('--representations', '--pairs', default=None, help='Comma-separated pairs, e.g. uid2uid,sid2sid.')
+    parser.add_argument('--targets', default=None, help='Legacy preselection; combined with --histories only.')
+    parser.add_argument('--histories', default=None, help='Legacy preselection; combined with --targets only.')
     parser.add_argument('--source-models', default=None, help='Optional comma-separated preselection.')
     parser.add_argument('--sid-variants', default=None, help='Optional comma-separated coder/export preselection.')
     parser.add_argument('--uid-variants', default=None, help='Optional comma-separated decoding preselection.')
