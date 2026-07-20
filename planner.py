@@ -300,6 +300,13 @@ def _draw_footer_hints(stdscr, hints: list[tuple[str, str, int]], message: str =
             break
 
 
+def _key_f(index: int):
+    named_key = getattr(curses, f'KEY_F{index}', None)
+    if named_key is not None:
+        return named_key
+    return getattr(curses, 'KEY_F0', 264) + int(index)
+
+
 def prompt_text(stdscr, title: str, default: str = ''):
     curses.echo()
     curses.curs_set(1)
@@ -479,13 +486,13 @@ def _handle_choice_key(stdscr, step: ChoiceStep, key: int):
         step.query = step.query[:-1]
         step.cursor = 0
         step.offset = 0
-    elif key == curses.KEY_F(2) and step.allow_custom:
+    elif key == _key_f(2) and step.allow_custom:
         _manual_add(stdscr, step)
-    elif key in {curses.KEY_F(3), 1} and step.multi:
+    elif key in {_key_f(3), 1} and step.multi:
         for choice in visible:
             if choice not in step.selected:
                 step.selected.append(choice)
-    elif key in {curses.KEY_F(4), 24} and step.multi:
+    elif key in {_key_f(4), 24} and step.multi:
         step.selected = []
     elif key == ord(' ') and visible:
         choice = visible[step.cursor]
@@ -635,13 +642,13 @@ def edit_parameters(stdscr, params: dict[str, Any]):
             query = query[:-1]
             cursors[group] = 0
             offsets[group] = 0
-        elif key_code == curses.KEY_F(5) and visible:
+        elif key_code == _key_f(5) and visible:
             params[visible[cursor]] = deepcopy(GROUPS[group][visible[cursor]])
         elif key_code in {10, 13} and visible:
             param_key = visible[cursor]
             raw = prompt_text(stdscr, f'Edit {param_key}', _value_to_text(params.get(param_key)))
             params[param_key] = _coerce_value(raw)
-        elif key_code in {curses.KEY_F(10), 7}:
+        elif key_code in {_key_f(10), 7}:
             return params
         elif 0 <= key_code <= 255 and chr(key_code) in string.printable and chr(key_code) not in {'\n', '\r', '\t'}:
             char = chr(key_code)
