@@ -317,6 +317,12 @@ class SequentialRecModel(nn.Module):
             masked_logits[row_indices[:, None], allowed_tensor[None, :]] = logits[row_indices[:, None], allowed_tensor[None, :]]
         return masked_logits
 
+    def _sid_allowed_logits_for_slot(self, logits: torch.Tensor, slot_index: int):
+        allowed_codes = self._sid_slot_allowed_codes(slot_index)
+        allowed_tensor = torch.tensor(allowed_codes, dtype=torch.long, device=logits.device)
+        allowed_start = int(allowed_codes[0])
+        return logits.index_select(dim=1, index=allowed_tensor), allowed_start
+
     def _sid_loss_weights(self, slot_indices: torch.Tensor):
         base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
         weights = torch.ones(slot_indices.shape[0], dtype=torch.float32, device=slot_indices.device)
@@ -538,16 +544,17 @@ class SequentialRecModel(nn.Module):
         token_correct = 0.0
         seq_predictions = []
         seq_targets = target_codes.tolist()
+        logits = self._sid_logits(pooled)
 
         for slot_index in range(num_slots):
-            logits = self._sid_logits(pooled)
+            allowed_logits, allowed_start = self._sid_allowed_logits_for_slot(logits, slot_index)
             slot_tensor = torch.full((batch_size,), slot_index, dtype=torch.long, device=self.device)
-            masked_logits = self._mask_sid_logits_for_slots(logits, slot_tensor)
             labels = target_codes[:, slot_index]
-            slot_loss = F.cross_entropy(masked_logits.float(), labels, reduction='none')
+            label_positions = labels - allowed_start
+            slot_loss = F.cross_entropy(allowed_logits.float(), label_positions, reduction='none')
             slot_loss = slot_loss * self._sid_loss_weights(slot_tensor)
             total_loss = total_loss + slot_loss.mean()
-            predictions = masked_logits.argmax(dim=-1)
+            predictions = allowed_logits.argmax(dim=-1) + allowed_start
             token_correct += float((predictions == labels).float().sum().item())
             seq_predictions.append(predictions.tolist())
 
@@ -568,14 +575,14 @@ class SequentialRecModel(nn.Module):
         semantic_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
         collision_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
         base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
+        logits = self._sid_logits(pooled)
 
         for slot_index in range(int(item_codes.shape[1])):
-            logits = self._sid_logits(pooled)
-            slot_tensor = torch.full((batch_size,), slot_index, dtype=torch.long, device=self.device)
-            masked_logits = self._mask_sid_logits_for_slots(logits, slot_tensor)
-            log_probs = F.log_softmax(masked_logits.float(), dim=-1)
+            allowed_logits, allowed_start = self._sid_allowed_logits_for_slot(logits, slot_index)
+            log_probs = F.log_softmax(allowed_logits.float(), dim=-1)
             slot_codes = item_codes[:, slot_index]
-            slot_scores = log_probs.index_select(dim=1, index=slot_codes)
+            slot_positions = slot_codes - allowed_start
+            slot_scores = log_probs.index_select(dim=1, index=slot_positions)
             if slot_index < base_num_quantizers:
                 semantic_scores = semantic_scores + slot_scores
             else:
@@ -583,19 +590,17 @@ class SequentialRecModel(nn.Module):
 
         ks = self.ranking_ks()
         totals = self._init_ranking_totals(ks)
+        item_indices = torch.arange(item_codes.shape[0], dtype=torch.long, device=self.device)
 
-        semantic_scores_cpu = semantic_scores.detach().cpu()
-        collision_scores_cpu = collision_scores.detach().cpu()
         for batch_index, sample in enumerate(batch):
-            ranked_uids = sorted(
-                range(item_codes.shape[0]),
-                key=lambda uid: (
-                    float(semantic_scores_cpu[batch_index, uid].item()),
-                    float(collision_scores_cpu[batch_index, uid].item()),
-                ),
-                reverse=True,
+            self._accumulate_ranking_metrics_from_score_tensors(
+                totals,
+                ks,
+                semantic_scores[batch_index],
+                collision_scores[batch_index],
+                sample,
+                item_indices=item_indices,
             )
-            self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
 
         return {key: value / max(batch_size, 1) for key, value in totals.items()}
 
@@ -658,6 +663,57 @@ class SequentialRecModel(nn.Module):
                 rank_by_uid[uid] = index
 
         matched_ranks = sorted(rank_by_uid[uid] for uid in candidate_uids if uid in rank_by_uid)
+        if matched_ranks:
+            totals['mrr'] += 1.0 / matched_ranks[0]
+
+        for k in ks:
+            hit_count = sum(rank <= k for rank in matched_ranks)
+            hit_ratio = 1.0 if hit_count > 0 else 0.0
+            totals[f'hr@{k}'] += hit_ratio
+            totals[f'pass@{k}'] += hit_ratio
+            totals[f'recall@{k}'] += hit_count / len(candidate_uids)
+            if hit_count > 0:
+                dcg = sum(1.0 / math.log2(rank + 1) for rank in matched_ranks if rank <= k)
+                ideal_hits = min(len(candidate_uids), k)
+                idcg = sum(1.0 / math.log2(position + 1) for position in range(1, ideal_hits + 1))
+                totals[f'ndcg@{k}'] += dcg / idcg if idcg > 0 else 0.0
+
+    def _accumulate_ranking_metrics_from_score_tensors(
+        self,
+        totals,
+        ks,
+        semantic_scores,
+        collision_scores,
+        sample,
+        *,
+        item_indices=None,
+    ):
+        candidate_uids = list(dict.fromkeys(self._sample_ground_truth_uids(sample)))
+        if not candidate_uids:
+            return
+
+        num_items = int(semantic_scores.shape[0])
+        if item_indices is None:
+            item_indices = torch.arange(num_items, dtype=torch.long, device=semantic_scores.device)
+        matched_ranks = []
+        for uid in candidate_uids:
+            uid = int(uid)
+            if uid < 0 or uid >= num_items:
+                continue
+            target_semantic = semantic_scores[uid]
+            target_collision = collision_scores[uid]
+            higher = (
+                (semantic_scores > target_semantic)
+                | ((semantic_scores == target_semantic) & (collision_scores > target_collision))
+                | (
+                    (semantic_scores == target_semantic)
+                    & (collision_scores == target_collision)
+                    & (item_indices < uid)
+                )
+            )
+            matched_ranks.append(int(higher.sum().item()) + 1)
+
+        matched_ranks = sorted(matched_ranks)
         if matched_ranks:
             totals['mrr'] += 1.0 / matched_ranks[0]
 
