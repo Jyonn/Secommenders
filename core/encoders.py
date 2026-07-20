@@ -148,6 +148,51 @@ class LLMSequenceEncoder(nn.Module):
             outputs = self.model(**model_kwargs)
         return outputs.last_hidden_state
 
+    @staticmethod
+    def cache_seq_length(past_key_values):
+        if past_key_values is None:
+            return 0
+        if hasattr(past_key_values, 'get_seq_length'):
+            return int(past_key_values.get_seq_length())
+        if isinstance(past_key_values, (list, tuple)) and past_key_values:
+            first_layer = past_key_values[0]
+            if isinstance(first_layer, (list, tuple)) and first_layer:
+                key_tensor = first_layer[0]
+            elif isinstance(first_layer, dict):
+                key_tensor = first_layer.get('key')
+                if key_tensor is None:
+                    key_tensor = first_layer.get('k')
+            else:
+                key_tensor = first_layer
+            if torch.is_tensor(key_tensor):
+                return int(key_tensor.shape[-2])
+        return None
+
+    def forward_with_cache(
+            self,
+            inputs_embeds: torch.Tensor,
+            attention_mask: torch.Tensor,
+            position_ids: torch.Tensor | None = None,
+            past_key_values=None,
+    ):
+        if not self.forward_accepts_use_cache:
+            return self.forward(inputs_embeds, attention_mask, position_ids=position_ids), None
+        use_no_grad = self.freeze_backbone and not self.use_lora
+        model_kwargs = dict(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            use_cache=True,
+            return_dict=True,
+        )
+        with torch.set_grad_enabled(not use_no_grad):
+            outputs = self.model(**model_kwargs)
+        past_key_values = getattr(outputs, 'past_key_values', None)
+        if hasattr(past_key_values, 'to_legacy_cache'):
+            past_key_values = past_key_values.to_legacy_cache()
+        return outputs.last_hidden_state, past_key_values
+
 
 class ScratchSequenceEncoder(nn.Module):
     def __init__(self, vocab_size: int, hidden_size: int, num_layers: int, num_heads: int, dropout: float, max_length: int):
