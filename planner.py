@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import curses
 import json
 import string
@@ -226,61 +225,10 @@ def _dataset_sort_key(name: str):
     return (9, 0, 0, name)
 
 
-def _ast_name(node):
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        parent = _ast_name(node.value)
-        return f'{parent}.{node.attr}' if parent else node.attr
-    return ''
-
-
-def _class_declares_abstract_method(node: ast.ClassDef):
-    for item in node.body:
-        if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        for decorator in item.decorator_list:
-            name = _ast_name(decorator)
-            if name.endswith('abstractmethod'):
-                return True
-    return False
-
-
-def _dataset_choices_from_formatter_files(root: Path):
-    abstract_class_names = {
-        'BaseFormatter',
-        'BaseMultiTargetFormatter',
-        'UICTFormatter',
-        'AmazonFormatter',
-        'RecIFBaseFormatter',
-        'RecIFScaleFormatter',
-        'RecIFSmallScaleFormatter',
-        'RecIFAdsFormatter',
-    }
-    formatter_dir = root / 'formatters'
-    names = set()
-    for path in sorted(formatter_dir.glob('*_formatter.py')):
-        try:
-            tree = ast.parse(path.read_text())
-        except SyntaxError:
-            continue
-        for node in tree.body:
-            if not isinstance(node, ast.ClassDef) or not node.name.endswith('Formatter'):
-                continue
-            base_names = {_ast_name(base) for base in node.bases}
-            if node.name in abstract_class_names or node.name.startswith('Base'):
-                continue
-            if {'ABC', 'abc.ABC'} & base_names:
-                continue
-            if _class_declares_abstract_method(node):
-                continue
-            names.add(node.name[:-len('Formatter')].lower())
-    return sorted(names, key=_dataset_sort_key)
-
-
 def _available_dataset_choices():
-    root = Path(__file__).resolve().parent
-    return _dataset_choices_from_formatter_files(root)
+    from utils.class_hub import ClassHub
+
+    return sorted(ClassHub.formatters().class_dict, key=_dataset_sort_key)
 
 
 def _parse_csv(value: str | None):
