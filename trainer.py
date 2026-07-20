@@ -401,7 +401,7 @@ class Trainer:
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote valid-only meta to {self.meta_path}')
 
-    def _save_test_only_meta(self, checkpoint: dict, test_metrics: dict):
+    def _save_test_only_meta(self, checkpoint: dict | None, test_metrics: dict):
         if not self.is_main_process:
             return
         meta = self._load_meta_stub()
@@ -413,11 +413,11 @@ class Trainer:
             'train_metric_name': self._metric_name(),
             'test_metric_name': self._default_ranking_metric(),
             'declared_test_metrics': self.config.metrics,
-            'loaded_checkpoint': str(self.config.load_ckpt),
-            'checkpoint_epoch': checkpoint.get('epoch'),
-            'checkpoint_best_valid_metric': checkpoint.get('best_valid_metric'),
-            'checkpoint_main_metric': checkpoint.get('main_metric'),
-            'checkpoint_valid_metrics': checkpoint.get('valid_metrics'),
+            'loaded_checkpoint': str(self.config.load_ckpt) if self.config.load_ckpt else None,
+            'checkpoint_epoch': checkpoint.get('epoch') if checkpoint else None,
+            'checkpoint_best_valid_metric': checkpoint.get('best_valid_metric') if checkpoint else None,
+            'checkpoint_main_metric': checkpoint.get('main_metric') if checkpoint else None,
+            'checkpoint_valid_metrics': checkpoint.get('valid_metrics') if checkpoint else None,
             'test_metrics': test_metrics,
             'world_size': self.world_size,
             'status': 'test_only_finished',
@@ -515,7 +515,11 @@ class Trainer:
                 f'world_size={self.world_size} rank={self.rank} local_rank={self.local_rank} '
                 f'batch_size={self.config.batch_size} checkpoint={self.config.load_ckpt}'
             )
-            checkpoint = self._load_checkpoint_for_eval(self.config.load_ckpt)
+            checkpoint = None
+            if self.config.load_ckpt:
+                checkpoint = self._load_checkpoint_for_eval(self.config.load_ckpt)
+            elif self.is_main_process:
+                self._pnt('warning: test_only=true without load_ckpt; evaluating current model weights without loading a checkpoint')
             test_metrics = self._evaluate_eval_set(self.test_loader, desc='test-only')
             if self.is_main_process:
                 self._pnt(

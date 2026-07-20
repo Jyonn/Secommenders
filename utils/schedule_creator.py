@@ -73,8 +73,6 @@ def _validate_job_runtime_args(args: dict[str, Any], compile_config: CompileConf
 
     if valid_only and test_only:
         raise ValueError('trainer.valid_only and trainer.test_only cannot both be true')
-    if test_only and not load_ckpt:
-        raise ValueError('trainer.load_ckpt is required when trainer.test_only=true')
     if load_ckpt and not test_only:
         raise ValueError('trainer.load_ckpt is only supported together with trainer.test_only=true')
     if uid_decoding == 'hierarchical' and compile_config.task_type != 'uid':
