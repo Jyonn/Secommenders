@@ -20,16 +20,16 @@ LLM_HISTORIES = ['uid', 'text', 'sid', 'embedding']
 SCRATCH_HISTORIES = ['uid', 'sid', 'embedding']
 SID_VARIANTS = [('rqvae', 'recon')]
 UID_VARIANTS = ['flat', ('hierarchical', '20', '3,20')]
-RECIF_SCALE_PERCENTS = [1, 2, 5, 10]
+RECIF_SCALE_PERCENTS = [20, 40]
 RECIF_SCALE_SOURCE_MODEL = 'pretrain-multimodal'
 RECIF_SCALE_SID_VARIANTS = [('rqvae', 'coll')]
 RECIF_SCALE_REPRESENTATIONS = [
     ('uid', 'uid'),
     ('sid', 'sid'),
-    ('uid+embedding', ('uid', 'embedding')),
-    ('sid+embedding', ('sid', 'embedding')),
-    ('sid+text', ('sid', 'text')),
-    ('uid+text', ('uid', 'text')),
+    # ('uid+embedding', ('uid', 'embedding')),
+    # ('sid+embedding', ('sid', 'embedding')),
+    # ('sid+text', ('sid', 'text')),
+    # ('uid+text', ('uid', 'text')),
 ]
 RECIF_SCALE_SCRATCH_REPRESENTATIONS = [
     representation
@@ -178,7 +178,7 @@ def build_recif_scaling_schedule(scales=None):
                 histories=histories,
             )
 
-    return schedule.export(Path('config/recif_scaling_ra_scheduler.yaml'))
+    return schedule.export(Path('config/recif_scaling_ra_20_40.yaml'))
 
 
 if __name__ == '__main__':
