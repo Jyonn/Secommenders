@@ -22,7 +22,7 @@ DATASET_CHOICES = [
     *[f'ra{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99]],
     *[f'rv{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90]],
     *[f'rvs{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95]],
-    *[f'ras{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95]],
+    *[f'ras{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99]],
 ]
 
 MODEL_CHOICES = ['scratch', 'qwen35th08b', 'qwen35th4b', 'qwen35th9b', 'llama3']
@@ -207,6 +207,21 @@ def _read_models_from_dotfile(root: Path):
     return models
 
 
+def _available_dataset_choices():
+    choices = list(DATASET_CHOICES)
+    seen = set(choices)
+    try:
+        from utils.class_hub import ClassHub
+
+        for name in sorted(ClassHub.formatters().class_dict):
+            if name not in seen:
+                choices.append(name)
+                seen.add(name)
+    except Exception:
+        pass
+    return choices
+
+
 def _parse_csv(value: str | None):
     if not value:
         return []
@@ -223,6 +238,11 @@ def _ensure_color():
     curses.init_pair(3, curses.COLOR_YELLOW, -1)
     curses.init_pair(4, curses.COLOR_RED, -1)
     curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_CYAN)
+    curses.init_pair(6, curses.COLOR_MAGENTA, -1)
+    curses.init_pair(7, curses.COLOR_BLUE, -1)
+    curses.init_pair(8, curses.COLOR_WHITE, curses.COLOR_BLUE)
+    curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_GREEN)
+    curses.init_pair(10, curses.COLOR_BLACK, curses.COLOR_YELLOW)
 
 
 def _attr(pair: int, fallback=0):
@@ -236,6 +256,39 @@ def _safe_add(stdscr, row: int, col: int, text: str, attr=0):
     if row < 0 or row >= height or col >= width:
         return
     stdscr.addnstr(row, col, text, max(0, width - col - 1), attr)
+
+
+def _safe_add_segments(stdscr, row: int, col: int, segments: list[tuple[str, int]]):
+    height, width = stdscr.getmaxyx()
+    if row < 0 or row >= height:
+        return
+    current = col
+    for text, attr in segments:
+        if current >= width:
+            return
+        stdscr.addnstr(row, current, text, max(0, width - current - 1), attr)
+        current += len(text)
+
+
+def _pill_attr(pair: int):
+    return _attr(pair, curses.A_REVERSE) | curses.A_BOLD
+
+
+def _draw_footer_hints(stdscr, hints: list[tuple[str, str, int]], message: str = ''):
+    height, width = stdscr.getmaxyx()
+    if message:
+        _safe_add(stdscr, height - 4, 2, message, _attr(4, curses.A_BOLD))
+    _safe_add(stdscr, height - 2, 0, ' ' * max(0, width - 1), _attr(7))
+    col = 2
+    for key, label, pair in hints:
+        segments = [
+            (f' {key} ', _pill_attr(pair)),
+            (f' {label}  ', _attr(3)),
+        ]
+        _safe_add_segments(stdscr, height - 2, col, segments)
+        col += len(key) + len(label) + 6
+        if col >= width - 8:
+            break
 
 
 def prompt_text(stdscr, title: str, default: str = ''):
@@ -304,23 +357,34 @@ def _draw_chrome(stdscr, steps: list[ChoiceStep], index: int, message: str = '')
     height, width = stdscr.getmaxyx()
     stdscr.erase()
     title = ' Secommenders Schedule Planner '
-    _safe_add(stdscr, 0, 0, title.ljust(width - 1), _attr(5, curses.A_REVERSE))
-    progress = []
+    _safe_add(stdscr, 0, 0, title.ljust(width - 1), _attr(8, curses.A_REVERSE) | curses.A_BOLD)
+    _safe_add(stdscr, 0, max(0, width - 16), f' step {index + 1}/{len(steps)} ', _pill_attr(5))
+    progress_segments = []
     for i, step in enumerate(steps):
         mark = '✓' if _step_valid(step) else '!'
-        label = f'{mark} {step.title}'
+        label = f' {mark} {step.title} '
         if i == index:
-            label = f'[{label}]'
-        progress.append(label)
-    _safe_add(stdscr, 2, 2, '  >  '.join(progress), _attr(1))
-    if message:
-        _safe_add(stdscr, height - 3, 2, message, _attr(4))
-    _safe_add(
+            progress_segments.append((label, _pill_attr(5)))
+        elif _step_valid(step):
+            progress_segments.append((label, _attr(2, curses.A_BOLD)))
+        else:
+            progress_segments.append((label, _attr(4, curses.A_BOLD)))
+        progress_segments.append(('  ', 0))
+    _safe_add_segments(stdscr, 2, 2, progress_segments)
+    _draw_footer_hints(
         stdscr,
-        height - 2,
-        2,
-        'type to filter | ↑/↓ move | space select | enter/right next | left previous | i manual | a all | c clear | backspace edit filter',
-        _attr(3),
+        [
+            ('type', 'filter', 8),
+            ('↑↓', 'move', 5),
+            ('space', 'toggle', 9),
+            ('enter/→', 'next', 2),
+            ('←', 'prev', 6),
+            ('F2', 'manual', 10),
+            ('F3', 'all', 9),
+            ('F4', 'clear', 4),
+            ('bksp', 'edit filter', 3),
+        ],
+        message=message,
     )
 
 
@@ -337,13 +401,29 @@ def _draw_choice_step(stdscr, step: ChoiceStep, steps: list[ChoiceStep], index: 
         step.offset = step.cursor - window_size + 1
 
     _safe_add(stdscr, 4, 2, step.title, _attr(1, curses.A_BOLD))
-    _safe_add(stdscr, 5, 2, step.hint)
-    _safe_add(stdscr, 6, 2, f'filter: {step.query or ""}', _attr(3))
-    _safe_add(stdscr, 6, max(30, width - 28), f'selected: {len(step.selected)}', _attr(2))
+    _safe_add(stdscr, 5, 2, step.hint, _attr(7))
+    _safe_add_segments(
+        stdscr,
+        6,
+        2,
+        [
+            (' filter ', _pill_attr(8)),
+            (f' {step.query or "type to narrow"} ', _attr(3)),
+        ],
+    )
+    _safe_add_segments(
+        stdscr,
+        6,
+        max(30, width - 30),
+        [
+            (' selected ', _pill_attr(9)),
+            (f' {len(step.selected)} ', _attr(2, curses.A_BOLD)),
+        ],
+    )
 
     top = 8
     if not visible:
-        _safe_add(stdscr, top, 4, 'No matches. Type different filter or press i for manual input.', _attr(4))
+        _safe_add(stdscr, top, 4, 'No matches. Type a different filter or press F2 for manual input.', _attr(4))
     for row, choice_index in enumerate(range(step.offset, min(len(visible), step.offset + window_size)), start=top):
         choice = visible[choice_index]
         active = choice_index == step.cursor
@@ -351,10 +431,10 @@ def _draw_choice_step(stdscr, step: ChoiceStep, steps: list[ChoiceStep], index: 
         pointer = '❯' if active else ' '
         marker = '●' if selected else '○'
         attr = _attr(5) if active else (_attr(2) if selected else 0)
-        _safe_add(stdscr, row, 4, f'{pointer} {marker} {choice}', attr)
+        _safe_add(stdscr, row, 4, f'{pointer} {marker} {choice:<36}', attr)
 
     footer = f'{step.offset + 1 if visible else 0}-{min(len(visible), step.offset + window_size)} / {len(visible)}'
-    _safe_add(stdscr, top + window_size + 1, 4, footer, _attr(3))
+    _safe_add_segments(stdscr, top + window_size + 1, 4, [(' showing ', _pill_attr(8)), (f' {footer}', _attr(3))])
     if step.selected:
         preview = ', '.join(step.selected[:6])
         if len(step.selected) > 6:
@@ -378,9 +458,9 @@ def _manual_add(stdscr, step: ChoiceStep):
 
 def _handle_choice_key(stdscr, step: ChoiceStep, key: int):
     visible = _visible_choices(step)
-    if key in {curses.KEY_UP, ord('k')}:
+    if key == curses.KEY_UP:
         step.cursor = max(0, step.cursor - 1)
-    elif key in {curses.KEY_DOWN, ord('j')}:
+    elif key == curses.KEY_DOWN:
         step.cursor = min(max(0, len(visible) - 1), step.cursor + 1)
     elif key == curses.KEY_NPAGE:
         step.cursor = min(max(0, len(visible) - 1), step.cursor + 10)
@@ -390,13 +470,13 @@ def _handle_choice_key(stdscr, step: ChoiceStep, key: int):
         step.query = step.query[:-1]
         step.cursor = 0
         step.offset = 0
-    elif key == ord('i') and step.allow_custom:
+    elif key == curses.KEY_F(2) and step.allow_custom:
         _manual_add(stdscr, step)
-    elif key == ord('a') and step.multi:
+    elif key in {curses.KEY_F(3), 1} and step.multi:
         for choice in visible:
             if choice not in step.selected:
                 step.selected.append(choice)
-    elif key == ord('c') and step.multi:
+    elif key in {curses.KEY_F(4), 24} and step.multi:
         step.selected = []
     elif key == ord(' ') and visible:
         choice = visible[step.cursor]
@@ -411,7 +491,7 @@ def _handle_choice_key(stdscr, step: ChoiceStep, key: int):
         char = chr(key)
         if char == '/':
             step.query = ''
-        elif char not in {' '}:
+        elif char != ' ':
             step.query += char
         step.cursor = 0
         step.offset = 0
@@ -425,9 +505,9 @@ def run_choice_wizard(stdscr, steps: list[ChoiceStep]):
         _draw_choice_step(stdscr, step, steps, index, message)
         message = ''
         key = stdscr.getch()
-        if key in {curses.KEY_LEFT, ord('h')}:
+        if key == curses.KEY_LEFT:
             index = max(0, index - 1)
-        elif key in {curses.KEY_RIGHT, 10, 13, ord('l')}:
+        elif key in {curses.KEY_RIGHT, 10, 13, 9}:
             error = _wizard_validation_error(step, steps)
             if error:
                 message = error
@@ -466,19 +546,57 @@ def edit_parameters(stdscr, params: dict[str, Any]):
         offsets[group] = offset
 
         stdscr.erase()
-        _safe_add(stdscr, 0, 0, ' Hyperparameter Groups '.ljust(width - 1), _attr(5, curses.A_REVERSE))
-        tabs = []
+        _safe_add(stdscr, 0, 0, ' Hyperparameter Groups '.ljust(width - 1), _attr(8, curses.A_REVERSE) | curses.A_BOLD)
+        _safe_add(stdscr, 0, max(0, width - 18), f' group {group_index + 1}/{len(groups)} ', _pill_attr(5))
+        tab_segments = []
         for i, name in enumerate(groups):
             changed = any(params.get(key) != GROUPS[name][key] for key in GROUPS[name])
-            label = f'{name}{"*" if changed else ""}'
-            tabs.append(f'[{label}]' if i == group_index else label)
-        _safe_add(stdscr, 2, 2, '  '.join(tabs), _attr(1))
-        _safe_add(stdscr, 4, 2, f'filter: {query}', _attr(3))
-        if message:
-            _safe_add(stdscr, height - 3, 2, message, _attr(4))
-        _safe_add(stdscr, height - 2, 2, '←/→ group | ↑/↓ move | enter edit | type filter | backspace | d reset | q done', _attr(3))
+            label = f' {name}{"*" if changed else ""} '
+            if i == group_index:
+                tab_segments.append((label, _pill_attr(5)))
+            elif changed:
+                tab_segments.append((label, _attr(2, curses.A_BOLD)))
+            else:
+                tab_segments.append((label, _attr(7)))
+            tab_segments.append((' ', 0))
+        _safe_add_segments(stdscr, 2, 2, tab_segments)
+        _safe_add_segments(
+            stdscr,
+            4,
+            2,
+            [
+                (' filter ', _pill_attr(8)),
+                (f' {query or "type to narrow"} ', _attr(3)),
+                (' group ', _pill_attr(6)),
+                (f' {group} ', _attr(6, curses.A_BOLD)),
+            ],
+        )
+        _draw_footer_hints(
+            stdscr,
+            [
+                ('type', 'filter', 8),
+                ('←→', 'group', 6),
+                ('↑↓', 'move', 5),
+                ('enter', 'edit value', 9),
+                ('F5', 'reset', 10),
+                ('F10', 'done', 2),
+                ('bksp', 'edit filter', 3),
+            ],
+            message=message,
+        )
 
         top = 6
+        _safe_add_segments(
+            stdscr,
+            top - 1,
+            4,
+            [
+                (' key ', _pill_attr(8)),
+                (' ' * 31, 0),
+                (' value ', _pill_attr(9)),
+                ('   default ', _pill_attr(7)),
+            ],
+        )
         for row, key_index in enumerate(range(offset, min(len(visible), offset + page_size)), start=top):
             param_key = visible[key_index]
             active = key_index == cursor
@@ -486,32 +604,35 @@ def edit_parameters(stdscr, params: dict[str, Any]):
             value = params.get(param_key, default_value)
             changed = '*' if value != default_value else ' '
             attr = _attr(5) if active else (_attr(2) if changed == '*' else 0)
-            _safe_add(stdscr, row, 4, f'{"❯" if active else " "} {changed} {param_key:<34} {_value_to_text(value)}', attr)
+            pointer = '❯' if active else ' '
+            _safe_add(stdscr, row, 4, f'{pointer} {changed} {param_key:<32}', attr)
+            _safe_add(stdscr, row, 42, f'{_value_to_text(value):<24}', _attr(2) if changed == '*' and not active else attr)
+            _safe_add(stdscr, row, 68, _value_to_text(default_value), _attr(7))
         if not visible:
             _safe_add(stdscr, top, 4, 'No matching parameters.', _attr(4))
         stdscr.refresh()
 
         key_code = stdscr.getch()
         message = ''
-        if key_code in {curses.KEY_LEFT, ord('h')}:
+        if key_code == curses.KEY_LEFT:
             group_index = max(0, group_index - 1)
-        elif key_code in {curses.KEY_RIGHT, ord('l')}:
+        elif key_code == curses.KEY_RIGHT:
             group_index = min(len(groups) - 1, group_index + 1)
-        elif key_code in {curses.KEY_UP, ord('k')}:
+        elif key_code == curses.KEY_UP:
             cursors[group] = max(0, cursor - 1)
-        elif key_code in {curses.KEY_DOWN, ord('j')}:
+        elif key_code == curses.KEY_DOWN:
             cursors[group] = min(max(0, len(visible) - 1), cursor + 1)
         elif key_code in {curses.KEY_BACKSPACE, 127, 8}:
             query = query[:-1]
             cursors[group] = 0
             offsets[group] = 0
-        elif key_code == ord('d') and visible:
+        elif key_code == curses.KEY_F(5) and visible:
             params[visible[cursor]] = deepcopy(GROUPS[group][visible[cursor]])
         elif key_code in {10, 13} and visible:
             param_key = visible[cursor]
             raw = prompt_text(stdscr, f'Edit {param_key}', _value_to_text(params.get(param_key)))
             params[param_key] = _coerce_value(raw)
-        elif key_code == ord('q'):
+        elif key_code in {curses.KEY_F(10), 7}:
             return params
         elif 0 <= key_code <= 255 and chr(key_code) in string.printable and chr(key_code) not in {'\n', '\r', '\t'}:
             char = chr(key_code)
@@ -704,7 +825,7 @@ def _dynamic_steps(args, model_choices: list[str]):
         ChoiceStep(
             key='datasets',
             title='Datasets',
-            choices=list(DATASET_CHOICES),
+            choices=_available_dataset_choices(),
             selected=_parse_csv(args.datasets),
             hint='Choose one or more datasets. Type "ra" or "rvs" to narrow RecIF scales.',
         ),
@@ -758,7 +879,7 @@ def _conditional_steps(args, selected: dict[str, list[str]]):
                 title='SID Variants',
                 choices=list(SID_VARIANT_CHOICES),
                 selected=_parse_csv(args.sid_variants) or ['rqvae/coll'],
-                hint='Format: coder/export. Use i to type custom values.',
+                hint='Format: coder/export. Press F2 to type custom values.',
             )
         )
     if any(_parse_representation_pair(pair)[0] == 'uid' for pair in selected['representation_pairs']):
