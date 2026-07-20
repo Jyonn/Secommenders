@@ -719,6 +719,12 @@ class RVS95Formatter(RecIFVideoSmallScaleFormatter):
         return 95
 
 
+class RVS99Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 99
+
+
 class RAS1Formatter(RecIFAdsSmallScaleFormatter):
     @classmethod
     def scale_percent(cls) -> int:
