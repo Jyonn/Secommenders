@@ -381,7 +381,6 @@ class RecIFVideoScaleFormatter(RecIFScaleFormatter, abc.ABC):
 
 class RecIFSmallScaleFormatter(RecIFScaleFormatter, abc.ABC):
     FILTER_ROUNDS = 0
-    SCALE_TEST_RATIO = 0.03
 
     def _extra_meta(self):
         meta = super()._extra_meta()
@@ -877,8 +876,6 @@ class RA99Formatter(RecIFAdsScaleFormatter):
 
 
 class RAS99Formatter(RecIFAdsSmallScaleFormatter):
-    SCALE_TEST_RATIO = 0.003
-
     @classmethod
     def scale_percent(cls) -> int:
         return 99
