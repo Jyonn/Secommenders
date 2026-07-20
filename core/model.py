@@ -419,6 +419,21 @@ class SequentialRecModel(nn.Module):
         attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
         return padded, attention_mask.long(), lengths
 
+    def _build_sid_generation_mixed_batch_inputs(self, work_items):
+        sample_embeddings = []
+        for sample, sid_prefix in work_items:
+            specs = self._build_sample_specs(sample)
+            if sid_prefix:
+                specs.append(('sid', [int(code) for code in sid_prefix]))
+            pieces = [self._embed_spec(kind, value) for kind, value in specs]
+            sample_embeddings.append(torch.cat(pieces, dim=0))
+
+        padded = pad_sequence(sample_embeddings, batch_first=True)
+        padded = padded.to(dtype=self.compute_dtype)
+        lengths = torch.tensor([emb.shape[0] for emb in sample_embeddings], dtype=torch.long, device=self.device)
+        attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
+        return padded, attention_mask.long(), lengths
+
     def _predict_sid_step_logits(self, sample, sid_prefixes: list[list[int]], slot_index: int):
         chunk_size = max(1, int(getattr(self.config, 'code_beam_chunk_size', self.config.batch_size)))
         logits_chunks = []
@@ -470,6 +485,52 @@ class SequentialRecModel(nn.Module):
 
         return beams
 
+    def _beam_search_sid_items_batch(self, batch):
+        beam_width = max(1, int(self.config.code_beam_width))
+        chunk_size = max(1, int(getattr(self.config, 'code_beam_chunk_size', self.config.batch_size)))
+        beams_by_sample: list[list[tuple[tuple[int, ...], float]]] = [[(tuple(), 0.0)] for _ in batch]
+
+        for slot_index in range(int(self.compiled.sid_num_quantizers)):
+            work_items = []
+            for sample_index, beams in enumerate(beams_by_sample):
+                for prefix, score in beams:
+                    work_items.append((sample_index, prefix, score))
+
+            if not work_items:
+                break
+
+            candidates_by_sample: list[list[tuple[tuple[int, ...], float]]] = [[] for _ in batch]
+            for start in range(0, len(work_items), chunk_size):
+                chunk = work_items[start:start + chunk_size]
+                input_items = [(batch[sample_index], list(prefix)) for sample_index, prefix, _ in chunk]
+                inputs_embeds, attention_mask, lengths = self._build_sid_generation_mixed_batch_inputs(input_items)
+                hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
+                pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
+                step_log_probs = F.log_softmax(self._sid_logits(pooled).float(), dim=-1)
+
+                for local_index, (sample_index, prefix, score) in enumerate(chunk):
+                    allowed_codes = self.compiled.sid_prefix_to_next.get(prefix, [])
+                    if not allowed_codes:
+                        continue
+                    allowed_indices = torch.tensor(allowed_codes, dtype=torch.long, device=self.device)
+                    allowed_scores = step_log_probs[local_index, allowed_indices]
+                    top_k = min(beam_width, allowed_scores.shape[0])
+                    top_scores, top_positions = torch.topk(allowed_scores, k=top_k)
+                    for top_position, top_score in zip(top_positions.tolist(), top_scores.tolist()):
+                        next_code = int(allowed_codes[top_position])
+                        candidates_by_sample[sample_index].append((prefix + (next_code,), score + float(top_score)))
+
+            next_beams_by_sample = []
+            for candidates in candidates_by_sample:
+                candidates.sort(key=lambda item: item[1], reverse=True)
+                next_beams_by_sample.append(candidates[:beam_width])
+            beams_by_sample = next_beams_by_sample
+
+            if not any(beams_by_sample):
+                break
+
+        return beams_by_sample
+
     def _decode_sid_beams_to_items(self, beams):
         ranked_items = []
         seen_items = set()
@@ -487,8 +548,9 @@ class SequentialRecModel(nn.Module):
         totals['beam_unique_items'] = 0.0
 
         with torch.no_grad():
-            for sample in batch:
-                ranked_items = self._decode_sid_beams_to_items(self._beam_search_sid_items(sample))
+            beams_by_sample = self._beam_search_sid_items_batch(batch)
+            for sample, beams in zip(batch, beams_by_sample):
+                ranked_items = self._decode_sid_beams_to_items(beams)
                 ranked_uids = [uid for uid, _, _ in ranked_items]
                 totals['beam_unique_items'] += float(len(ranked_uids))
                 self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
