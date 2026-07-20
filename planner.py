@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import curses
 import json
 import string
@@ -9,21 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
-DATASET_CHOICES = [
-    'mind',
-    'recifvideo',
-    'recifvideolarge',
-    'recifvideoxlarge',
-    'recifvideoxlargeall',
-    'recifadsall',
-    'recifadslargeall',
-    'recifadsxlargeall',
-    *[f'ra{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99]],
-    *[f'rv{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90]],
-    *[f'rvs{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95]],
-    *[f'ras{scale}' for scale in [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99]],
-]
 
 MODEL_CHOICES = ['scratch', 'qwen35th08b', 'qwen35th4b', 'qwen35th9b', 'llama3']
 SOURCE_MODEL_CHOICES = ['pretrain-multimodal', 'pretrain-text', 'pretrain-vision', 'llama3', 'qwen3embedding06b']
@@ -207,19 +193,94 @@ def _read_models_from_dotfile(root: Path):
     return models
 
 
-def _available_dataset_choices():
-    choices = list(DATASET_CHOICES)
-    seen = set(choices)
-    try:
-        from utils.class_hub import ClassHub
+def _dataset_sort_key(name: str):
+    recif_base_order = {
+        'recifvideo': 10,
+        'recifvideolarge': 11,
+        'recifvideoxlarge': 12,
+        'recifvideoall': 13,
+        'recifvideolargeall': 14,
+        'recifvideoxlargeall': 15,
+        'recifvideoxlargeallofficial': 16,
+        'recifadsall': 20,
+        'recifadslargeall': 21,
+        'recifadsxlargeall': 22,
+    }
+    base_order = {
+        'mind': 0,
+        'movielens': 1,
+        'goodreads': 2,
+        'yelp': 3,
+        'cds': 4,
+        'hm': 5,
+        'pens': 6,
+        'microlens': 7,
+    }
+    if name in base_order:
+        return (0, base_order[name], 0, name)
+    if name in recif_base_order:
+        return (1, recif_base_order[name], 0, name)
+    for prefix_index, prefix in enumerate(('ra', 'rv', 'ras', 'rvs'), start=2):
+        if name.startswith(prefix) and name[len(prefix):].isdigit():
+            return (prefix_index, int(name[len(prefix):]), 0, name)
+    return (9, 0, 0, name)
 
-        for name in sorted(ClassHub.formatters().class_dict):
-            if name not in seen:
-                choices.append(name)
-                seen.add(name)
-    except Exception:
-        pass
-    return choices
+
+def _ast_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _ast_name(node.value)
+        return f'{parent}.{node.attr}' if parent else node.attr
+    return ''
+
+
+def _class_declares_abstract_method(node: ast.ClassDef):
+    for item in node.body:
+        if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in item.decorator_list:
+            name = _ast_name(decorator)
+            if name.endswith('abstractmethod'):
+                return True
+    return False
+
+
+def _dataset_choices_from_formatter_files(root: Path):
+    abstract_class_names = {
+        'BaseFormatter',
+        'BaseMultiTargetFormatter',
+        'UICTFormatter',
+        'AmazonFormatter',
+        'RecIFBaseFormatter',
+        'RecIFScaleFormatter',
+        'RecIFSmallScaleFormatter',
+        'RecIFAdsFormatter',
+    }
+    formatter_dir = root / 'formatters'
+    names = set()
+    for path in sorted(formatter_dir.glob('*_formatter.py')):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef) or not node.name.endswith('Formatter'):
+                continue
+            base_names = {_ast_name(base) for base in node.bases}
+            if node.name in abstract_class_names or node.name.startswith('Base'):
+                continue
+            if {'ABC', 'abc.ABC'} & base_names:
+                continue
+            if _class_declares_abstract_method(node):
+                continue
+            names.add(node.name[:-len('Formatter')].lower())
+    return sorted(names, key=_dataset_sort_key)
+
+
+def _available_dataset_choices():
+    root = Path(__file__).resolve().parent
+    return _dataset_choices_from_formatter_files(root)
 
 
 def _parse_csv(value: str | None):
