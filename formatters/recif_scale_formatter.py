@@ -874,3 +874,11 @@ class RA99Formatter(RecIFAdsScaleFormatter):
     @classmethod
     def scale_percent(cls) -> int:
         return 99
+
+
+class RAS99Formatter(RecIFAdsSmallScaleFormatter):
+    SCALE_TEST_RATIO = 0.003
+
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 99
