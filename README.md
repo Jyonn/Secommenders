@@ -237,12 +237,18 @@ Each experiment can be written in either of two forms:
 
 ### Scheduler Rules
 
+Scratch backbones:
+
+- `scratch` uses a randomly initialized Llama causal Transformer. Its hidden size, layer count, head count, dropout, and maximum length come from the existing scratch configuration, and sequential SID decoding supports KV-cache.
+- `scratchlegacy` preserves the former `torch.nn.TransformerEncoder` implementation for reproducing old experiments. Old scratch checkpoints must be loaded with `--model scratchlegacy`.
+
 The current scheduler uses these rules:
 
 - `batch_size * accumulate_batch = 64`
 - `code_beam_chunk_size = max(batch_size, 4 * code_beam_width)` when left at `0`; this bounds active KV-cache beams and normally batches four samples together
 - initial batch size cap by model name:
   - `scratch -> 64`
+  - `scratchlegacy -> 64`
   - `qwen35th08b -> 32`
   - `qwen35th4b -> 16`
   - `llama3 -> 4`

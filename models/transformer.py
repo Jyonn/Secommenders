@@ -50,7 +50,7 @@ class ScratchTransformerBackbone(BaseBackbone):
 
     @property
     def kind(self):
-        return 'scratch'
+        return 'scratchlegacy'
 
     @property
     def native_max_length(self):
@@ -89,3 +89,9 @@ class ScratchTransformerBackbone(BaseBackbone):
         else:
             target_len = 1
         return len(prompt['history_prefix_ids']) + history_len + separator_len + len(prompt['query_prefix_ids']) + target_len
+
+
+class ScratchLlamaBackbone(ScratchTransformerBackbone):
+    @property
+    def kind(self):
+        return 'scratch'

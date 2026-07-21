@@ -338,6 +338,10 @@ class TrainConfig:
     @property
     def sign_payload(self):
         payload = asdict(self)
+        if self.model == 'scratch':
+            payload['backbone_architecture'] = 'llama-v1'
+        elif self.model == 'scratchlegacy':
+            payload['backbone_architecture'] = 'torch-transformer-v1'
         payload.pop('device', None)
         payload['effective_batch_size'] = self.effective_batch_size
         payload.pop('seed', None)

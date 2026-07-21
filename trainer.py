@@ -492,6 +492,19 @@ class Trainer:
         # them to their historical defaults so we only reject true structural
         # mismatches instead of schema evolution.
         normalized_saved_config = dict(saved_config)
+        state_keys = set((checkpoint.get('model_state_dict') or {}).keys())
+        saved_legacy_scratch = any(
+            key.startswith(('encoder.encoder.', 'encoder.position_embedding.'))
+            for key in state_keys
+        )
+        if saved_legacy_scratch and normalized_saved_config.get('model') == 'scratch':
+            if self.config.model == 'scratchlegacy':
+                normalized_saved_config['model'] = 'scratchlegacy'
+            elif self.config.model == 'scratch':
+                raise ValueError(
+                    'Checkpoint uses the former PyTorch scratch Transformer; '
+                    'load it with --model scratchlegacy instead'
+                )
         normalized_saved_config.setdefault('uid_decoding', 'flat')
         normalized_saved_config.setdefault('uid_cluster_levels', None)
         normalized_saved_config.setdefault('uid_cluster_topk', None)

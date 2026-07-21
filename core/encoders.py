@@ -4,7 +4,7 @@ from peft import LoraConfig, TaskType, get_peft_model
 from pigmento import pnt
 import torch
 from torch import nn
-from transformers import AutoModel
+from transformers import AutoModel, LlamaConfig, LlamaModel
 
 from utils import function
 
@@ -235,6 +235,38 @@ class LLMSequenceEncoder(nn.Module):
             f'returned={type(past_key_values).__name__ if past_key_values is not None else "None"}'
         )
         return outputs.last_hidden_state, past_key_values
+
+
+class ScratchLlamaSequenceEncoder(LLMSequenceEncoder):
+    """Randomly initialized Llama backbone with the same cache interface as an LLM."""
+
+    def __init__(self, vocab_size: int, hidden_size: int, num_layers: int, num_heads: int, dropout: float, max_length: int):
+        nn.Module.__init__(self)
+        if hidden_size % num_heads != 0:
+            raise ValueError(f'scratch hidden_size={hidden_size} must be divisible by num_heads={num_heads}')
+        if (hidden_size // num_heads) % 2 != 0:
+            raise ValueError('scratch Llama attention head dimension must be even for rotary embeddings')
+        llama_config = LlamaConfig(
+            vocab_size=max(int(vocab_size), 1),
+            hidden_size=int(hidden_size),
+            intermediate_size=int(hidden_size) * 4,
+            num_hidden_layers=int(num_layers),
+            num_attention_heads=int(num_heads),
+            num_key_value_heads=int(num_heads),
+            max_position_embeddings=int(max_length),
+            attention_dropout=float(dropout),
+            hidden_act='silu',
+            use_cache=True,
+        )
+        self.model = LlamaModel(llama_config)
+        self.hidden_size = int(hidden_size)
+        self.input_embed_dim = int(hidden_size)
+        self.freeze_backbone = False
+        self.use_lora = False
+        self.model_dtype = torch.float32
+        self.compute_dtype = torch.float32
+        self.total_hidden_layers = int(num_layers)
+        self.forward_accepts_use_cache = True
 
 
 class ScratchSequenceEncoder(nn.Module):

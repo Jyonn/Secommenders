@@ -28,6 +28,7 @@ ARTIFACT_ROOT = ROOT / 'artifacts' / 'scheduler'
 BATCH_LADDER = [64, 32, 16, 8, 4, 2, 1]
 MODEL_BATCH_CAPS = {
     'scratch': 64,
+    'scratchlegacy': 64,
     'qwen35th08b': 32,
     'qwen35th4b': 16,
     'llama3': 4,
@@ -35,6 +36,7 @@ MODEL_BATCH_CAPS = {
 }
 MODEL_FREE_MEMORY_REQUIREMENTS_MB = {
     'scratch': 10_000,
+    'scratchlegacy': 10_000,
     'qwen35th08b': 20_000,
     'qwen35th4b': 40_000,
     'llama3': 80_000,
@@ -145,7 +147,7 @@ def required_free_memory_mb(base_args: dict):
     if not uses_embedding_path(base_args):
         return base_requirement
 
-    if model_name == 'scratch':
+    if model_name in {'scratch', 'scratchlegacy'}:
         return 20_000
     if model_name == 'qwen35th08b':
         return 40_000

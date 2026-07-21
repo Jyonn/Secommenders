@@ -1097,6 +1097,10 @@ def _config_sign_payload(config: Any):
     if isinstance(normalized.get('upstreams'), dict):
         normalized['upstreams'] = _canonical_train_upstreams(normalized)
     payload = {key: normalized.get(key) for key in TRAIN_CONFIG_FIELD_NAMES if key in normalized}
+    if payload.get('model') == 'scratch':
+        payload['backbone_architecture'] = 'llama-v1'
+    elif payload.get('model') == 'scratchlegacy':
+        payload['backbone_architecture'] = 'torch-transformer-v1'
     payload.pop('device', None)
     batch_size = int(payload.get('batch_size') or TRAIN_CONFIG_DEFAULTS['batch_size'])
     accumulate_batch = int(payload.get('accumulate_batch') or TRAIN_CONFIG_DEFAULTS['accumulate_batch'])

@@ -22,12 +22,12 @@ def _validate_compile_config(config: CompileConfig):
 
     repr_types = config.repr_types
     model_name = str(config.model).strip().lower()
-    is_scratch_model = model_name == 'scratch'
+    is_scratch_model = model_name in {'scratch', 'scratchlegacy'}
 
     if not is_scratch_model and model_utils.match(model_name) is None:
         raise ValueError(
             f'Unknown model "{config.model}". '
-            f'Use "scratch" for the scratch backbone or add the model alias to .model'
+            f'Use "scratch"/"scratchlegacy" for a scratch backbone or add the model alias to .model'
         )
     if not repr_types:
         raise ValueError('repr.type must contain at least one representation')

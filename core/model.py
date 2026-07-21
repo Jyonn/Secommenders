@@ -10,7 +10,7 @@ from torch.nn.utils.rnn import pad_sequence
 from models import build_backbone
 from utils import function
 
-from .encoders import LLMSequenceEncoder, ScratchSequenceEncoder
+from .encoders import LLMSequenceEncoder, ScratchLlamaSequenceEncoder, ScratchSequenceEncoder
 from .uid_hierarchy import UIDHierarchyArtifacts
 
 
@@ -41,7 +41,16 @@ class SequentialRecModel(nn.Module):
                 lora_target_modules=config.lora_target_modules,
                 model_dtype=config.model_dtype,
             )
-        else:
+        elif compiled.model_kind == 'scratch':
+            self.encoder = ScratchLlamaSequenceEncoder(
+                vocab_size=compiled.model_vocab_size,
+                hidden_size=config.hidden_size,
+                num_layers=config.num_layers,
+                num_heads=config.num_heads,
+                dropout=config.dropout,
+                max_length=compiled.meta['model_max_length'],
+            )
+        elif compiled.model_kind == 'scratchlegacy':
             self.encoder = ScratchSequenceEncoder(
                 vocab_size=compiled.model_vocab_size,
                 hidden_size=config.hidden_size,
@@ -50,6 +59,8 @@ class SequentialRecModel(nn.Module):
                 dropout=config.dropout,
                 max_length=compiled.meta['model_max_length'],
             )
+        else:
+            raise ValueError(f'Unsupported compiled model kind: {compiled.model_kind}')
 
         hidden_size = self.encoder.hidden_size
         input_embed_dim = getattr(self.encoder, 'input_embed_dim', hidden_size)
@@ -448,7 +459,7 @@ class SequentialRecModel(nn.Module):
 
     def _sid_kv_cache_supported(self):
         return (
-            isinstance(self.encoder, LLMSequenceEncoder)
+            isinstance(self.encoder, (LLMSequenceEncoder, ScratchLlamaSequenceEncoder))
             and hasattr(self.encoder, 'forward_with_cache')
             and bool(getattr(self.encoder, 'forward_accepts_use_cache', False))
         )
