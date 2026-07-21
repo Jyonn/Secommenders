@@ -244,6 +244,8 @@ Scratch backbones:
 
 Running `python scripts/init_artifact_registry.py --stage trained` reports old scratch artifacts as `migration=scratch->scratchlegacy`. Rerun with `--apply` to rewrite their metadata, move them under the scratchlegacy signature, and retain the old signature as an alias. Artifacts carrying the new `backbone_architecture=llama-v1` identity marker remain under `scratch`.
 
+Early stopping accepts one or more main metrics. Separate multiple metrics with `|`, for example `--main_metric 'loss|ndcg@10'`. Loss metrics are minimized, other metrics are maximized, and an improvement in any listed metric resets patience and saves the current checkpoint. Metadata records both the first metric's backward-compatible `best_valid_metric` and the complete `best_valid_metrics` mapping.
+
 The current scheduler uses these rules:
 
 - `batch_size * accumulate_batch = 64`

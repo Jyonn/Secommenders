@@ -218,11 +218,36 @@ class Trainer:
         return f'ndcg@{max(self.model_core.ranking_ks())}'
 
     def _main_metric_name(self):
-        return self.config.main_metric or 'loss'
+        return '|'.join(self._main_metric_names())
 
-    def _main_metric_higher_is_better(self):
-        metric = self._main_metric_name()
-        return metric != 'loss'
+    def _main_metric_names(self):
+        names = []
+        for value in str(self.config.main_metric or 'loss').split('|'):
+            metric = value.strip().lower()
+            if metric and metric not in names:
+                names.append(metric)
+        return names or ['loss']
+
+    @staticmethod
+    def _metric_higher_is_better(metric: str):
+        return metric != 'loss' and not metric.endswith('_loss')
+
+    def _main_metric_higher_is_better(self, metric: str | None = None):
+        return self._metric_higher_is_better(metric or self._main_metric_names()[0])
+
+    def _update_main_metric_bests(self, valid_metrics: dict, best_metrics: dict[str, float]):
+        improved_metrics = []
+        for metric in self._main_metric_names():
+            current_metric = valid_metrics[metric]
+            improved = (
+                current_metric > best_metrics[metric]
+                if self._main_metric_higher_is_better(metric)
+                else current_metric < best_metrics[metric]
+            )
+            if improved:
+                best_metrics[metric] = current_metric
+                improved_metrics.append(metric)
+        return improved_metrics
 
     def _format_test_metrics(self, metrics: dict):
         selected_keys = [metric for metric in self.config.metrics if metric in metrics]
@@ -248,9 +273,9 @@ class Trainer:
             candidate_keys.append(task_metric)
         if self.config.task_type == 'sid' and 'sid_seq_acc' in metrics:
             candidate_keys.append('sid_seq_acc')
-        main_metric = self._main_metric_name()
-        if main_metric != 'loss' and main_metric in metrics:
-            candidate_keys.append(main_metric)
+        for main_metric in self._main_metric_names():
+            if main_metric != 'loss' and main_metric in metrics:
+                candidate_keys.append(main_metric)
         ranking_metric = self._default_ranking_metric()
         if ranking_metric in metrics:
             candidate_keys.append(ranking_metric)
@@ -371,7 +396,7 @@ class Trainer:
             summary[key] = value / max(total_batches, 1)
         return summary
 
-    def _save_checkpoint(self, epoch: int, best_metric: float, valid_metrics: dict):
+    def _save_checkpoint(self, epoch: int, best_metrics: dict[str, float], valid_metrics: dict):
         if not self.is_main_process:
             return
         checkpoint = {
@@ -380,14 +405,15 @@ class Trainer:
             'checkpoint_kind': 'trainable_only',
             'config': asdict(self.config),
             'valid_metrics': valid_metrics,
-            'best_valid_metric': best_metric,
+            'best_valid_metric': best_metrics[self._main_metric_names()[0]],
+            'best_valid_metrics': best_metrics,
             'main_metric': self._main_metric_name(),
         }
         path = self.run_dir / 'best.pt'
         torch.save(checkpoint, path)
         self._pnt(f'saved best checkpoint to {path} with trainable-only state')
 
-    def _save_meta(self, best_epoch: int, best_valid_metric: float, test_metrics: dict):
+    def _save_meta(self, best_epoch: int, best_valid_metrics: dict[str, float], test_metrics: dict):
         if not self.is_main_process:
             return
         meta = self._load_meta_stub()
@@ -397,7 +423,8 @@ class Trainer:
             'run_dir': str(self.run_dir),
             'best_epoch': best_epoch,
             'main_metric': self._main_metric_name(),
-            'best_valid_metric': best_valid_metric,
+            'best_valid_metric': best_valid_metrics[self._main_metric_names()[0]],
+            'best_valid_metrics': best_valid_metrics,
             'train_metric_name': self._metric_name(),
             'test_metric_name': self._default_ranking_metric(),
             'declared_test_metrics': self.config.metrics,
@@ -447,6 +474,7 @@ class Trainer:
             'loaded_checkpoint': str(self.config.load_ckpt) if self.config.load_ckpt else None,
             'checkpoint_epoch': checkpoint.get('epoch') if checkpoint else None,
             'checkpoint_best_valid_metric': checkpoint.get('best_valid_metric') if checkpoint else None,
+            'checkpoint_best_valid_metrics': checkpoint.get('best_valid_metrics') if checkpoint else None,
             'checkpoint_main_metric': checkpoint.get('main_metric') if checkpoint else None,
             'checkpoint_valid_metrics': checkpoint.get('valid_metrics') if checkpoint else None,
             'test_metrics': test_metrics,
@@ -600,9 +628,12 @@ class Trainer:
             return
         optimizer = self.build_optimizer()
         metric_name = self._metric_name()
-        main_metric_name = self._main_metric_name()
-        higher_is_better = self._main_metric_higher_is_better()
-        best_metric = float('-inf') if higher_is_better else float('inf')
+        main_metric_names = self._main_metric_names()
+        main_metric_name = '|'.join(main_metric_names)
+        best_metrics = {
+            metric: float('-inf') if self._main_metric_higher_is_better(metric) else float('inf')
+            for metric in main_metric_names
+        }
         best_epoch = 0
         wait = 0
         unlimited_epochs = self.config.epochs <= 0
@@ -636,18 +667,18 @@ class Trainer:
                     f'epoch {epoch:03d} valid_loss={epoch_valid_metrics["loss"]:.4f} '
                     f'{self._format_test_metrics(epoch_valid_metrics)}'
                 )
-            if main_metric_name not in epoch_valid_metrics:
+            missing_main_metrics = [metric for metric in main_metric_names if metric not in epoch_valid_metrics]
+            if missing_main_metrics:
                 raise KeyError(
-                    f'evaluator.main_metric={main_metric_name} not found in valid metrics: '
+                    f'evaluator.main_metric entries={missing_main_metrics} not found in valid metrics: '
                     f'{sorted(epoch_valid_metrics.keys())}'
                 )
-            current_metric = epoch_valid_metrics[main_metric_name]
-            improved = current_metric > best_metric if higher_is_better else current_metric < best_metric
-            if improved:
-                best_metric = current_metric
+            improved_metrics = self._update_main_metric_bests(epoch_valid_metrics, best_metrics)
+            if improved_metrics:
                 best_epoch = epoch
                 wait = 0
-                self._save_checkpoint(epoch, best_metric, epoch_valid_metrics)
+                self._pnt(f'valid improvement in {"|".join(improved_metrics)}; reset patience')
+                self._save_checkpoint(epoch, best_metrics, epoch_valid_metrics)
             else:
                 wait += 1
                 self._pnt(
@@ -656,7 +687,7 @@ class Trainer:
                 )
                 if wait >= self.config.patience:
                     self._pnt(
-                        f'early stop at epoch {epoch:03d} with best_valid_{main_metric_name}={best_metric:.4f}'
+                        f'early stop at epoch {epoch:03d} with best_valid_metrics={best_metrics}'
                     )
                     break
 
@@ -671,7 +702,7 @@ class Trainer:
                 f'best_epoch={best_epoch} test_loss={test_metrics["loss"]:.4f} '
                 f'{self._format_test_metrics(test_metrics)}'
             )
-            self._save_meta(best_epoch, best_metric, test_metrics)
+            self._save_meta(best_epoch, best_metrics, test_metrics)
 
         if self.distributed:
             dist.destroy_process_group()

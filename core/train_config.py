@@ -248,7 +248,11 @@ class TrainConfig:
             uid_cluster_levels=uid_cluster_levels,
             uid_cluster_topk=uid_cluster_topk,
             code_decoding=str(_get(decoder_sid, 'mode', getattr(trainer, 'code_decoding', 'auto'))).strip().lower(),
-            main_metric=str(getattr(evaluator, 'main_metric', 'ndcg@10')).strip().lower(),
+            main_metric='|'.join(
+                metric.strip().lower()
+                for metric in str(getattr(evaluator, 'main_metric', 'ndcg@10')).split('|')
+                if metric.strip()
+            ) or 'loss',
             metrics=metrics,
             patience=int(evaluator.patience),
             alignment_weight=float(getattr(trainer, 'alignment', 0)),
