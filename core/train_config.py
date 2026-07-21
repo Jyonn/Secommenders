@@ -103,7 +103,11 @@ class TrainConfig:
         evaluator = configurations.config.evaluator
         model = configurations.config.model
         lora = model.lora
-        scratch = _get(model, 'scratch') or model.config
+        # model.config was the former section name. Keep it as a read fallback
+        # for external legacy YAML files; canonical configs use model.scratch.
+        scratch = _get(model, 'scratch') or _get(model, 'config')
+        if scratch is None:
+            raise ValueError('model.scratch configuration is required')
         raw_repr_type = _get(representation, 'history', _get(data_config, 'repr_type', None))
         raw_task_type = str(_get(representation, 'target', _get(data_config, 'task_type'))).lower()
         normalized_repr_type = canonicalize_repr_type(raw_task_type, raw_repr_type)
