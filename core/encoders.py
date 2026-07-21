@@ -170,8 +170,21 @@ class LLMSequenceEncoder(nn.Module):
 
     @staticmethod
     def reorder_cache(past_key_values, beam_indices: torch.Tensor):
-        """Select and duplicate legacy KV-cache rows for the next beam batch."""
-        if past_key_values is None or not isinstance(past_key_values, (list, tuple)):
+        """Select and duplicate KV-cache rows for the next beam batch."""
+        if past_key_values is None:
+            return None
+        # Transformers 5 returns Cache objects (for example DynamicCache) and
+        # mutates them in place when selecting beam rows. The old cache is not
+        # reused after expansion, so returning the same object is intentional.
+        batch_select_indices = getattr(past_key_values, 'batch_select_indices', None)
+        if callable(batch_select_indices):
+            selected = batch_select_indices(beam_indices)
+            return past_key_values if selected is None else selected
+        native_reorder_cache = getattr(past_key_values, 'reorder_cache', None)
+        if callable(native_reorder_cache):
+            selected = native_reorder_cache(beam_indices)
+            return past_key_values if selected is None else selected
+        if not isinstance(past_key_values, (list, tuple)):
             return None
         reordered_layers = []
         for layer in past_key_values:

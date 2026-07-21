@@ -104,6 +104,22 @@ def test_reorder_cache_rejects_unknown_cache_container():
     assert LLMSequenceEncoder.reorder_cache(object(), torch.tensor([0])) is None
 
 
+def test_reorder_cache_uses_native_dynamic_cache_selection():
+    class DynamicCacheStub:
+        def __init__(self):
+            self.keys = torch.tensor([[10], [20]])
+
+        def batch_select_indices(self, indices):
+            self.keys = self.keys.index_select(0, indices)
+
+    cache = DynamicCacheStub()
+
+    reordered = LLMSequenceEncoder.reorder_cache(cache, torch.tensor([1, 0, 1]))
+
+    assert reordered is cache
+    assert reordered.keys.squeeze(1).tolist() == [20, 10, 20]
+
+
 def test_kv_beam_search_batches_all_active_beams_once_per_sid_slot():
     model = BeamSearchHarness()
 
