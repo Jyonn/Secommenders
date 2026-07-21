@@ -1,5 +1,6 @@
 import hashlib
 import math
+import time
 
 import torch
 import torch.nn.functional as F
@@ -501,7 +502,23 @@ class SequentialRecModel(nn.Module):
         logits, next_past = result
         return logits.squeeze(0), next_past
 
+    def _sid_timing_now(self):
+        if not getattr(self, 'sid_decoding_timing_enabled', False):
+            return None
+        if self.device.type == 'cuda':
+            torch.cuda.synchronize(self.device)
+        return time.perf_counter()
+
+    def _sid_timing_add(self, key: str, started_at):
+        if started_at is None:
+            return
+        elapsed = time.perf_counter() - started_at
+        timings = getattr(self, '_sid_decoding_timings', None)
+        if timings is not None:
+            timings[key] = timings.get(key, 0.0) + elapsed
+
     def _sid_base_batch_logits_and_cache(self, batch):
+        build_started = self._sid_timing_now()
         input_items = [(sample, []) for sample in batch]
         right_padded, _, lengths = self._build_sid_generation_mixed_batch_inputs(input_items)
         inputs_embeds = torch.zeros_like(right_padded)
@@ -515,11 +532,14 @@ class SequentialRecModel(nn.Module):
             attention_mask[row_index, -length:] = 1
         position_ids = attention_mask.cumsum(dim=1) - 1
         position_ids.masked_fill_(attention_mask == 0, 0)
+        self._sid_timing_add('input_build', build_started)
+        forward_started = self._sid_timing_now()
         hidden, past_key_values = self.encoder.forward_with_cache(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             position_ids=position_ids,
         )
+        self._sid_timing_add('history_forward', forward_started)
         if past_key_values is None:
             return None
         pooled = hidden[:, -1, :]
@@ -650,6 +670,7 @@ class SequentialRecModel(nn.Module):
         beams_by_sample = [[(tuple(), 0.0, sample_index)] for sample_index in range(len(batch))]
 
         for slot_index in range(num_quantizers):
+            select_started = self._sid_timing_now()
             batched_log_probs = F.log_softmax(batched_logits.float(), dim=-1)
             candidates_by_sample = []
             for beams in beams_by_sample:
@@ -669,6 +690,7 @@ class SequentialRecModel(nn.Module):
                         )
                 candidates.sort(key=lambda item: item[1], reverse=True)
                 candidates_by_sample.append(candidates[:beam_width])
+            self._sid_timing_add(f'slot_{slot_index}_select', select_started)
 
             if not any(candidates_by_sample):
                 break
@@ -679,6 +701,7 @@ class SequentialRecModel(nn.Module):
                 ]
 
             selected = [candidate for candidates in candidates_by_sample for candidate in candidates]
+            cache_started = self._sid_timing_now()
             parent_indices = torch.tensor(
                 [cache_row for _, _, cache_row, _ in selected],
                 dtype=torch.long,
@@ -697,6 +720,8 @@ class SequentialRecModel(nn.Module):
             )
             parent_lengths = batched_lengths.index_select(0, parent_indices)
             next_position_ids = parent_lengths.unsqueeze(1)
+            self._sid_timing_add(f'slot_{slot_index}_cache', cache_started)
+            forward_started = self._sid_timing_now()
             try:
                 next_result = self._sid_append_cached_tokens(
                     selected_past,
@@ -708,6 +733,7 @@ class SequentialRecModel(nn.Module):
                 return None
             if next_result is None:
                 return None
+            self._sid_timing_add(f'slot_{slot_index}_forward', forward_started)
             batched_logits, batched_past = next_result
             batched_attention_mask = next_attention_mask
             batched_lengths = parent_lengths + 1
@@ -782,6 +808,10 @@ class SequentialRecModel(nn.Module):
         return ranked_items
 
     def _compute_sid_ranking_metrics(self, batch):
+        profile_enabled = bool(getattr(self, 'sid_decoding_timing_enabled', False))
+        if profile_enabled:
+            self._sid_decoding_timings = {}
+        decoding_started = self._sid_timing_now()
         ks = self.ranking_ks()
         totals = self._init_ranking_totals(ks)
         totals['beam_unique_items'] = 0.0
@@ -799,16 +829,24 @@ class SequentialRecModel(nn.Module):
                 beams_by_sample = self._beam_search_sid_items_batch_with_kv_cache(sample_chunk)
                 used_kv_cache = beams_by_sample is not None
                 if beams_by_sample is None:
+                    fallback_started = self._sid_timing_now()
                     beams_by_sample = self._beam_search_sid_items_batch(sample_chunk)
+                    self._sid_timing_add('fallback_decode', fallback_started)
+                mapping_started = self._sid_timing_now()
                 for sample, beams in zip(sample_chunk, beams_by_sample):
                     ranked_items = self._decode_sid_beams_to_items(beams)
                     ranked_uids = [uid for uid, _, _ in ranked_items]
                     totals['beam_unique_items'] += float(len(ranked_uids))
                     totals['kv_cache_used'] += float(used_kv_cache)
                     self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
+                self._sid_timing_add('item_mapping_metrics', mapping_started)
 
         batch_size = max(len(batch), 1)
-        return {key: value / batch_size for key, value in totals.items()}
+        result = {key: value / batch_size for key, value in totals.items()}
+        self._sid_timing_add('decoding_total', decoding_started)
+        if profile_enabled:
+            result.update({f'sid_time_{key}_ms': value * 1000.0 for key, value in self._sid_decoding_timings.items()})
+        return result
 
     def _compute_sid_loss(self, batch):
         total_loss = torch.tensor(0.0, dtype=torch.float32, device=self.device)

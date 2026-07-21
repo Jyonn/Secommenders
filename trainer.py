@@ -292,6 +292,12 @@ class Trainer:
     def _run_loader(self, loader, optimizer=None, desc='train', distributed_reduce=True, max_batches=None):
         is_train = optimizer is not None
         self.model.train(is_train)
+        profile_sid_decoding = (
+            desc == 'valid-only'
+            and self.config.task_type == 'sid'
+            and self.model_core._sid_decoding_mode() == 'sequential'
+        )
+        self.model_core.sid_decoding_timing_enabled = profile_sid_decoding
         total_loss = 0.0
         total_batches = 0
         metric_sums = {}
@@ -329,7 +335,17 @@ class Trainer:
             for key, value in metrics.items():
                 if isinstance(value, str):
                     continue
+                if key.startswith('sid_time_'):
+                    continue
                 metric_sums[key] = metric_sums.get(key, 0.0) + float(value)
+
+            if profile_sid_decoding:
+                timing_parts = [
+                    f'{key.removeprefix("sid_time_").removesuffix("_ms")}={float(value):.1f}ms'
+                    for key, value in metrics.items()
+                    if key.startswith('sid_time_') and key.endswith('_ms')
+                ]
+                self._pnt(f'{desc} batch={batch_index + 1} SID decoding timing: ' + ' '.join(timing_parts))
 
             iterator.set_postfix(self._progress_postfix(is_train=is_train, raw_loss=raw_loss, metrics=metrics))
 
@@ -345,6 +361,7 @@ class Trainer:
                 reduced_metric_sums[key] = float(tensor.item())
             metric_sums = reduced_metric_sums
 
+        self.model_core.sid_decoding_timing_enabled = False
         summary = {'loss': total_loss / max(total_batches, 1)}
         for key, value in metric_sums.items():
             summary[key] = value / max(total_batches, 1)
