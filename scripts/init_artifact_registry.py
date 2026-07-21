@@ -433,6 +433,20 @@ def update_trained_meta(meta_path: Path, config, *, apply: bool, aliases: list[s
     return identity
 
 
+def migrate_legacy_scratch_config(meta: dict, config: dict):
+    """Relabel scratch artifacts created before scratch became the Llama backbone."""
+    if str(config.get('model') or '').lower() != 'scratch':
+        return config, False
+    identity = meta.get('artifact_identity') if isinstance(meta.get('artifact_identity'), dict) else {}
+    spec = identity.get('spec') if isinstance(identity.get('spec'), dict) else {}
+    identity_config = spec.get('config') if isinstance(spec.get('config'), dict) else {}
+    if identity_config.get('backbone_architecture') == 'llama-v1':
+        return config, False
+    migrated = dict(config)
+    migrated['model'] = 'scratchlegacy'
+    return migrated, True
+
+
 def checkpoint_exists(setting_dir: Path):
     if not setting_dir.exists():
         return False
@@ -931,6 +945,7 @@ def init_trained_registry(
         try:
             meta = read_json(meta_path)
             config = migrate_train_config_dict(meta.get('config'))
+            config, migrated_legacy_scratch = migrate_legacy_scratch_config(meta, config)
             signature = trained_signature_from_config(config)
             aliases = []
             legacy_signature = legacy_signature_from_folder(folder)
@@ -948,6 +963,7 @@ def init_trained_registry(
                     'target_run_dir': str(target_run_dir),
                     'aliases': identity.get('aliases') or [],
                     'meta_path': str(meta_path),
+                    'model_migration': 'scratch->scratchlegacy' if migrated_legacy_scratch else None,
                 }
             )
             if not apply and source_run_dir != target_run_dir and target_run_dir.exists():
@@ -1038,6 +1054,8 @@ def init_trained_registry(
                         )
                         continue
                     final_meta = read_json(final_meta_path)
+                    if migrated_legacy_scratch:
+                        final_meta['config'] = config
                     final_meta['run_dir'] = str(target_run_dir)
                     final_meta['artifact_identity'] = trained_artifact_identity(
                         config,
@@ -1364,7 +1382,8 @@ def main():
         print('datasets: ' + ', '.join(report['datasets']))
     for item in report['resolved'][:20]:
         aliases = ','.join(item['aliases'])
-        print(f'  ok {item["data"]}/{item["folder"]} -> {item["signature"]} aliases=[{aliases}]')
+        migration = f' migration={item["model_migration"]}' if item.get('model_migration') else ''
+        print(f'  ok {item["data"]}/{item["folder"]} -> {item["signature"]}{migration} aliases=[{aliases}]')
     if len(report['resolved']) > 20:
         print(f'  ... {len(report["resolved"]) - 20} more resolved')
     for item in report['unresolved'][:20]:

@@ -242,6 +242,8 @@ Scratch backbones:
 - `scratch` uses a randomly initialized Llama causal Transformer. Its hidden size, layer count, head count, dropout, and maximum length come from the existing scratch configuration, and sequential SID decoding supports KV-cache.
 - `scratchlegacy` preserves the former `torch.nn.TransformerEncoder` implementation for reproducing old experiments. Old scratch checkpoints must be loaded with `--model scratchlegacy`.
 
+Running `python scripts/init_artifact_registry.py --stage trained` reports old scratch artifacts as `migration=scratch->scratchlegacy`. Rerun with `--apply` to rewrite their metadata, move them under the scratchlegacy signature, and retain the old signature as an alias. Artifacts carrying the new `backbone_architecture=llama-v1` identity marker remain under `scratch`.
+
 The current scheduler uses these rules:
 
 - `batch_size * accumulate_batch = 64`
