@@ -49,6 +49,20 @@ the producer's current stage and progress every five seconds. Machine-readable
 progress is stored beside the artifact in `run_state.json`; the lock is removed
 after success or failure, and stale local locks can be recovered automatically.
 
+### Dataset statistics
+
+Compare formatted datasets in one command. Missing formatted artifacts are
+prepared automatically; use `--no-prepare` to require existing artifacts.
+
+```bash
+python scripts/dataset_statistics.py --data ras1,ras2,ras5,ras10,ras20,ras50,ras99
+python scripts/dataset_statistics.py --data ras1,ras5,ras99 --output reports/ras_statistics.csv
+```
+
+The terminal report includes catalog and observed item counts, user/source-user
+counts, interactions, test users, history-length quantiles, density, and
+sparsity. CSV, Markdown, and JSON outputs contain the full set of statistics.
+
 ### Content Embeddings
 
 ```bash
