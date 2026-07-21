@@ -176,13 +176,16 @@ class LLMSequenceEncoder(nn.Module):
         # Transformers 5 returns Cache objects (for example DynamicCache) and
         # mutates them in place when selecting beam rows. The old cache is not
         # reused after expansion, so returning the same object is intentional.
-        batch_select_indices = getattr(past_key_values, 'batch_select_indices', None)
-        if callable(batch_select_indices):
-            selected = batch_select_indices(beam_indices)
-            return past_key_values if selected is None else selected
+        # Prefer reorder_cache: hybrid Qwen caches contain LinearAttentionLayer,
+        # which implements reorder_cache but not batch_select_indices even though
+        # the outer DynamicCache exposes both methods.
         native_reorder_cache = getattr(past_key_values, 'reorder_cache', None)
         if callable(native_reorder_cache):
             selected = native_reorder_cache(beam_indices)
+            return past_key_values if selected is None else selected
+        batch_select_indices = getattr(past_key_values, 'batch_select_indices', None)
+        if callable(batch_select_indices):
+            selected = batch_select_indices(beam_indices)
             return past_key_values if selected is None else selected
         if not isinstance(past_key_values, (list, tuple)):
             return None

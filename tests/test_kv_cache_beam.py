@@ -120,6 +120,25 @@ def test_reorder_cache_uses_native_dynamic_cache_selection():
     assert reordered.keys.squeeze(1).tolist() == [20, 10, 20]
 
 
+def test_reorder_cache_prefers_hybrid_compatible_native_reorder():
+    class HybridCacheStub:
+        def __init__(self):
+            self.keys = torch.tensor([[10], [20]])
+
+        def batch_select_indices(self, indices):
+            raise AssertionError('hybrid linear-attention layers do not support this path')
+
+        def reorder_cache(self, indices):
+            self.keys = self.keys.index_select(0, indices)
+
+    cache = HybridCacheStub()
+
+    reordered = LLMSequenceEncoder.reorder_cache(cache, torch.tensor([1, 1, 0]))
+
+    assert reordered is cache
+    assert reordered.keys.squeeze(1).tolist() == [20, 20, 10]
+
+
 def test_kv_beam_search_batches_all_active_beams_once_per_sid_slot():
     model = BeamSearchHarness()
 
