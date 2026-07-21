@@ -2,7 +2,14 @@ import json
 
 import pandas as pd
 
-from scripts.dataset_statistics import parse_datasets, summarize_frames, write_output
+from scripts.dataset_statistics import (
+    SUMMARY_COLUMNS,
+    SUMMARY_HEADERS,
+    parse_datasets,
+    render_table,
+    summarize_frames,
+    write_output,
+)
 
 
 def test_summarize_frames_computes_common_recommendation_statistics():
@@ -44,3 +51,13 @@ def test_json_output_contains_full_record(tmp_path):
     write_output(output, records)
     assert json.loads(output.read_text()) == records
 
+
+def test_summary_table_uses_compact_headers():
+    record = {column: 1 for column in SUMMARY_COLUMNS}
+    rendered = render_table([record], SUMMARY_COLUMNS, SUMMARY_HEADERS)
+    header = rendered.splitlines()[0]
+
+    assert '#Item' in header
+    assert '#User' in header
+    assert '#Inter' in header
+    assert 'item_count' not in header

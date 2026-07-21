@@ -24,13 +24,22 @@ SUMMARY_COLUMNS = [
     'source_user_count',
     'test_user_count',
     'interaction_count',
-    'history_mean',
-    'history_median',
-    'history_p90',
-    'history_max',
     'density_percent',
     'sparsity_percent',
 ]
+
+SUMMARY_HEADERS = {
+    'data': 'Data',
+    'scale_percent': 'Scale%',
+    'item_count': '#Item',
+    'observed_item_count': '#ObsItem',
+    'user_count': '#User',
+    'source_user_count': '#SrcUser',
+    'test_user_count': '#TestUser',
+    'interaction_count': '#Inter',
+    'density_percent': 'Density%',
+    'sparsity_percent': 'Sparse%',
+}
 
 HISTORY_COLUMNS = [
     'data',
@@ -196,13 +205,15 @@ def format_value(value):
     return str(value)
 
 
-def render_table(records, columns):
+def render_table(records, columns, headers=None):
+    headers = headers or {}
+    labels = [headers.get(column, column) for column in columns]
     rows = [[format_value(record.get(column)) for column in columns] for record in records]
     widths = [
-        max(len(column), *(len(row[index]) for row in rows))
-        for index, column in enumerate(columns)
+        max(len(labels[index]), *(len(row[index]) for row in rows))
+        for index in range(len(columns))
     ]
-    lines = ['  '.join(column.ljust(widths[index]) for index, column in enumerate(columns))]
+    lines = ['  '.join(label.ljust(widths[index]) for index, label in enumerate(labels))]
     lines.append('  '.join('-' * width for width in widths))
     for row in rows:
         lines.append('  '.join(value.ljust(widths[index]) for index, value in enumerate(row)))
@@ -259,7 +270,7 @@ def main():
         parser.error(str(exc))
 
     print('\nDataset Summary')
-    print(render_table(records, SUMMARY_COLUMNS))
+    print(render_table(records, SUMMARY_COLUMNS, SUMMARY_HEADERS))
     print('\nUser History Length Distribution')
     print(render_table(records, HISTORY_COLUMNS))
 
