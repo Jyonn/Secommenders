@@ -168,6 +168,27 @@ class LLMSequenceEncoder(nn.Module):
                 return int(key_tensor.shape[-2])
         return None
 
+    @staticmethod
+    def reorder_cache(past_key_values, beam_indices: torch.Tensor):
+        """Select and duplicate legacy KV-cache rows for the next beam batch."""
+        if past_key_values is None or not isinstance(past_key_values, (list, tuple)):
+            return None
+        reordered_layers = []
+        for layer in past_key_values:
+            if not isinstance(layer, (list, tuple)):
+                return None
+            reordered_entries = []
+            for entry in layer:
+                if torch.is_tensor(entry):
+                    if entry.ndim == 0:
+                        reordered_entries.append(entry)
+                    else:
+                        reordered_entries.append(entry.index_select(0, beam_indices.to(entry.device)))
+                else:
+                    reordered_entries.append(entry)
+            reordered_layers.append(type(layer)(reordered_entries))
+        return type(past_key_values)(reordered_layers)
+
     def forward_with_cache(
             self,
             inputs_embeds: torch.Tensor,
