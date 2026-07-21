@@ -1,5 +1,7 @@
 import argparse
 import json
+import shlex
+import sys
 from pathlib import Path
 
 from utils.artifact_identity import normalize_legacy_train_config
@@ -7,7 +9,19 @@ from utils.artifact_identity import normalize_legacy_train_config
 
 ROOT = Path(__file__).resolve().parent
 
-RUNTIME_KEYS = {'root', 'json', 'all_seeds', 'limit', 'overwrite', 'load_ckpt', 'device'}
+RUNTIME_KEYS = {
+    'root',
+    'json',
+    'all_seeds',
+    'limit',
+    'interactive',
+    'no_interactive',
+    'results_only',
+    'show_common',
+    'overwrite',
+    'load_ckpt',
+    'device',
+}
 FILTER_KEYS = [
     'data',
     'model',
@@ -185,9 +199,10 @@ def row_from_meta(meta_path: Path, root: Path):
     raw_config = meta.get('config') if isinstance(meta.get('config'), dict) else {}
     config = normalize_legacy_train_config(raw_config) if raw_config else {}
     identity = meta.get('artifact_identity') if isinstance(meta.get('artifact_identity'), dict) else {}
-    metrics = meta.get('test_metrics') if isinstance(meta.get('test_metrics'), dict) else None
-    if metrics is None:
-        metrics = meta.get('valid_metrics') if isinstance(meta.get('valid_metrics'), dict) else {}
+    test_metrics = meta.get('test_metrics') if isinstance(meta.get('test_metrics'), dict) else None
+    valid_metrics = meta.get('valid_metrics') if isinstance(meta.get('valid_metrics'), dict) else None
+    metrics = test_metrics if test_metrics is not None else valid_metrics or {}
+    metric_source = 'test' if test_metrics is not None else 'valid' if valid_metrics is not None else '-'
     run_dir = meta_path.parent
     signature = identity.get('signature') or path_value(meta_path, 1)
     folder = identity.get('folder') or path_value(meta_path, 1)
@@ -204,6 +219,8 @@ def row_from_meta(meta_path: Path, root: Path):
         'phase': identity.get('phase') or run_phase_from_path(meta_path),
         'status': meta.get('status') or 'unknown',
         'checkpoint': 'yes' if (run_dir / 'best.pt').exists() else 'no',
+        'has_result': 'yes' if metrics else 'no',
+        'metric_source': metric_source,
         'signature': signature,
         'folder': folder,
         'best_epoch': meta.get('best_epoch'),
@@ -215,6 +232,7 @@ def row_from_meta(meta_path: Path, root: Path):
         'path': str(run_dir),
         'display_path': display_path,
         'config': config,
+        'metrics': metrics,
         'error': meta.get('error'),
     }
 
@@ -254,10 +272,109 @@ def fmt(value):
         return '-'
     if isinstance(value, float):
         return f'{value:.6g}'
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, (list, tuple)):
+        return ','.join(fmt(item) for item in value)
     return str(value)
 
 
-def print_table(rows: list[dict]):
+BASE_COLUMNS = [
+    ('#', '_row_id'),
+    ('data', 'data'),
+    ('model', 'model'),
+    ('repr', 'repr_type'),
+    ('task', 'task_type'),
+    ('seed', 'seed'),
+    ('phase', 'phase'),
+    ('status', 'status'),
+    ('result', 'has_result'),
+    ('src', 'metric_source'),
+    ('ckpt', 'checkpoint'),
+    ('best', 'best_valid'),
+    ('ndcg@10', 'ndcg@10'),
+    ('hr@10', 'hr@10'),
+    ('mrr', 'mrr'),
+    ('sig', 'signature'),
+    ('path', 'display_path'),
+]
+
+ALWAYS_SHOW_KEYS = {'_row_id', 'display_path'}
+
+
+def row_value(row: dict, key: str):
+    if key in row:
+        return row.get(key)
+    return (row.get('config') or {}).get(key)
+
+
+def common_values(rows: list[dict], keys: list[str]):
+    common = {}
+    for key in keys:
+        values = [normalize_for_compare(row_value(row, key)) for row in rows]
+        if values and all(value == values[0] for value in values):
+            common[key] = row_value(rows[0], key)
+    return common
+
+
+def display_columns(rows: list[dict], *, show_common: bool = False):
+    columns = list(BASE_COLUMNS)
+    if show_common or len(rows) <= 1:
+        return columns
+    common = common_values(rows, [key for _, key in columns if key not in ALWAYS_SHOW_KEYS])
+    return [(title, key) for title, key in columns if key in ALWAYS_SHOW_KEYS or key not in common]
+
+
+def _clip(value: str, width: int):
+    if len(value) <= width:
+        return value
+    return value[: max(0, width - 1)] + '…'
+
+
+def _print_common(rows: list[dict], columns: list[tuple[str, str]], *, show_common: bool):
+    if show_common or len(rows) <= 1:
+        return
+    hidden_keys = [key for _, key in BASE_COLUMNS if key not in {key for _, key in columns} and key not in ALWAYS_SHOW_KEYS]
+    common = common_values(rows, hidden_keys)
+    if not common:
+        return
+    parts = [f'{key}={fmt(value)}' for key, value in common.items() if fmt(value) != '-']
+    if not parts:
+        return
+    preview = ', '.join(parts[:10])
+    if len(parts) > 10:
+        preview += f', ... +{len(parts) - 10}'
+    print(f'common: {preview}')
+
+
+def print_table(rows: list[dict], *, show_common: bool = False):
+    columns = display_columns(rows, show_common=show_common)
+    for index, row in enumerate(rows, start=1):
+        row.setdefault('_row_id', index)
+    _print_common(rows, columns, show_common=show_common)
+    if not rows:
+        print('no runs found')
+        return
+    if not columns:
+        columns = [('#', '_row_id'), ('path', 'display_path')]
+    widths = {}
+    for title, key in columns:
+        values = [fmt(row_value(row, key)) for row in rows]
+        max_value_width = max([len(title), *(len(value) for value in values)], default=len(title))
+        widths[key] = min(max_value_width, 72 if key == 'display_path' else 18)
+
+    header = '  '.join(title.ljust(widths[key]) for title, key in columns)
+    print(header)
+    print('  '.join('-' * widths[key] for _, key in columns))
+    for row in rows:
+        cells = []
+        for _, key in columns:
+            value = _clip(fmt(row_value(row, key)), widths[key])
+            cells.append(value.ljust(widths[key]))
+        print('  '.join(cells))
+
+
+def print_legacy_table(rows: list[dict]):
     columns = [
         ('data', 'data'),
         ('model', 'model'),
@@ -292,7 +409,7 @@ def print_table(rows: list[dict]):
         print('  '.join(cells))
 
 
-def print_report(report: dict):
+def print_report(report: dict, *, show_common: bool = False):
     total_count = report.get('total_count', report['count'])
     if report['count'] == total_count:
         print(f'trained search matched {total_count} run(s)')
@@ -303,7 +420,228 @@ def print_report(report: dict):
     if not report['runs']:
         print('no runs found')
         return
-    print_table(report['runs'])
+    print_table(report['runs'], show_common=show_common)
+
+
+def has_result(row: dict):
+    return bool(row.get('metrics')) or row.get('has_result') == 'yes'
+
+
+def parse_id_list(text: str, max_id: int):
+    ids = []
+    for token in text.replace(',', ' ').split():
+        if '-' in token:
+            start_text, end_text = token.split('-', 1)
+            if not start_text.isdigit() or not end_text.isdigit():
+                raise ValueError(f'invalid id range: {token}')
+            start, end = int(start_text), int(end_text)
+            step = 1 if start <= end else -1
+            ids.extend(range(start, end + step, step))
+        else:
+            if not token.isdigit():
+                raise ValueError(f'invalid id: {token}')
+            ids.append(int(token))
+    bad = [item for item in ids if item < 1 or item > max_id]
+    if bad:
+        raise ValueError(f'id out of range: {bad[0]}')
+    deduped = []
+    seen = set()
+    for item in ids:
+        if item not in seen:
+            deduped.append(item)
+            seen.add(item)
+    return deduped
+
+
+def select_rows(rows: list[dict], spec: str):
+    ids = parse_id_list(spec, len(rows))
+    return [rows[index - 1] for index in ids]
+
+
+def filter_rows_by_expr(rows: list[dict], expr: str):
+    if '=' not in expr:
+        raise ValueError('filter expression must be key=value')
+    key, value = expr.split('=', 1)
+    key = key.strip()
+    expected = coerce_scalar(value.strip())
+    if not key:
+        raise ValueError('filter key is empty')
+    return [row for row in rows if values_match(row_value(row, key), expected)]
+
+
+def metric_keys(rows: list[dict]):
+    keys = set()
+    preferred = ['loss', 'ndcg@5', 'ndcg@10', 'ndcg@20', 'hr@5', 'hr@10', 'hr@20', 'mrr']
+    for row in rows:
+        metrics = row.get('metrics') if isinstance(row.get('metrics'), dict) else {}
+        keys.update(metrics)
+    return [key for key in preferred if key in keys] + sorted(keys - set(preferred))
+
+
+def config_keys(rows: list[dict]):
+    keys = set()
+    for row in rows:
+        keys.update((row.get('config') or {}).keys())
+    preferred = [key for key in FILTER_KEYS if key in keys]
+    return preferred + sorted(keys - set(preferred))
+
+
+def print_kv_table(pairs: list[tuple[str, object]], *, title: str | None = None):
+    if title:
+        print(title)
+    if not pairs:
+        print('  -')
+        return
+    width = min(max(len(key) for key, _ in pairs), 36)
+    for key, value in pairs:
+        print(f'  {key.ljust(width)} : {fmt(value)}')
+
+
+def print_single_detail(row: dict):
+    print(f'run #{row.get("_row_id", "-")} {row.get("display_path")}')
+    meta_pairs = [
+        ('status', row.get('status')),
+        ('result', row.get('has_result')),
+        ('metric_source', row.get('metric_source')),
+        ('checkpoint', row.get('checkpoint')),
+        ('signature', row.get('signature')),
+        ('folder', row.get('folder')),
+        ('best_epoch', row.get('best_epoch')),
+        ('best_valid', row.get('best_valid')),
+        ('main_metric', row.get('main_metric')),
+        ('path', row.get('path')),
+    ]
+    print_kv_table(meta_pairs, title='meta')
+    print_kv_table(list((row.get('metrics') or {}).items()), title='metrics')
+    config = row.get('config') or {}
+    print_kv_table([(key, config.get(key)) for key in config_keys([row])], title='config')
+    if row.get('error'):
+        print('error:')
+        print(row['error'])
+
+
+def print_comparison(rows: list[dict], *, show_common: bool = False):
+    if len(rows) == 1:
+        print_single_detail(rows[0])
+        return
+    labels = [f'#{row.get("_row_id", index + 1)}' for index, row in enumerate(rows)]
+    fields = [
+        ('data', lambda row: row.get('data')),
+        ('model', lambda row: row.get('model')),
+        ('repr_type', lambda row: row.get('repr_type')),
+        ('task_type', lambda row: row.get('task_type')),
+        ('seed', lambda row: row.get('seed')),
+        ('phase', lambda row: row.get('phase')),
+        ('status', lambda row: row.get('status')),
+        ('result', lambda row: row.get('has_result')),
+        ('signature', lambda row: row.get('signature')),
+        ('best_epoch', lambda row: row.get('best_epoch')),
+        ('best_valid', lambda row: row.get('best_valid')),
+    ]
+    fields.extend((f'metric.{key}', lambda row, key=key: (row.get('metrics') or {}).get(key)) for key in metric_keys(rows))
+    for key in config_keys(rows):
+        fields.append((f'config.{key}', lambda row, key=key: (row.get('config') or {}).get(key)))
+    if not show_common:
+        fields = [
+            (name, getter) for name, getter in fields
+            if len({json.dumps(normalize_for_compare(getter(row)), sort_keys=True) for row in rows}) > 1
+        ]
+    if not fields:
+        print('selected runs have no differing displayed fields')
+        return
+    first_width = min(max(len(name) for name, _ in fields), 34)
+    value_widths = []
+    for row_index, _ in enumerate(rows):
+        values = [fmt(getter(rows[row_index])) for _, getter in fields]
+        value_widths.append(min(max([len(labels[row_index]), *(len(value) for value in values)]), 28))
+    header = 'field'.ljust(first_width) + '  ' + '  '.join(label.ljust(value_widths[index]) for index, label in enumerate(labels))
+    print(header)
+    print('-' * len(header))
+    for name, getter in fields:
+        values = [_clip(fmt(getter(row)), value_widths[index]) for index, row in enumerate(rows)]
+        print(name.ljust(first_width) + '  ' + '  '.join(value.ljust(value_widths[index]) for index, value in enumerate(values)))
+
+
+def print_help():
+    print(
+        '\n'.join(
+            [
+                'commands:',
+                '  <ids>                 compare runs, e.g. 1 or 1,2,5 or 3-8',
+                '  keep <ids>            narrow current table to selected run numbers',
+                '  where key=value       filter current table by row/config field',
+                '  results               show only runs with valid/test metrics',
+                '  all                   restore original matched runs',
+                '  common                toggle hidden common columns',
+                '  table                 redraw current table',
+                '  help                  show this help',
+                '  quit                  exit',
+            ]
+        )
+    )
+
+
+def interactive_loop(report: dict, *, show_common: bool = False, results_only: bool = False):
+    original = list(report['runs'])
+    rows = [row for row in original if has_result(row)] if results_only else list(original)
+    common = show_common
+
+    def redraw():
+        for index, row in enumerate(rows, start=1):
+            row['_row_id'] = index
+        print(f'\nshowing {len(rows)} / {len(original)} matched run(s)')
+        print_table(rows, show_common=common)
+
+    redraw()
+    print('type help for commands; type run numbers such as "1,2" to compare')
+    while True:
+        try:
+            command = input('searcher> ').strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not command:
+            continue
+        lower = command.lower()
+        try:
+            if lower in {'q', 'quit', 'exit'}:
+                return
+            if lower in {'h', 'help', '?'}:
+                print_help()
+                continue
+            if lower in {'t', 'table', 'ls'}:
+                redraw()
+                continue
+            if lower in {'common', 'toggle common'}:
+                common = not common
+                redraw()
+                continue
+            if lower in {'results', 'result', 'has-result'}:
+                rows = [row for row in rows if has_result(row)]
+                redraw()
+                continue
+            if lower in {'all', 'reset'}:
+                rows = list(original)
+                redraw()
+                continue
+            if lower.startswith('keep '):
+                rows = select_rows(rows, command.split(maxsplit=1)[1])
+                redraw()
+                continue
+            if lower.startswith('where '):
+                rows = filter_rows_by_expr(rows, command.split(maxsplit=1)[1])
+                redraw()
+                continue
+            if lower.startswith('compare '):
+                print_comparison(select_rows(rows, command.split(maxsplit=1)[1]), show_common=common)
+                continue
+            tokens = shlex.split(command)
+            if tokens and all(token.replace(',', '').replace('-', '').isdigit() for token in tokens):
+                print_comparison(select_rows(rows, command), show_common=common)
+                continue
+            print('unknown command; type help')
+        except ValueError as exc:
+            print(f'error: {exc}')
 
 
 def main():
@@ -359,17 +697,39 @@ def main():
     parser.add_argument('--all-seeds', action='store_true', help='Deprecated no-op; omitted seed already matches all seeds.')
     parser.add_argument('--limit', type=int, default=None)
     parser.add_argument('--json', action='store_true', help='Print machine-readable JSON.')
+    parser.add_argument('--interactive', action='store_true', help='Open an interactive search/refine prompt after matching runs.')
+    parser.add_argument('--no-interactive', action='store_true', help='Print once and exit even when running in a terminal.')
+    parser.add_argument('--results-only', action='store_true', help='Only show runs that contain valid/test metrics.')
+    parser.add_argument('--show-common', action='store_true', help='Do not hide columns whose values are common to all displayed runs.')
     args = parser.parse_args()
 
     filters = cli_filters(args)
     try:
-        report = search(Path(args.root), filters, all_seeds=args.all_seeds, limit=args.limit)
+        report = search(
+            Path(args.root),
+            filters,
+            all_seeds=args.all_seeds,
+            limit=None if args.results_only else args.limit,
+        )
     except ValueError as exc:
         parser.error(str(exc))
+    if args.results_only:
+        result_runs = [row for row in report['runs'] if has_result(row)]
+        report['total_count'] = len(result_runs)
+        report['runs'] = result_runs[:args.limit] if args.limit is not None else result_runs
+        report['count'] = len(report['runs'])
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
         return
-    print_report(report)
+    wants_interactive = args.interactive or (
+        not args.no_interactive
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    )
+    if wants_interactive:
+        interactive_loop(report, show_common=args.show_common, results_only=False)
+    else:
+        print_report(report, show_common=args.show_common)
 
 
 if __name__ == '__main__':
