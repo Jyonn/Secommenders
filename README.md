@@ -240,7 +240,7 @@ Each experiment can be written in either of two forms:
 The current scheduler uses these rules:
 
 - `batch_size * accumulate_batch = 64`
-- `code_beam_chunk_size = batch_size`
+- `code_beam_chunk_size = max(batch_size, 4 * code_beam_width)` when left at `0`; this bounds active KV-cache beams and normally batches four samples together
 - initial batch size cap by model name:
   - `scratch -> 64`
   - `qwen35th08b -> 32`

@@ -141,13 +141,15 @@ class Trainer:
         elif self.config.task_type == 'sid':
             sid_decoding = self.model_core._sid_decoding_mode()
             kv_cache_supported = self.model_core._sid_kv_cache_supported()
+            kv_sample_chunk = max(1, self.config.code_beam_chunk_size // max(1, self.config.code_beam_width))
             self._pnt(
                 f'sid decoding={sid_decoding} '
                 + (
                     f'beam_width={self.config.code_beam_width} '
                     f'beam_chunk_size={self.config.code_beam_chunk_size} '
                     f'kv_cache={kv_cache_supported} '
-                    f'kv_beam_batching={"per-sample" if kv_cache_supported else "disabled"} '
+                    f'kv_beam_batching={"micro-batch" if kv_cache_supported else "disabled"} '
+                    f'kv_sample_chunk={kv_sample_chunk} '
                     f'ks={self.model_core.sid_ranking_ks()}'
                     if sid_decoding == 'sequential'
                     else f'item_scoring ks={self.model_core.sid_ranking_ks()}'
@@ -186,13 +188,15 @@ class Trainer:
         elif self.config.task_type == 'sid':
             sid_decoding = self.model_core._sid_decoding_mode()
             kv_cache_supported = self.model_core._sid_kv_cache_supported()
+            kv_sample_chunk = max(1, self.config.code_beam_chunk_size // max(1, self.config.code_beam_width))
             self._pnt(
                 f'sid decoding={sid_decoding} '
                 + (
                     f'beam_width={self.config.code_beam_width} '
                     f'beam_chunk_size={self.config.code_beam_chunk_size} '
                     f'kv_cache={kv_cache_supported} '
-                    f'kv_beam_batching={"per-sample" if kv_cache_supported else "disabled"} '
+                    f'kv_beam_batching={"micro-batch" if kv_cache_supported else "disabled"} '
+                    f'kv_sample_chunk={kv_sample_chunk} '
                     f'ks={self.model_core.sid_ranking_ks()}'
                     if sid_decoding == 'sequential'
                     else f'item_scoring ks={self.model_core.sid_ranking_ks()}'

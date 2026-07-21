@@ -208,6 +208,12 @@ class TrainConfig:
             raise ValueError('trainer.uid_cluster_levels is required when uid_decoding=hierarchical')
         if uid_decoding == 'hierarchical' and not uid_cluster_topk:
             raise ValueError('trainer.uid_cluster_topk is required when uid_decoding=hierarchical')
+        code_beam_width = int(_get(decoder_sid, 'beam_width', getattr(trainer, 'code_beam_width', 20)))
+        code_beam_chunk_size = int(
+            _get(decoder_sid, 'beam_chunk_size', getattr(trainer, 'code_beam_chunk_size', 0))
+        )
+        if code_beam_chunk_size <= 0:
+            code_beam_chunk_size = max(int(trainer.batch_size), code_beam_width * 4)
         return cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
@@ -242,8 +248,8 @@ class TrainConfig:
             metrics=metrics,
             patience=int(evaluator.patience),
             alignment_weight=float(getattr(trainer, 'alignment', 0)),
-            code_beam_width=int(_get(decoder_sid, 'beam_width', getattr(trainer, 'code_beam_width', 20))),
-            code_beam_chunk_size=int(_get(decoder_sid, 'beam_chunk_size', getattr(trainer, 'code_beam_chunk_size', 0))) or int(trainer.batch_size),
+            code_beam_width=code_beam_width,
+            code_beam_chunk_size=code_beam_chunk_size,
             code_collision_loss_weight=float(
                 _get(decoder_sid, 'collision_loss_weight', getattr(trainer, 'code_collision_loss_weight', 0.1))
             ),

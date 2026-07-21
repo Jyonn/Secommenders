@@ -463,7 +463,13 @@ class SequentialRecModel(nn.Module):
         pooled = hidden[0, lengths[0] - 1]
         return self._sid_logits(pooled).squeeze(0), past_key_values
 
-    def _sid_append_cached_tokens(self, past_key_values, codes: list[int]):
+    def _sid_append_cached_tokens(
+            self,
+            past_key_values,
+            codes: list[int],
+            attention_mask: torch.Tensor | None = None,
+            position_ids: torch.Tensor | None = None,
+    ):
         past_length = self.encoder.cache_seq_length(past_key_values)
         if past_length is None:
             return None
@@ -474,8 +480,10 @@ class SequentialRecModel(nn.Module):
             dim=0,
         )
         batch_size = len(codes)
-        attention_mask = torch.ones((batch_size, past_length + 1), dtype=torch.long, device=self.device)
-        position_ids = torch.full((batch_size, 1), past_length, dtype=torch.long, device=self.device)
+        if attention_mask is None:
+            attention_mask = torch.ones((batch_size, past_length + 1), dtype=torch.long, device=self.device)
+        if position_ids is None:
+            position_ids = torch.full((batch_size, 1), past_length, dtype=torch.long, device=self.device)
         hidden, next_past = self.encoder.forward_with_cache(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
@@ -492,6 +500,30 @@ class SequentialRecModel(nn.Module):
             return None
         logits, next_past = result
         return logits.squeeze(0), next_past
+
+    def _sid_base_batch_logits_and_cache(self, batch):
+        input_items = [(sample, []) for sample in batch]
+        right_padded, _, lengths = self._build_sid_generation_mixed_batch_inputs(input_items)
+        inputs_embeds = torch.zeros_like(right_padded)
+        attention_mask = torch.zeros(
+            right_padded.shape[:2],
+            dtype=torch.long,
+            device=self.device,
+        )
+        for row_index, length in enumerate(lengths.tolist()):
+            inputs_embeds[row_index, -length:] = right_padded[row_index, :length]
+            attention_mask[row_index, -length:] = 1
+        position_ids = attention_mask.cumsum(dim=1) - 1
+        position_ids.masked_fill_(attention_mask == 0, 0)
+        hidden, past_key_values = self.encoder.forward_with_cache(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+        )
+        if past_key_values is None:
+            return None
+        pooled = hidden[:, -1, :]
+        return self._sid_logits(pooled), past_key_values, attention_mask, lengths
 
     def _pick_sid_item(self, sid_sequence: tuple[int, ...]):
         candidates = self.compiled.sid_sequence_to_items.get(sid_sequence, [])
@@ -602,6 +634,96 @@ class SequentialRecModel(nn.Module):
 
         return list(zip(prefixes, scores))
 
+    def _beam_search_sid_items_batch_with_kv_cache(self, batch):
+        if not batch or not self._sid_kv_cache_supported():
+            return None
+        try:
+            base_result = self._sid_base_batch_logits_and_cache(batch)
+        except TypeError:
+            return None
+        if base_result is None:
+            return None
+        batched_logits, batched_past, batched_attention_mask, batched_lengths = base_result
+
+        beam_width = max(1, int(self.config.code_beam_width))
+        num_quantizers = int(self.compiled.sid_num_quantizers)
+        beams_by_sample = [[(tuple(), 0.0, sample_index)] for sample_index in range(len(batch))]
+
+        for slot_index in range(num_quantizers):
+            batched_log_probs = F.log_softmax(batched_logits.float(), dim=-1)
+            candidates_by_sample = []
+            for beams in beams_by_sample:
+                candidates = []
+                for prefix, score, cache_row in beams:
+                    allowed_codes = self.compiled.sid_prefix_to_next.get(prefix, [])
+                    if not allowed_codes:
+                        continue
+                    allowed_indices = torch.tensor(allowed_codes, dtype=torch.long, device=self.device)
+                    allowed_scores = batched_log_probs[cache_row].index_select(0, allowed_indices)
+                    top_k = min(beam_width, allowed_scores.shape[0])
+                    top_scores, top_positions = torch.topk(allowed_scores, k=top_k)
+                    for top_position, top_score in zip(top_positions.tolist(), top_scores.tolist()):
+                        next_code = int(allowed_codes[top_position])
+                        candidates.append(
+                            (prefix + (next_code,), score + float(top_score), cache_row, next_code)
+                        )
+                candidates.sort(key=lambda item: item[1], reverse=True)
+                candidates_by_sample.append(candidates[:beam_width])
+
+            if not any(candidates_by_sample):
+                break
+            if slot_index == num_quantizers - 1:
+                return [
+                    [(prefix, score) for prefix, score, _, _ in candidates]
+                    for candidates in candidates_by_sample
+                ]
+
+            selected = [candidate for candidates in candidates_by_sample for candidate in candidates]
+            parent_indices = torch.tensor(
+                [cache_row for _, _, cache_row, _ in selected],
+                dtype=torch.long,
+                device=self.device,
+            )
+            selected_past = self.encoder.reorder_cache(batched_past, parent_indices)
+            if selected_past is None:
+                return None
+            parent_attention_mask = batched_attention_mask.index_select(0, parent_indices)
+            next_attention_mask = torch.cat(
+                [
+                    parent_attention_mask,
+                    torch.ones((len(selected), 1), dtype=torch.long, device=self.device),
+                ],
+                dim=1,
+            )
+            parent_lengths = batched_lengths.index_select(0, parent_indices)
+            next_position_ids = parent_lengths.unsqueeze(1)
+            try:
+                next_result = self._sid_append_cached_tokens(
+                    selected_past,
+                    [next_code for _, _, _, next_code in selected],
+                    attention_mask=next_attention_mask,
+                    position_ids=next_position_ids,
+                )
+            except (TypeError, ValueError):
+                return None
+            if next_result is None:
+                return None
+            batched_logits, batched_past = next_result
+            batched_attention_mask = next_attention_mask
+            batched_lengths = parent_lengths + 1
+
+            next_beams_by_sample = []
+            cache_row = 0
+            for candidates in candidates_by_sample:
+                next_beams = []
+                for prefix, score, _, _ in candidates:
+                    next_beams.append((prefix, score, cache_row))
+                    cache_row += 1
+                next_beams_by_sample.append(next_beams)
+            beams_by_sample = next_beams_by_sample
+
+        return [[(prefix, score) for prefix, score, _ in beams] for beams in beams_by_sample]
+
     def _beam_search_sid_items_batch(self, batch):
         beam_width = max(1, int(self.config.code_beam_width))
         chunk_size = max(1, int(getattr(self.config, 'code_beam_chunk_size', self.config.batch_size)))
@@ -663,24 +785,27 @@ class SequentialRecModel(nn.Module):
         ks = self.ranking_ks()
         totals = self._init_ranking_totals(ks)
         totals['beam_unique_items'] = 0.0
+        totals['kv_cache_used'] = 0.0
 
         with torch.inference_mode():
-            beams_by_sample = None
-            if self._sid_kv_cache_supported():
-                beams_by_sample = []
-                for sample in batch:
-                    beams = self._beam_search_sid_items_with_kv_cache(sample)
-                    if beams is None:
-                        beams_by_sample = None
-                        break
-                    beams_by_sample.append(beams)
-            if beams_by_sample is None:
-                beams_by_sample = self._beam_search_sid_items_batch(batch)
-            for sample, beams in zip(batch, beams_by_sample):
-                ranked_items = self._decode_sid_beams_to_items(beams)
-                ranked_uids = [uid for uid, _, _ in ranked_items]
-                totals['beam_unique_items'] += float(len(ranked_uids))
-                self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
+            beam_width = max(1, int(self.config.code_beam_width))
+            active_beam_limit = max(
+                beam_width,
+                int(getattr(self.config, 'code_beam_chunk_size', self.config.batch_size)),
+            )
+            sample_chunk_size = max(1, active_beam_limit // beam_width)
+            for start in range(0, len(batch), sample_chunk_size):
+                sample_chunk = batch[start:start + sample_chunk_size]
+                beams_by_sample = self._beam_search_sid_items_batch_with_kv_cache(sample_chunk)
+                used_kv_cache = beams_by_sample is not None
+                if beams_by_sample is None:
+                    beams_by_sample = self._beam_search_sid_items_batch(sample_chunk)
+                for sample, beams in zip(sample_chunk, beams_by_sample):
+                    ranked_items = self._decode_sid_beams_to_items(beams)
+                    ranked_uids = [uid for uid, _, _ in ranked_items]
+                    totals['beam_unique_items'] += float(len(ranked_uids))
+                    totals['kv_cache_used'] += float(used_kv_cache)
+                    self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
 
         batch_size = max(len(batch), 1)
         return {key: value / batch_size for key, value in totals.items()}

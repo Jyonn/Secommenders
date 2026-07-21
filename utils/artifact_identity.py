@@ -1399,7 +1399,8 @@ def migrate_train_config_dict(raw_config: dict[str, Any]):
     if config.get('model_max_length') in (0, '0', ''):
         config['model_max_length'] = None
     if config.get('code_beam_chunk_size') in (None, 0, '0', ''):
-        config['code_beam_chunk_size'] = int(config['batch_size'])
+        beam_width = max(1, int(config.get('code_beam_width') or 20))
+        config['code_beam_chunk_size'] = max(int(config['batch_size']), beam_width * 4)
     if isinstance(config.get('metrics'), str):
         config['metrics'] = [part.strip().lower() for part in config['metrics'].split(',') if part.strip()]
     if isinstance(config.get('valid_only'), bool):
