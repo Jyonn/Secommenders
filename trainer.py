@@ -346,6 +346,10 @@ class Trainer:
                     if key.startswith('sid_time_') and key.endswith('_ms')
                 ]
                 self._pnt(f'{desc} batch={batch_index + 1} SID decoding timing: ' + ' '.join(timing_parts))
+                self._pnt(
+                    f'{desc} batch={batch_index + 1} SID KV-cache diagnostic: '
+                    f'{metrics.get("sid_kv_diagnostic", "missing")}'
+                )
 
             iterator.set_postfix(self._progress_postfix(is_train=is_train, raw_loss=raw_loss, metrics=metrics))
 

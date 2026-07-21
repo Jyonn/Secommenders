@@ -210,8 +210,14 @@ class LLMSequenceEncoder(nn.Module):
         with torch.set_grad_enabled(not use_no_grad):
             outputs = self.model(**model_kwargs)
         past_key_values = getattr(outputs, 'past_key_values', None)
+        raw_cache_type = type(past_key_values).__name__ if past_key_values is not None else 'None'
+        converted_to_legacy = hasattr(past_key_values, 'to_legacy_cache')
         if hasattr(past_key_values, 'to_legacy_cache'):
             past_key_values = past_key_values.to_legacy_cache()
+        self.last_cache_diagnostic = (
+            f'raw={raw_cache_type} converted_to_legacy={converted_to_legacy} '
+            f'returned={type(past_key_values).__name__ if past_key_values is not None else "None"}'
+        )
         return outputs.last_hidden_state, past_key_values
 
 

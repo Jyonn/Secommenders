@@ -517,6 +517,41 @@ class SequentialRecModel(nn.Module):
         if timings is not None:
             timings[key] = timings.get(key, 0.0) + elapsed
 
+    @staticmethod
+    def _sid_cache_summary(past_key_values):
+        if past_key_values is None:
+            return 'cache=None'
+        cache_type = f'{type(past_key_values).__module__}.{type(past_key_values).__name__}'
+        details = [f'cache_type={cache_type}']
+        for method_name in ('to_legacy_cache', 'batch_select_indices', 'reorder_cache', 'get_seq_length'):
+            details.append(f'{method_name}={hasattr(past_key_values, method_name)}')
+        if isinstance(past_key_values, (list, tuple)):
+            details.append(f'layers={len(past_key_values)}')
+            if past_key_values:
+                first_layer = past_key_values[0]
+                details.append(f'first_layer_type={type(first_layer).__name__}')
+                if isinstance(first_layer, (list, tuple)):
+                    entry_shapes = [
+                        str(tuple(entry.shape)) if torch.is_tensor(entry) else type(entry).__name__
+                        for entry in first_layer
+                    ]
+                    details.append(f'first_layer_entries={entry_shapes}')
+        return ' '.join(details)
+
+    def _sid_record_kv_diagnostic(self, reason: str, past_key_values=None, exception=None):
+        diagnostics = getattr(self, '_sid_kv_diagnostics', None)
+        if diagnostics is None:
+            return
+        parts = [f'reason={reason}', self._sid_cache_summary(past_key_values)]
+        encoder_diagnostic = getattr(self.encoder, 'last_cache_diagnostic', None)
+        if encoder_diagnostic:
+            parts.append(f'encoder_cache={encoder_diagnostic}')
+        if exception is not None:
+            parts.append(f'exception={type(exception).__name__}:{exception}')
+        diagnostic = ' '.join(parts)
+        if diagnostic not in diagnostics and len(diagnostics) < 8:
+            diagnostics.append(diagnostic)
+
     def _sid_base_batch_logits_and_cache(self, batch):
         build_started = self._sid_timing_now()
         input_items = [(sample, []) for sample in batch]
@@ -656,12 +691,15 @@ class SequentialRecModel(nn.Module):
 
     def _beam_search_sid_items_batch_with_kv_cache(self, batch):
         if not batch or not self._sid_kv_cache_supported():
+            self._sid_record_kv_diagnostic('unsupported_or_empty')
             return None
         try:
             base_result = self._sid_base_batch_logits_and_cache(batch)
-        except TypeError:
+        except TypeError as exc:
+            self._sid_record_kv_diagnostic('base_forward_type_error', exception=exc)
             return None
         if base_result is None:
+            self._sid_record_kv_diagnostic('base_forward_no_cache')
             return None
         batched_logits, batched_past, batched_attention_mask, batched_lengths = base_result
 
@@ -695,6 +733,7 @@ class SequentialRecModel(nn.Module):
             if not any(candidates_by_sample):
                 break
             if slot_index == num_quantizers - 1:
+                self._sid_record_kv_diagnostic('success', batched_past)
                 return [
                     [(prefix, score) for prefix, score, _, _ in candidates]
                     for candidates in candidates_by_sample
@@ -709,6 +748,7 @@ class SequentialRecModel(nn.Module):
             )
             selected_past = self.encoder.reorder_cache(batched_past, parent_indices)
             if selected_past is None:
+                self._sid_record_kv_diagnostic(f'slot_{slot_index}_reorder_returned_none', batched_past)
                 return None
             parent_attention_mask = batched_attention_mask.index_select(0, parent_indices)
             next_attention_mask = torch.cat(
@@ -729,9 +769,15 @@ class SequentialRecModel(nn.Module):
                     attention_mask=next_attention_mask,
                     position_ids=next_position_ids,
                 )
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as exc:
+                self._sid_record_kv_diagnostic(
+                    f'slot_{slot_index}_append_exception',
+                    selected_past,
+                    exception=exc,
+                )
                 return None
             if next_result is None:
+                self._sid_record_kv_diagnostic(f'slot_{slot_index}_append_returned_none', selected_past)
                 return None
             self._sid_timing_add(f'slot_{slot_index}_forward', forward_started)
             batched_logits, batched_past = next_result
@@ -748,6 +794,7 @@ class SequentialRecModel(nn.Module):
                 next_beams_by_sample.append(next_beams)
             beams_by_sample = next_beams_by_sample
 
+        self._sid_record_kv_diagnostic('success', batched_past)
         return [[(prefix, score) for prefix, score, _ in beams] for beams in beams_by_sample]
 
     def _beam_search_sid_items_batch(self, batch):
@@ -811,6 +858,7 @@ class SequentialRecModel(nn.Module):
         profile_enabled = bool(getattr(self, 'sid_decoding_timing_enabled', False))
         if profile_enabled:
             self._sid_decoding_timings = {}
+            self._sid_kv_diagnostics = []
         decoding_started = self._sid_timing_now()
         ks = self.ranking_ks()
         totals = self._init_ranking_totals(ks)
@@ -846,6 +894,7 @@ class SequentialRecModel(nn.Module):
         self._sid_timing_add('decoding_total', decoding_started)
         if profile_enabled:
             result.update({f'sid_time_{key}_ms': value * 1000.0 for key, value in self._sid_decoding_timings.items()})
+            result['sid_kv_diagnostic'] = ' | '.join(self._sid_kv_diagnostics) or 'no KV-cache diagnostic recorded'
         return result
 
     def _compute_sid_loss(self, batch):
