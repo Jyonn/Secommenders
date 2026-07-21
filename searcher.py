@@ -18,6 +18,7 @@ RUNTIME_KEYS = {
     'no_interactive',
     'results_only',
     'show_common',
+    'include_precheck',
     'overwrite',
     'load_ckpt',
     'device',
@@ -250,10 +251,12 @@ def matches_filters(row: dict, filters: dict):
     return True
 
 
-def search(root: Path, filters: dict, *, all_seeds: bool, limit: int | None):
+def search(root: Path, filters: dict, *, all_seeds: bool, limit: int | None, include_precheck: bool = False):
     root = root.resolve()
     rows = [row_from_meta(path, root) for path in iter_meta_paths(root, data=filters.get('data'))]
     rows = [row for row in rows if matches_filters(row, filters)]
+    if not include_precheck:
+        rows = [row for row in rows if str(row.get('phase') or '').lower() != 'precheck']
     rows.sort(key=lambda row: (str(row.get('data')), str(row.get('model')), str(row.get('signature')), str(row.get('seed'))))
     total_count = len(rows)
 
@@ -271,7 +274,7 @@ def fmt(value):
     if value is None or value == '':
         return '-'
     if isinstance(value, float):
-        return f'{value:.6g}'
+        return f'{value:.4f}'
     if isinstance(value, bool):
         return 'true' if value else 'false'
     if isinstance(value, (list, tuple)):
@@ -701,6 +704,7 @@ def main():
     parser.add_argument('--no-interactive', action='store_true', help='Print once and exit even when running in a terminal.')
     parser.add_argument('--results-only', action='store_true', help='Only show runs that contain valid/test metrics.')
     parser.add_argument('--show-common', action='store_true', help='Do not hide columns whose values are common to all displayed runs.')
+    parser.add_argument('--include-precheck', action='store_true', help='Include precheck phase runs; hidden by default.')
     args = parser.parse_args()
 
     filters = cli_filters(args)
@@ -710,6 +714,7 @@ def main():
             filters,
             all_seeds=args.all_seeds,
             limit=None if args.results_only else args.limit,
+            include_precheck=args.include_precheck,
         )
     except ValueError as exc:
         parser.error(str(exc))
