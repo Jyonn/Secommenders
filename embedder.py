@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from utils import get_data_dir, load_embedder, load_processor
 from utils.artifact import ArtifactStore
+from utils.artifact_run import ArtifactRunCoordinator
 from utils.gpu import GPU
 from utils.logging import setup_logging
 
@@ -27,17 +28,23 @@ class Embedder:
         self.processor.load()
         self.items_path = Path(self.processor.store_dir) / 'items.parquet'
 
-        self.caller = load_embedder(
-            self.model_name,
-            device=self.device,
-            batch_size=self.conf.batch_size,
-        ).post_init()
+        self.caller = None
 
         self.embedding_dir = ArtifactStore(self.data).embedded_dir(self.model_name)
 
         self.embedding_path = self.embedding_dir / 'embeddings.npy'
         self.item_ids_path = self.embedding_dir / 'item_ids.parquet'
         self.meta_path = self.embedding_dir / 'meta.json'
+        self.run_state = None
+
+    def _ensure_caller(self):
+        if self.caller is None:
+            self.caller = load_embedder(
+                self.model_name,
+                device=self.device,
+                batch_size=self.conf.batch_size,
+            ).post_init()
+        return self.caller
 
     def get_contents(self):
         contents = []
@@ -56,6 +63,7 @@ class Embedder:
             'content_attrs': list(self.processor.default_attrs),
             'processed_items_path': str(self.items_path),
             'normalize': bool(self.conf.normalize),
+            'status': 'completed',
         }
         if hasattr(self.caller, 'embed_items'):
             meta['source'] = 'recif-pretrain-parquet'
@@ -74,6 +82,7 @@ class Embedder:
             'content_attrs': list(self.processor.default_attrs),
             'processed_items_path': str(self.items_path),
             'normalize': bool(self.conf.normalize),
+            'status': 'completed',
             'reuse_mode': 'scale-subset',
             'source_dataset': source_dataset,
             'source_embedding_dir': str(source_dir),
@@ -219,20 +228,54 @@ class Embedder:
         return False
 
     def embed(self):
-        if self.is_cached() and not self.conf.overwrite:
-            pnt(f'cached embeddings found at {self.embedding_path}')
+        cache_was_ready = self.is_cached()
+        self.run_state = ArtifactRunCoordinator(
+            self.embedding_dir,
+            kind='embedder',
+            identity=f'{self.data}/{self.model_name}',
+        )
+        if not self.run_state.acquire_or_wait(self.is_cached, force_producer=bool(self.conf.overwrite)):
+            if cache_was_ready and not self.conf.overwrite:
+                pnt(f'cached embeddings found at {self.embedding_path}')
+            else:
+                pnt(f'using embeddings prepared by another process at {self.embedding_path}')
             return
+
+        try:
+            self._embed_as_owner()
+            if not self.is_cached():
+                raise RuntimeError(f'embedder finished without a valid cache at {self.embedding_dir}')
+            self.run_state.finish(message=f'embeddings ready at {self.embedding_path}')
+        except BaseException as exc:
+            self.run_state.fail(exc)
+            raise
+
+    def _embed_as_owner(self):
+        self.run_state.update(stage='initializing-model', message=f'loading {self.model_name}')
+        self._ensure_caller()
 
         if self.try_reuse_larger_scale_embeddings():
             return
 
         if hasattr(self.caller, 'embed_items'):
+            self.run_state.update(
+                stage='loading-precomputed',
+                current=0,
+                total=len(self.processor.items),
+                message='loading provided item embeddings',
+            )
             pnt(f'loading RecIF provided embeddings for {self.data}/{self.model_name}')
             item_ids = self.processor.items[self.processor.IID_COL].tolist()
             embeddings = self.caller.embed_items(item_ids, data_dir=self.data_dir, normalize=self.conf.normalize)
             np.save(self.embedding_path, embeddings)
             self.processor.items[[self.processor.IID_COL]].to_parquet(self.item_ids_path, index=False)
             self.save_meta(embeddings)
+            self.run_state.update(
+                stage='saving',
+                current=len(item_ids),
+                total=len(item_ids),
+                message='precomputed embeddings saved',
+            )
             pnt(f'embeddings saved to {self.embedding_path}')
             return
 
@@ -243,10 +286,17 @@ class Embedder:
         num_batches = (total + self.caller.batch_size - 1) // self.caller.batch_size
         pnt(f'encoding {total} items on {self.data} with {self.model_name}')
 
-        for batch in tqdm(self.caller.iter_batches(contents), total=num_batches):
+        for batch_index, batch in enumerate(tqdm(self.caller.iter_batches(contents), total=num_batches), start=1):
             batch_embeddings = self.caller.encode(batch, normalize=self.conf.normalize)
             embeddings.append(batch_embeddings)
+            self.run_state.update(
+                stage='encoding',
+                current=batch_index,
+                total=num_batches,
+                message=f'encoded batch {batch_index}/{num_batches}',
+            )
 
+        self.run_state.update(stage='saving', message='writing embedding artifacts')
         embeddings = np.concatenate(embeddings, axis=0).astype(np.float32)
         np.save(self.embedding_path, embeddings)
         self.processor.items[[self.processor.IID_COL]].to_parquet(self.item_ids_path, index=False)

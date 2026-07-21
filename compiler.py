@@ -641,6 +641,8 @@ class Compiler:
             item_ids_path = path / 'item_ids.parquet'
             return meta_path.exists() and codes_path.exists() and item_ids_path.exists()
 
+        if quantizer_name != 'basic-rqvae':
+            ensure_quantized(self.config.data, model_name, quantizer_name, upstream)
         export_ready = _export_ready(export_dir)
         if not export_ready:
             if quantizer_name == 'basic-rqvae':
@@ -649,8 +651,6 @@ class Compiler:
                     f'Expected: {export_dir}. '
                     f'Please run `python basic_rqvae_quantizer.py --data {self.config.data} --model {model_name}` first.'
                 )
-            ensure_quantized(self.config.data, model_name, quantizer_name, upstream)
-            export_ready = _export_ready(export_dir)
         if not export_ready:
             raise FileNotFoundError(
                 'Quantized export not found after auto preparation. '
@@ -697,10 +697,8 @@ class Compiler:
             item_ids_path = path / 'item_ids.parquet'
             return meta_path.exists() and bits_path.exists() and item_ids_path.exists()
 
+        ensure_quantized(self.config.data, model_name, quantizer_name, upstream)
         export_ready = _export_ready(export_dir)
-        if not export_ready:
-            ensure_quantized(self.config.data, model_name, quantizer_name, upstream)
-            export_ready = _export_ready(export_dir)
         if not export_ready:
             raise FileNotFoundError(
                 'Hash export not found after auto preparation. '
@@ -907,8 +905,7 @@ class Compiler:
         model_name = normalize_model_name(self.config.repr_source_model)
         embedding_dir = self.store.embedded_dir(model_name)
         item_ids_path = embedding_dir / 'item_ids.parquet'
-        if not item_ids_path.exists():
-            ensure_embedded(self.config.data, model_name)
+        ensure_embedded(self.config.data, model_name)
         if not item_ids_path.exists():
             raise FileNotFoundError(f'Embedding item ids not found after auto preparation under {embedding_dir}.')
         pnt(f'loading embedding index mapping from {embedding_dir}')

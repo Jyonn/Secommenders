@@ -18,6 +18,7 @@ from autoencoders.training.display import style
 from autoencoders.training.trainer import TrainingConfig, VQTrainer
 from utils.config_init import ConfigInit
 from utils.artifact import ArtifactStore
+from utils.artifact_run import ArtifactRunCoordinator
 from utils.artifact_identity import (
     quantized_artifact_identity,
     register_quantized_artifact,
@@ -96,8 +97,7 @@ class Quantizer:
         self.embedding_path = self.embedding_dir / 'embeddings.npy'
         self.embedding_item_ids_path = self.embedding_dir / 'item_ids.parquet'
         self.embedding_meta_path = self.embedding_dir / 'meta.json'
-        if not self.embedding_path.exists():
-            ensure_embedded(self.data, self.embedding_model)
+        ensure_embedded(self.data, self.embedding_model)
         if not self.embedding_path.exists():
             raise FileNotFoundError(f'Embedding file not found after auto preparation: {self.embedding_path}')
 
@@ -109,6 +109,23 @@ class Quantizer:
         self.dataset = None
         self.trainer_args = None
         self.model = None
+        self.run_state = None
+
+    def is_cached(self):
+        meta_path = self.output_dir / 'meta.json'
+        if not meta_path.exists():
+            return False
+        try:
+            meta = json.loads(meta_path.read_text())
+        except json.JSONDecodeError:
+            return False
+        return (
+            meta.get('stage') == 'quantized'
+            and meta.get('dataset') == self.data
+            and meta.get('embedding_model') == self.embedding_model
+            and meta.get('quantizer_model') == self.quantizer_name
+            and bool(meta.get('exports'))
+        )
 
     @classmethod
     def _infer_quantizer_scheme(cls, quantizer_name: str) -> str:
@@ -332,6 +349,19 @@ class Quantizer:
         self.build_model()
         _print_pipeline_trace(self.model)
         trainer = self.build_trainer()
+        original_on_epoch_start = trainer.on_epoch_start
+
+        def on_epoch_start(epoch):
+            max_epochs = self.trainer_args.epochs if self.trainer_args.epochs > 0 else None
+            self.run_state.update(
+                stage='training',
+                current=epoch,
+                total=max_epochs,
+                message=f'training epoch {epoch}' + (f'/{max_epochs}' if max_epochs else ''),
+            )
+            return original_on_epoch_start(epoch)
+
+        trainer.on_epoch_start = on_epoch_start
 
         pnt(f'training {self.quantizer_name} on {self.data}/{self.embedding_model}')
         if self.requested_latent_dim is not None:
@@ -428,13 +458,20 @@ class Quantizer:
         codebooks = None
 
         pnt(f'exporting {metric_name} checkpoint codes to {export_dir}')
-        for batch in tqdm(export_loader, total=len(export_loader)):
+        total_batches = len(export_loader)
+        for batch_index, batch in enumerate(tqdm(export_loader, total=total_batches), start=1):
             batch = batch.to(device)
             artifact = model.export(batch, include_reconstruction=False)
             codebook_indices.append(artifact.codebook_indices.detach().cpu().numpy())
             quantized_latents.append(artifact.quantized_latents.detach().cpu().numpy())
             if codebooks is None and 'codebooks' in artifact.extras:
                 codebooks = artifact.extras['codebooks'].detach().cpu().numpy()
+            self.run_state.update(
+                stage=f'exporting-{metric_name}',
+                current=batch_index,
+                total=total_batches,
+                message=f'exporting {metric_name} batch {batch_index}/{total_batches}',
+            )
 
         codebook_indices = np.concatenate(codebook_indices, axis=0)
         quantized_latents = np.concatenate(quantized_latents, axis=0).astype(np.float32)
@@ -522,6 +559,7 @@ class Quantizer:
         meta_path = export_dir / 'meta.json'
 
         pnt(f'building hash indexer {self.quantizer_name} for {self.data}/{self.embedding_model}')
+        self.run_state.update(stage='building-hash-index', message=f'building {self.quantizer_name} index')
         self.model.build(self.embedding_matrix.matrix, item_ids=self.item_ids)
         self.model.save_pretrained(indexer_dir)
 
@@ -573,6 +611,7 @@ class Quantizer:
             'trainer_output_dir': str(self.output_dir),
             'exports': exports,
             'artifact_identity': identity,
+            'status': 'completed',
         }
         (self.output_dir / 'meta.json').write_text(json.dumps(root_meta, indent=2) + '\n')
         register_quantized_artifact(
@@ -584,14 +623,40 @@ class Quantizer:
         )
 
     def run(self):
+        if self.is_cached():
+            pnt(f'cached quantized artifact found at {self.output_dir}')
+            return
+
+        self.run_state = ArtifactRunCoordinator(
+            self.output_dir,
+            kind='quantizer',
+            identity=f'{self.data}/{self.embedding_model}/{self.quantizer_name}',
+        )
+        if not self.run_state.acquire_or_wait(self.is_cached):
+            pnt(f'using quantized artifact prepared by another process at {self.output_dir}')
+            return
+
+        try:
+            self._run_as_owner()
+            if not self.is_cached():
+                raise RuntimeError(f'quantizer finished without a valid artifact at {self.output_dir}')
+            self.run_state.finish(message=f'quantized artifact ready at {self.output_dir}')
+        except BaseException as exc:
+            self.run_state.fail(exc)
+            raise
+
+    def _run_as_owner(self):
         if self.is_hash_indexer:
+            self.run_state.update(stage='loading-embeddings', message='loading embeddings for hash index')
             set_seed(int(self.config.trainer.seed))
             self.load_embedding_matrix()
             self.build_model()
             _print_pipeline_trace(self.model)
             self.export_hash_indexer()
             return
+        self.run_state.update(stage='preparing-training', message='building quantizer training pipeline')
         self.train()
+        self.run_state.update(stage='preparing-exports', message='exporting best quantizer checkpoints')
         self.export_all_checkpoints()
 
 

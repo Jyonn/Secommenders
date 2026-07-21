@@ -40,6 +40,15 @@ python formatter.py --data minds10
 python processor.py --data minds10
 ```
 
+### Shared embedding and quantization runs
+
+Embedding and quantization artifacts use a single-producer lock. If another
+trainer, compiler, or quantizer requests the same artifact while it is being
+built, it waits instead of launching duplicate work. Waiting processes print
+the producer's current stage and progress every five seconds. Machine-readable
+progress is stored beside the artifact in `run_state.json`; the lock is removed
+after success or failure, and stale local locks can be recovered automatically.
+
 ### Content Embeddings
 
 ```bash

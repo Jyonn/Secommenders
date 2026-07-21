@@ -9,6 +9,7 @@ import pandas as pd
 from pigmento import pnt
 
 from utils.artifact import ArtifactStore
+from utils.artifact_run import ArtifactRunCoordinator
 from utils.compile import normalize_model_name
 from utils.config_init import ConfigInit
 from utils.function import load_processor
@@ -303,8 +304,7 @@ class BasicRQVAEQuantizer:
         self.embedding_path = self.embedding_dir / 'embeddings.npy'
         self.embedding_item_ids_path = self.embedding_dir / 'item_ids.parquet'
         self.embedding_meta_path = self.embedding_dir / 'meta.json'
-        if not self.embedding_path.exists():
-            ensure_embedded(self.data, self.embedding_model)
+        ensure_embedded(self.data, self.embedding_model)
         if not self.embedding_path.exists():
             raise FileNotFoundError(f'Embedding file not found after auto preparation: {self.embedding_path}')
 
@@ -322,6 +322,17 @@ class BasicRQVAEQuantizer:
         self.device = self._resolve_device()
         self.embeddings = None
         self.item_ids = None
+        self.run_state = None
+
+    def is_cached(self):
+        return all(
+            path.exists()
+            for path in (
+                self.export_dir / 'meta.json',
+                self.export_dir / 'codebook_indices.npy',
+                self.export_dir / 'item_ids.parquet',
+            )
+        )
 
     def _absolute(self, path: Path) -> Path:
         if path.is_absolute():
@@ -413,6 +424,7 @@ class BasicRQVAEQuantizer:
         }
 
     def _run_external_python(self, code: str, payload: dict, stage: str):
+        self.run_state.update(stage=stage, message=f'running external stage {stage}')
         with tempfile.NamedTemporaryFile('w', suffix=f'.{stage}.json', delete=False) as handle:
             config_path = Path(handle.name)
             handle.write(json.dumps(payload, indent=2) + '\n')
@@ -479,6 +491,28 @@ class BasicRQVAEQuantizer:
         self._run_external_python(EXTERNAL_EXPORT_CODE, payload, 'basic-rqvae-export')
 
     def run(self):
+        if self.is_cached():
+            pnt(f'cached basic-rqvae artifact found at {self.export_dir}')
+            return
+        self.run_state = ArtifactRunCoordinator(
+            self.output_dir,
+            kind='quantizer',
+            identity=f'{self.data}/{self.embedding_model}/{self.QUANTIZER_NAME}',
+        )
+        if not self.run_state.acquire_or_wait(self.is_cached):
+            pnt(f'using basic-rqvae artifact prepared by another process at {self.export_dir}')
+            return
+        try:
+            self._run_as_owner()
+            if not self.is_cached():
+                raise RuntimeError(f'basic-rqvae finished without a valid artifact at {self.export_dir}')
+            self.run_state.finish(message=f'basic-rqvae artifact ready at {self.export_dir}')
+        except BaseException as exc:
+            self.run_state.fail(exc)
+            raise
+
+    def _run_as_owner(self):
+        self.run_state.update(stage='loading-embeddings', message='loading embeddings for basic-rqvae')
         self.load_embeddings()
         checkpoint_path = self._resolve_checkpoint_path()
         self.export(checkpoint_path)
