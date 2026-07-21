@@ -219,6 +219,8 @@ def _dataset_sort_key(name: str):
         return (0, base_order[name], 0, name)
     if name in recif_base_order:
         return (1, recif_base_order[name], 0, name)
+    if name.startswith('minds') and name[5:].isdigit():
+        return (0, base_order['mind'], int(name[5:]), name)
     for prefix_index, prefix in enumerate(('ra', 'rv', 'ras', 'rvs'), start=2):
         if name.startswith(prefix) and name[len(prefix):].isdigit():
             return (prefix_index, int(name[len(prefix):]), 0, name)

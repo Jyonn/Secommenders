@@ -30,6 +30,16 @@ python formatter.py --data mind
 python processor.py --data mind
 ```
 
+MIND also provides nested small-scale variants matching the RVS/RAS scale
+protocol. `MINDS<N>` uses a stable user shuffle, a shared 0.3% held-out test
+tail, and the first `N%` of all deduplicated users for training. Available
+scales are `1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99`.
+
+```bash
+python formatter.py --data minds10
+python processor.py --data minds10
+```
+
 ### Content Embeddings
 
 ```bash
