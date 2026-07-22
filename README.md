@@ -250,6 +250,7 @@ The current scheduler uses these rules:
 
 - `batch_size * accumulate_batch = 64`
 - `code_beam_chunk_size = max(batch_size, 4 * code_beam_width)` when left at `0`; this bounds active KV-cache beams and normally batches four samples together
+- scheduler state persists terminal failures; pass `--retry-failed` when restarting a plan to reset only failed experiments to pending while leaving completed experiments untouched
 - initial batch size cap by model name:
   - `scratch -> 64`
   - `scratchlegacy -> 64`

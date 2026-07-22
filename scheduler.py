@@ -463,8 +463,28 @@ def needs_oom_precheck(base_args: dict):
     return task_type in {'sid', 'hash'}
 
 
+def reset_failed_experiments(experiments: list[dict]):
+    reset_count = 0
+    for exp in experiments:
+        if exp.get('status') != 'failed':
+            continue
+        previous_error = exp.get('last_error')
+        exp['status'] = 'pending'
+        exp['last_error'] = f'retry_requested_after:{previous_error}' if previous_error else 'retry_requested'
+        exp['finished_at'] = None
+        exp['report_uploaded_at'] = None
+        exp['report_upload_error'] = None
+        exp['external_pid'] = None
+        exp['external_hostname'] = None
+        exp['external_command'] = None
+        exp['external_started_at'] = None
+        exp['notification_marks'] = {}
+        reset_count += 1
+    return reset_count
+
+
 class Scheduler:
-    def __init__(self, plan_path: Path, *, local_only: bool = False):
+    def __init__(self, plan_path: Path, *, local_only: bool = False, retry_failed: bool = False):
         self.plan_path = Path(plan_path)
         self.plan = yaml.safe_load(self.plan_path.read_text())
         self.plan_name = sanitize_name(self.plan.get('name') or self.plan_path.stem)
@@ -483,6 +503,11 @@ class Scheduler:
             print('warning: notificator config is missing; scheduler notifications are disabled')
         self.notifier = SchedulerNotifier.from_config(notificator_conf or {})
         self.experiments = self._load_or_initialize_state()
+        if retry_failed:
+            reset_count = reset_failed_experiments(self.experiments)
+            if reset_count:
+                self._save_state()
+            print(f'scheduler retry-failed reset={reset_count}')
         self.active_jobs = {}
 
     @staticmethod
@@ -1361,9 +1386,14 @@ def main():
         action='store_true',
         help='Run experiments locally without backend upload. Required when the plan config does not provide backend.',
     )
+    parser.add_argument(
+        '--retry-failed',
+        action='store_true',
+        help='Reset failed experiments in the persisted scheduler state to pending and rerun them.',
+    )
     args = parser.parse_args()
 
-    scheduler = Scheduler(Path(args.plan), local_only=args.local_only)
+    scheduler = Scheduler(Path(args.plan), local_only=args.local_only, retry_failed=args.retry_failed)
     scheduler.run()
 
 
