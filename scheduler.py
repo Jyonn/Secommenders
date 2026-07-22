@@ -57,6 +57,17 @@ def sanitize_name(text: str):
     return re.sub(r'[^a-zA-Z0-9._-]+', '_', text).strip('._-') or 'exp'
 
 
+def format_duration(seconds: float):
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f'{hours}h{minutes:02d}m'
+    if minutes:
+        return f'{minutes}m{seconds:02d}s'
+    return f'{seconds}s'
+
+
 def coerce_cli_value(value: str):
     lowered = value.lower()
     if lowered == 'true':
@@ -509,6 +520,7 @@ class Scheduler:
                 self._save_state()
             print(f'scheduler retry-failed reset={reset_count}')
         self.active_jobs = {}
+        self.summary_notified = False
 
     @staticmethod
     def _build_server(backend_conf: dict | None, *, local_only: bool):
@@ -812,6 +824,31 @@ class Scheduler:
             return False
         if self.notifier.send(title, body):
             self._mark_notification(exp, key)
+            return True
+        return False
+
+    def _notify_summary(self, *, done: int, failed: int, waiting: int, duration_seconds: float):
+        if self.notifier is None or self.summary_notified:
+            return False
+        total = len(self.experiments)
+        running = sum(1 for exp in self.experiments if exp.get('status') == 'running')
+        pending = sum(1 for exp in self.experiments if exp.get('status') == 'pending')
+        title = 'Scheduler Finished'
+        if failed:
+            title = 'Scheduler Finished With Failures'
+        elif waiting:
+            title = 'Scheduler Finished With External Jobs'
+        body = '\n'.join(
+            [
+                f'plan={self.plan_name}',
+                f'total={total} done={done} failed={failed}',
+                f'waiting_external={waiting} running={running} pending={pending}',
+                f'duration={format_duration(duration_seconds)}',
+                f'state={self.state_path}',
+            ]
+        )
+        if self.notifier.send(title, body):
+            self.summary_notified = True
             return True
         return False
 
@@ -1354,6 +1391,7 @@ class Scheduler:
             self._save_state()
 
     def run(self):
+        started_at = time.time()
         print(f'scheduler plan={self.plan_name} experiments={len(self.experiments)} output={self.output_dir}')
         if not self.local_only and self.server is None and self._has_unsynced_completed_experiments():
             print(
@@ -1376,6 +1414,12 @@ class Scheduler:
         failed = sum(1 for exp in self.experiments if exp['status'] == 'failed')
         waiting = sum(1 for exp in self.experiments if exp['status'] == 'waiting_external')
         print(f'scheduler finished done={done} failed={failed} waiting_external={waiting} state={self.state_path}')
+        self._notify_summary(
+            done=done,
+            failed=failed,
+            waiting=waiting,
+            duration_seconds=time.time() - started_at,
+        )
 
 
 def main():
