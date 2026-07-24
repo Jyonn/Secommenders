@@ -23,8 +23,18 @@ def recif_embeddings_dir(data_dir: str | Path) -> Path:
     return Path(data_dir) / 'embeddings'
 
 
-def filtered_embeddings_path(data_dir: str | Path) -> Path:
-    return recif_embeddings_dir(data_dir) / FILTERED_EMBEDDINGS_NAME
+def filtered_embeddings_path(data_dir: str | Path, *, candidate_pids: set | None = None) -> Path:
+    embeddings_dir = recif_embeddings_dir(data_dir)
+    candidate_count, candidate_hash = _candidate_signature(candidate_pids)
+    if candidate_hash is None:
+        return embeddings_dir / FILTERED_EMBEDDINGS_NAME
+    return embeddings_dir / f'filtered.{candidate_count}.{candidate_hash[:16]}.parquet'
+
+
+def filtered_embeddings_meta_path(output_path: Path) -> Path:
+    if output_path.name == FILTERED_EMBEDDINGS_NAME:
+        return output_path.with_name(FILTERED_EMBEDDINGS_META_NAME)
+    return output_path.with_suffix('.meta.json')
 
 
 def raw_embedding_paths(data_dir: str | Path) -> list[Path]:
@@ -32,7 +42,7 @@ def raw_embedding_paths(data_dir: str | Path) -> list[Path]:
     return [
         path
         for path in sorted(embeddings_dir.glob('*.parquet'))
-        if path.name != FILTERED_EMBEDDINGS_NAME
+        if not path.name.startswith('filtered.')
     ]
 
 
@@ -60,7 +70,7 @@ def _cache_matches(output_path: Path, candidate_pids: set | None) -> bool:
     candidate_count, candidate_hash = _candidate_signature(candidate_pids)
     if candidate_hash is None:
         return True
-    meta_path = output_path.with_name(FILTERED_EMBEDDINGS_META_NAME)
+    meta_path = filtered_embeddings_meta_path(output_path)
     if not meta_path.exists():
         return False
     try:
@@ -175,7 +185,7 @@ def ensure_filtered_recif_embeddings(
     workers: int | None = None,
     force: bool = False,
 ) -> Path:
-    output_path = filtered_embeddings_path(data_dir)
+    output_path = filtered_embeddings_path(data_dir, candidate_pids=candidate_pids)
     if not force and _cache_matches(output_path, candidate_pids):
         return output_path
 
@@ -191,7 +201,7 @@ def ensure_filtered_recif_embeddings(
     candidate_count, candidate_hash = _candidate_signature(candidate_pids)
     candidate_values = _candidate_array(candidate_pids)
     temp_path = output_path.with_name(f'.{output_path.name}.{os.getpid()}.tmp')
-    meta_path = output_path.with_name(FILTERED_EMBEDDINGS_META_NAME)
+    meta_path = filtered_embeddings_meta_path(output_path)
     if temp_path.exists():
         temp_path.unlink()
 

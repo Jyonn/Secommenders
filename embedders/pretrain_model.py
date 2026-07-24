@@ -6,7 +6,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from embedders.base_model import BaseModel
-from utils.recif_embedding_cache import filtered_embeddings_path
+from utils.recif_embedding_cache import ensure_filtered_recif_embeddings
 
 
 class RecIFPretrainModel(BaseModel):
@@ -59,16 +59,11 @@ class RecIFPretrainModel(BaseModel):
 
         normalized_item_ids = [self._normalize_item_id(item_id) for item_id in item_ids]
         item_positions = {item_id: index for index, item_id in enumerate(normalized_item_ids)}
+        candidate_pids = set(normalized_item_ids)
         row_seen = set()
         found_by_column = {column: {} for column in self.EMBEDDING_COLUMNS}
         parse_errors = {column: {} for column in self.EMBEDDING_COLUMNS}
-        filtered_path = filtered_embeddings_path(data_dir)
-        using_filtered_cache = filtered_path.exists()
-        if not using_filtered_cache:
-            raise FileNotFoundError(
-                f'RecIF filtered embedding cache not found: {filtered_path}. '
-                'Run a RecIF scale formatter first so embeddings are filtered and mean-pooled.'
-            )
+        filtered_path = ensure_filtered_recif_embeddings(data_dir, candidate_pids=candidate_pids)
         parquet_paths = [filtered_path]
 
         columns = ['pid', *self.EMBEDDING_COLUMNS]
