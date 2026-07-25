@@ -346,6 +346,38 @@ def overlap_scores(left_neighbors: dict[str, list[str]], right_neighbors: dict[s
     return scores
 
 
+def rank_ndcg_scores(
+    reference_neighbors: dict[str, list[str]],
+    target_neighbors: dict[str, list[str]],
+    topk: int,
+):
+    """Compare target rankings with graded relevance derived from reference ranks."""
+    scores = []
+    for item_id, reference_ranking in reference_neighbors.items():
+        target_ranking = target_neighbors.get(item_id)
+        if target_ranking is None:
+            continue
+
+        reference_topk = reference_ranking[:topk]
+        target_topk = target_ranking[:topk]
+        relevance = {
+            neighbor_id: topk - rank
+            for rank, neighbor_id in enumerate(reference_topk)
+        }
+        dcg = sum(
+            relevance.get(neighbor_id, 0) / math.log2(rank + 2)
+            for rank, neighbor_id in enumerate(target_topk)
+        )
+        idcg = sum(
+            relevance_value / math.log2(rank + 2)
+            for rank, relevance_value in enumerate(
+                sorted(relevance.values(), reverse=True)
+            )
+        )
+        scores.append(dcg / idcg if idcg > 0 else 0.0)
+    return scores
+
+
 def retention_scores(full_reference_neighbors: dict[str, list[str]], candidate_set: set[str], topk: int):
     scores = []
     for neighbors in full_reference_neighbors.values():
@@ -400,6 +432,7 @@ def evaluate_scale(reference: VectorArtifact, target: VectorArtifact, core_items
     retention = retention_scores(ref_full, target_set, args.topk)
 
     core_scores = []
+    core_ndcg_scores = []
     if len(core_candidates) > args.topk:
         ref_core = exact_topk_neighbors(
             reference,
@@ -418,6 +451,7 @@ def evaluate_scale(reference: VectorArtifact, target: VectorArtifact, core_items
             candidate_chunk_size=args.candidate_chunk_size,
         )
         core_scores = overlap_scores(ref_core, target_core, args.topk)
+        core_ndcg_scores = rank_ndcg_scores(ref_core, target_core, args.topk)
 
     return {
         'data': target.data,
@@ -432,6 +466,7 @@ def evaluate_scale(reference: VectorArtifact, target: VectorArtifact, core_items
         'core_anchor_count': len(core_anchors),
         'conditional_stability': describe(conditional_scores),
         'core_stability': describe(core_scores),
+        'core_ndcg': describe(core_ndcg_scores),
         'full_neighbor_retention': describe(retention),
     }
 
@@ -488,6 +523,7 @@ def run_neighbor_stability(args):
                 fmt_int(result['conditional_anchor_count']),
                 fmt_float(result['conditional_stability']['mean']),
                 fmt_float(result['core_stability']['mean']),
+                fmt_float(result['core_ndcg']['mean']),
                 fmt_float(result['full_neighbor_retention']['mean']),
             ]
         )
@@ -501,6 +537,7 @@ def run_neighbor_stability(args):
             'anchors',
             f'conditional@{args.topk}',
             f'core@{args.topk}',
+            f'core-ndcg@{args.topk}',
             f'retention@{args.topk}',
         ],
         rows,
@@ -522,8 +559,8 @@ def build_parser():
         description=(
             'Compare item-neighbor stability between a reference dataset, usually ra99/rv99, '
             'and smaller scales. The evaluator reports conditional stability on each shared '
-            'vocabulary, core stability on the vocabulary shared by all scales, and full-neighbor '
-            'retention to separate vocabulary coverage from embedding drift.'
+            'vocabulary, overlap and rank-sensitive NDCG on the vocabulary shared by all scales, '
+            'and full-neighbor retention to separate vocabulary coverage from embedding drift.'
         ),
     )
     stability.add_argument('--root', default=str(ROOT), help='Algorithm repository root.')
