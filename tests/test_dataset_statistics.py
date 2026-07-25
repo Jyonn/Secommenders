@@ -5,6 +5,7 @@ import pandas as pd
 from scripts.dataset_statistics import (
     SUMMARY_COLUMNS,
     SUMMARY_HEADERS,
+    add_item_retention,
     parse_datasets,
     render_table,
     summarize_frames,
@@ -24,7 +25,7 @@ def test_summarize_frames_computes_common_recommendation_statistics():
     test_users = pd.DataFrame({'uid': ['t1'], 'history': [['a', 'd']]})
     meta = {'item_col': 'iid', 'user_col': 'uid', 'history_col': 'history', 'scale_percent': 10}
 
-    summary = summarize_frames('demo10', items, users, test_users, meta)
+    summary = summarize_frames('demo10', items, users, test_users, meta, cold_threshold=2)
 
     assert summary['item_count'] == 4
     assert summary['observed_item_count'] == 4
@@ -39,6 +40,28 @@ def test_summarize_frames_computes_common_recommendation_statistics():
     assert summary['sparsity_percent'] == 50
     assert summary['test_user_count'] == 1
     assert summary['test_interaction_count'] == 2
+    assert summary['cold_threshold'] == 2
+    assert summary['cold_item_count'] == 3
+    assert summary['cold_item_percent'] == 75
+    assert summary['item_coverage_percent'] == 100
+
+
+def test_add_item_retention_uses_largest_scale_per_family():
+    records = [
+        {'data': 'ras1', 'scale_percent': 1, 'observed_item_count': 20},
+        {'data': 'ras99', 'scale_percent': 99, 'observed_item_count': 80},
+        {'data': 'minds1', 'scale_percent': 1, 'observed_item_count': 25},
+        {'data': 'minds99', 'scale_percent': 99, 'observed_item_count': 100},
+    ]
+
+    add_item_retention(records)
+
+    assert records[0]['item_retention_percent'] == 25
+    assert records[0]['retention_reference_data'] == 'ras99'
+    assert records[1]['item_retention_percent'] == 100
+    assert records[2]['item_retention_percent'] == 25
+    assert records[2]['retention_reference_data'] == 'minds99'
+    assert records[3]['item_retention_percent'] == 100
 
 
 def test_parse_datasets_preserves_order_and_removes_duplicates():

@@ -3,6 +3,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -95,7 +96,14 @@ def _safe_int(value):
     return int(value)
 
 
-def summarize_frames(data: str, items: pd.DataFrame, users: pd.DataFrame, test_users, meta: dict):
+def summarize_frames(
+    data: str,
+    items: pd.DataFrame,
+    users: pd.DataFrame,
+    test_users,
+    meta: dict,
+    cold_threshold: int | None = None,
+):
     item_col = meta.get('item_col') or 'iid'
     user_col = meta.get('user_col') or 'uid'
     history_col = meta.get('history_col') or 'history'
@@ -135,12 +143,32 @@ def summarize_frames(data: str, items: pd.DataFrame, users: pd.DataFrame, test_u
             test_history_mean = float(test_lengths.mean()) if not test_lengths.empty else None
 
     item_frequencies = pd.Series(list(frequencies.values()), dtype='float64')
+    effective_cold_threshold = cold_threshold
+    if effective_cold_threshold is None and meta.get('n_core') is not None:
+        effective_cold_threshold = int(meta['n_core'])
+    cold_item_count = None
+    cold_item_percent = None
+    if effective_cold_threshold is not None:
+        cold_item_count = sum(
+            1 for frequency in frequencies.values() if frequency < effective_cold_threshold
+        )
+        cold_item_percent = (
+            100.0 * cold_item_count / len(frequencies)
+            if frequencies
+            else None
+        )
+
+    item_coverage_percent = (100.0 * len(frequencies) / item_count) if item_count else None
     return {
         'data': data,
         'scale_percent': _safe_int(meta.get('scale_percent')),
         'item_count': item_count,
         'observed_item_count': int(len(frequencies)),
-        'item_coverage_percent': (100.0 * len(frequencies) / item_count) if item_count else None,
+        'item_coverage_percent': item_coverage_percent,
+        'item_retention_percent': None,
+        'cold_threshold': effective_cold_threshold,
+        'cold_item_count': cold_item_count,
+        'cold_item_percent': cold_item_percent,
         'user_count': user_count,
         'row_count': int(len(users)),
         'source_user_count': source_user_count,
@@ -167,7 +195,34 @@ def summarize_frames(data: str, items: pd.DataFrame, users: pd.DataFrame, test_u
     }
 
 
-def load_dataset_summary(root: Path, data: str, prepare: bool):
+def add_item_retention(records):
+    """Measure observed-item retention against the largest scale in each dataset family."""
+    references = {}
+    for record in records:
+        family = re.sub(r'\d+$', '', str(record.get('data') or '').lower())
+        scale = record.get('scale_percent')
+        observed = record.get('observed_item_count')
+        if not family or scale is None or observed is None:
+            continue
+        current = references.get(family)
+        if current is None or scale > current['scale_percent']:
+            references[family] = record
+
+    for record in records:
+        family = re.sub(r'\d+$', '', str(record.get('data') or '').lower())
+        reference = references.get(family)
+        observed = record.get('observed_item_count')
+        reference_observed = reference.get('observed_item_count') if reference else None
+        record['retention_reference_data'] = reference.get('data') if reference else None
+        record['item_retention_percent'] = (
+            100.0 * observed / reference_observed
+            if observed is not None and reference_observed
+            else None
+        )
+    return records
+
+
+def load_dataset_summary(root: Path, data: str, prepare: bool, cold_threshold: int | None = None):
     formatted_dir = root / 'artifacts' / 'formatted' / data
     required = [formatted_dir / 'items.parquet', formatted_dir / 'users.parquet', formatted_dir / 'meta.json']
     if prepare and not all(path.exists() for path in required):
@@ -186,7 +241,14 @@ def load_dataset_summary(root: Path, data: str, prepare: bool):
     users = pd.read_parquet(formatted_dir / 'users.parquet')
     test_path = formatted_dir / 'test_users.parquet'
     test_users = pd.read_parquet(test_path) if test_path.exists() else None
-    return summarize_frames(data, items, users, test_users, meta)
+    return summarize_frames(
+        data,
+        items,
+        users,
+        test_users,
+        meta,
+        cold_threshold=cold_threshold,
+    )
 
 
 def format_value(value):
@@ -254,6 +316,15 @@ def main():
     parser.add_argument('--root', type=Path, default=ROOT, help='Path to the secommenders-algorithm repository.')
     parser.add_argument('--output', type=Path, default=None, help='Optional .csv, .md, or .json output path.')
     parser.add_argument(
+        '--cold-threshold',
+        type=int,
+        default=None,
+        help=(
+            'Count observed items with fewer interactions than this value as cold. '
+            'Defaults to n_core from meta.json when available.'
+        ),
+    )
+    parser.add_argument(
         '--no-prepare',
         action='store_true',
         help='Do not automatically run the formatter when a dataset artifact is missing.',
@@ -265,7 +336,18 @@ def main():
     os.chdir(root)
     try:
         datasets = parse_datasets(args.data)
-        records = [load_dataset_summary(root, data, prepare=not args.no_prepare) for data in datasets]
+        if args.cold_threshold is not None and args.cold_threshold <= 0:
+            raise ValueError('--cold-threshold must be positive')
+        records = [
+            load_dataset_summary(
+                root,
+                data,
+                prepare=not args.no_prepare,
+                cold_threshold=args.cold_threshold,
+            )
+            for data in datasets
+        ]
+        add_item_retention(records)
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
 
