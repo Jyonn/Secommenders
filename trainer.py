@@ -27,6 +27,7 @@ from utils.artifact_identity import (
     trained_artifact_identity,
 )
 from utils.config_init import ConfigInit
+from utils.frequency_breakdown import FrequencyBreakdownAccumulator, count_finetune_target_frequencies
 from utils.gpu import GPU
 from utils.logging import attach_run_log, setup_logging
 from utils.pipeline import ensure_clustered
@@ -40,6 +41,8 @@ class Trainer:
         self.rank = int(os.environ.get('RANK', '0'))
         self.world_size = int(os.environ.get('WORLD_SIZE', '1'))
         self.distributed = self.world_size > 1
+        if self.distributed and self.config.frequency_breakdown:
+            raise ValueError('frequency breakdown currently supports single-process evaluation only')
         self._init_distributed()
         self.run_dir = resolve_trained_run_dir(config)
         self._prepare_uid_hierarchy_if_needed()
@@ -65,6 +68,7 @@ class Trainer:
         self.meta_path = self.run_dir / 'meta.json'
         self.pid_path = self.run_dir / 'pid.json'
         self.log_path = self.run_dir / 'train.log'
+        self.frequency_breakdown_path = self.run_dir / 'analysis' / 'frequency_breakdown_test.json'
 
     def _prepare_uid_hierarchy_if_needed(self):
         if self.config.task_type != 'uid' or self.config.uid_decoding != 'hierarchical':
@@ -317,6 +321,24 @@ class Trainer:
     def _run_loader(self, loader, optimizer=None, desc='train', distributed_reduce=True, max_batches=None):
         is_train = optimizer is not None
         self.model.train(is_train)
+        frequency_accumulator = None
+        collect_frequency_breakdown = (
+            not is_train
+            and desc in {'test', 'test-only'}
+            and self.config.frequency_breakdown
+        )
+        if collect_frequency_breakdown:
+            target_frequencies = count_finetune_target_frequencies(self.compiled.finetune)
+            frequency_accumulator = FrequencyBreakdownAccumulator(
+                target_frequencies,
+                self.config.frequency_buckets,
+                self.model_core.ranking_ks(),
+            )
+            self.model_core.enable_ranking_trace(True)
+            self._pnt(
+                f'{desc} frequency breakdown enabled buckets={self.config.frequency_buckets} '
+                f'finetune_target_items={len(target_frequencies):,}'
+            )
         profile_sid_decoding = (
             desc == 'valid-only'
             and self.config.task_type == 'sid'
@@ -348,6 +370,15 @@ class Trainer:
             else:
                 with torch.no_grad():
                     rec_loss, metrics = model_runner(batch, mode='test')
+                if frequency_accumulator is not None:
+                    ranking_records = self.model_core.pop_ranking_trace_records()
+                    if len(ranking_records) != len(batch):
+                        raise RuntimeError(
+                            f'frequency breakdown expected one target rank per sample, '
+                            f'got {len(ranking_records)} records for batch size {len(batch)}'
+                        )
+                    for record in ranking_records:
+                        frequency_accumulator.add(record['target_uid'], record['rank'])
             if is_train:
                 loss.backward()
                 if should_step:
@@ -391,9 +422,37 @@ class Trainer:
             metric_sums = reduced_metric_sums
 
         self.model_core.sid_decoding_timing_enabled = False
+        self.model_core.enable_ranking_trace(False)
         summary = {'loss': total_loss / max(total_batches, 1)}
         for key, value in metric_sums.items():
             summary[key] = value / max(total_batches, 1)
+        if frequency_accumulator is not None and self.is_main_process:
+            breakdown = frequency_accumulator.summary()
+            breakdown.update({
+                'data': self.config.data,
+                'model': self.config.model,
+                'repr_type': self.config.repr_type,
+                'task_type': self.config.task_type,
+                'split': 'test',
+                'compiled_dir': str(self.compiled.compile_dir),
+                'run_dir': str(self.run_dir),
+                'generated_at': _utc_now_iso(),
+            })
+            self.frequency_breakdown_path.parent.mkdir(parents=True, exist_ok=True)
+            self.frequency_breakdown_path.write_text(json.dumps(breakdown, indent=2) + '\n')
+            for label, bucket in breakdown['buckets'].items():
+                metric_text = ' '.join(
+                    f'{key}={value:.4f}'
+                    for key, value in bucket.items()
+                    if key in {'mrr', *[f'hr@{k}' for k in self.model_core.ranking_ks()],
+                               *[f'ndcg@{k}' for k in self.model_core.ranking_ks()]}
+                    and value is not None
+                )
+                self._pnt(
+                    f'{desc} frequency={label} targets={bucket["target_count"]:,} '
+                    f'share={bucket["target_share"] or 0:.2%} {metric_text}'
+                )
+            self._pnt(f'wrote test frequency breakdown to {self.frequency_breakdown_path}')
         return summary
 
     def _save_checkpoint(self, epoch: int, best_metrics: dict[str, float], valid_metrics: dict):
@@ -483,6 +542,10 @@ class Trainer:
             'finished_at': _utc_now_iso(),
             'artifact_identity': trained_artifact_identity(self.config, self.run_dir),
         })
+        if self.config.frequency_breakdown:
+            analysis = dict(meta.get('analysis') or {})
+            analysis['frequency_breakdown_test'] = str(self.frequency_breakdown_path)
+            meta['analysis'] = analysis
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote test-only meta to {self.meta_path}')
 
@@ -819,6 +882,8 @@ def _completed_run_status(config: TrainConfig, run_dir: Path):
     if config.test_only:
         complete_statuses = {'test_only_finished'}
         required_paths = [run_dir / 'meta.json']
+        if config.frequency_breakdown:
+            required_paths.append(run_dir / 'analysis' / 'frequency_breakdown_test.json')
     elif config.valid_only:
         complete_statuses = {'valid_only_finished'}
         required_paths = [run_dir / 'meta.json']

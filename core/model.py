@@ -117,6 +117,8 @@ class SequentialRecModel(nn.Module):
 
         self.compute_dtype = getattr(self.encoder, 'compute_dtype', torch.float32)
         self.code_collision_loss_weight = float(getattr(config, 'code_collision_loss_weight', 0.1))
+        self._ranking_trace_enabled = False
+        self._ranking_trace_records = []
         sid_item_codes = compiled.item_views.get('sid') or []
         if sid_item_codes:
             sid_item_codes_tensor = torch.tensor(
@@ -166,6 +168,23 @@ class SequentialRecModel(nn.Module):
         state = self.state_dict()
         trainable_names = {name for name, param in self.named_parameters() if param.requires_grad}
         return {name: tensor.detach().cpu() for name, tensor in state.items() if name in trainable_names}
+
+    def enable_ranking_trace(self, enabled=True):
+        self._ranking_trace_enabled = bool(enabled)
+        self._ranking_trace_records = []
+
+    def pop_ranking_trace_records(self):
+        records = self._ranking_trace_records
+        self._ranking_trace_records = []
+        return records
+
+    def _record_target_rank(self, sample, rank):
+        if not self._ranking_trace_enabled:
+            return
+        self._ranking_trace_records.append({
+            'target_uid': int(sample['target_uid']),
+            'rank': int(rank) if rank is not None else None,
+        })
 
     def _type_marker_index(self, marker_name: str):
         return int(self.compiled.special_vocab['marker_to_index'][marker_name])
@@ -1074,6 +1093,8 @@ class SequentialRecModel(nn.Module):
             if uid not in rank_by_uid:
                 rank_by_uid[uid] = index
 
+        self._record_target_rank(sample, rank_by_uid.get(int(sample['target_uid'])))
+
         matched_ranks = sorted(rank_by_uid[uid] for uid in candidate_uids if uid in rank_by_uid)
         if matched_ranks:
             totals['mrr'] += 1.0 / matched_ranks[0]
@@ -1108,6 +1129,7 @@ class SequentialRecModel(nn.Module):
         if item_indices is None:
             item_indices = torch.arange(num_items, dtype=torch.long, device=semantic_scores.device)
         matched_ranks = []
+        primary_target_rank = None
         for uid in candidate_uids:
             uid = int(uid)
             if uid < 0 or uid >= num_items:
@@ -1123,7 +1145,12 @@ class SequentialRecModel(nn.Module):
                     & (item_indices < uid)
                 )
             )
-            matched_ranks.append(int(higher.sum().item()) + 1)
+            rank = int(higher.sum().item()) + 1
+            matched_ranks.append(rank)
+            if uid == int(sample['target_uid']):
+                primary_target_rank = rank
+
+        self._record_target_rank(sample, primary_target_rank)
 
         matched_ranks = sorted(matched_ranks)
         if matched_ranks:

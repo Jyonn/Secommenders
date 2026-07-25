@@ -117,6 +117,23 @@ python trainer.py ... \
 
 This is useful when training succeeds but final test evaluation needs a smaller batch size or safer decoding settings.
 
+To report test performance by the target item's finetune supervision frequency, reuse the same
+checkpoint and add:
+
+```bash
+python trainer.py ... \
+  --test_only true \
+  --load_ckpt artifacts/trained/<dataset>/<trained_signature>/<seed>/train/best.pt \
+  --frequency_breakdown true \
+  --frequency_buckets 0,5,20,100
+```
+
+The fixed buckets above are `0`, `1-5`, `6-20`, `21-100`, and `101+`. Frequency counts only
+positions used as next-item targets in the existing compiled finetune trajectories; the first
+context-only item of each trajectory is excluded. The command reads compiled artifacts without
+rebuilding or modifying them and writes the breakdown to
+`<test-only-run>/analysis/frequency_breakdown_test.json`.
+
 ### Trained Artifact Registry
 
 `config/trainer.yaml` is the canonical experiment template. It keeps the user-facing schedule arguments small while expanding them into explicit `representation`, `upstreams`, `decoder`, `model`, and `trainer` sections. Signatures are computed from this canonical template, not from user-provided artifact signs.

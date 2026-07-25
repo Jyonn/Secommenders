@@ -19,6 +19,7 @@ from utils.experiment_template import (
     normalize_optional_string,
     used_upstreams_for_config,
 )
+from utils.frequency_breakdown import normalize_frequency_boundaries
 
 
 def _get(obj, name, default=None):
@@ -56,6 +57,8 @@ class TrainConfig:
     valid_only: int
     test_only: bool
     load_ckpt: Optional[str]
+    frequency_breakdown: bool
+    frequency_buckets: list[int]
     overwrite: str
     epochs: int
     learning_rate: float
@@ -199,6 +202,15 @@ class TrainConfig:
                 raise ValueError('trainer.valid_only must be false/0, true, or a positive integer')
         test_only = bool(getattr(trainer, 'test_only', False))
         load_ckpt = function.normalize_optional_string(getattr(trainer, 'load_ckpt', None))
+        raw_frequency_breakdown = getattr(evaluator, 'frequency_breakdown', False)
+        frequency_breakdown = (
+            raw_frequency_breakdown
+            if isinstance(raw_frequency_breakdown, bool)
+            else function.coerce_bool(str(raw_frequency_breakdown).strip().lower(), default=False)
+        )
+        frequency_buckets = normalize_frequency_boundaries(
+            getattr(evaluator, 'frequency_buckets', None)
+        )
         overwrite = str(getattr(trainer, 'overwrite', 'auto') or 'auto').strip().lower()
         if overwrite not in {'auto', 'true', 'false'}:
             raise ValueError('trainer.overwrite must be one of: auto, true, false')
@@ -206,6 +218,10 @@ class TrainConfig:
             raise ValueError('trainer.valid_only and trainer.test_only cannot both be true')
         if load_ckpt and not test_only:
             raise ValueError('trainer.load_ckpt is only supported together with trainer.test_only=true')
+        if frequency_breakdown and not test_only:
+            raise ValueError('evaluator.frequency_breakdown requires trainer.test_only=true')
+        if frequency_breakdown and not load_ckpt:
+            raise ValueError('evaluator.frequency_breakdown requires trainer.load_ckpt')
         if uid_decoding == 'hierarchical' and raw_task_type != 'uid':
             raise ValueError('trainer.uid_decoding=hierarchical is only supported when task_type=uid')
         if uid_decoding == 'hierarchical' and not uid_cluster_levels:
@@ -236,6 +252,8 @@ class TrainConfig:
             valid_only=valid_only,
             test_only=test_only,
             load_ckpt=load_ckpt,
+            frequency_breakdown=frequency_breakdown,
+            frequency_buckets=frequency_buckets,
             overwrite=overwrite,
             epochs=int(trainer.epochs),
             learning_rate=float(trainer.learning_rate),
@@ -358,6 +376,8 @@ class TrainConfig:
         payload.pop('valid_only', None)
         payload.pop('test_only', None)
         payload.pop('load_ckpt', None)
+        payload.pop('frequency_breakdown', None)
+        payload.pop('frequency_buckets', None)
         payload.pop('overwrite', None)
         payload.pop('code_beam_chunk_size', None)
         used_views = self.compile_config.used_views
