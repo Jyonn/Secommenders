@@ -57,11 +57,14 @@ prepared automatically; use `--no-prepare` to require existing artifacts.
 ```bash
 python scripts/dataset_statistics.py --data ras1,ras2,ras5,ras10,ras20,ras50,ras99
 python scripts/dataset_statistics.py --data ras1,ras5,ras99 --output reports/ras_statistics.csv
+python scripts/dataset_statistics.py --data ras1,ras5,ras99 --cold-threshold 20 --output reports/ras_statistics.json
 ```
 
 The terminal report includes catalog and observed item counts, user/source-user
 counts, interactions, test users, history-length quantiles, density, and
-sparsity. CSV, Markdown, and JSON outputs contain the full set of statistics.
+sparsity. It also shows the cold threshold, percentage of observed cold items,
+and item retention relative to the observed items at the largest requested
+scale. CSV, Markdown, and JSON outputs contain the full set of statistics.
 
 ### Content Embeddings
 
