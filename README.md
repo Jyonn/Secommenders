@@ -57,7 +57,6 @@ prepared automatically; use `--no-prepare` to require existing artifacts.
 ```bash
 python scripts/dataset_statistics.py --data ras1,ras2,ras5,ras10,ras20,ras50,ras99
 python scripts/dataset_statistics.py --data ras1,ras5,ras99 --output reports/ras_statistics.csv
-python scripts/dataset_statistics.py --data ras1,ras5,ras99 --cold-threshold 20 --output reports/ras_statistics.json
 ```
 
 The terminal report includes catalog and observed item counts, user/source-user
