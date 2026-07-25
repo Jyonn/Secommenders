@@ -549,6 +549,17 @@ class RecIFVideoSmallScaleFormatter(RecIFSmallScaleFormatter, RecIFVideoScaleFor
         return 'rvs'
 
 
+class RecIFVideoTinyScaleFormatter(RecIFVideoSmallScaleFormatter, abc.ABC):
+    VER = 'v1.0-video-tiny-scale'
+    DEFAULT_N_CORE = 30
+    DEFAULT_MIN_LENGTH = 5
+    DEFAULT_MAX_LENGTH = 20
+
+    @classmethod
+    def _scale_dataset_prefix(cls):
+        return 'rvt'
+
+
 class RecIFAdsScaleFormatter(RecIFScaleFormatter, abc.ABC):
     DOMAIN = 'ad'
     RAW_HISTORY_COL = 'hist_ad_pid'
@@ -648,6 +659,90 @@ class RVS95Formatter(RecIFVideoSmallScaleFormatter):
 
 
 class RVS99Formatter(RecIFVideoSmallScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 99
+
+
+class RVT1Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 1
+
+
+class RVT2Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 2
+
+
+class RVT5Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 5
+
+
+class RVT10Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 10
+
+
+class RVT20Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 20
+
+
+class RVT30Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 30
+
+
+class RVT40Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 40
+
+
+class RVT50Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 50
+
+
+class RVT60Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 60
+
+
+class RVT70Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 70
+
+
+class RVT80Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 80
+
+
+class RVT90Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 90
+
+
+class RVT95Formatter(RecIFVideoTinyScaleFormatter):
+    @classmethod
+    def scale_percent(cls) -> int:
+        return 95
+
+
+class RVT99Formatter(RecIFVideoTinyScaleFormatter):
     @classmethod
     def scale_percent(cls) -> int:
         return 99

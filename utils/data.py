@@ -28,7 +28,7 @@ def get_data_dir(dataset):
         return DATA_DIRS['recif']
     if dataset[:2] in {'rv', 'ra'} and dataset[2:].isdigit() and 'recif' in DATA_DIRS:
         return DATA_DIRS['recif']
-    if dataset[:3] in {'rvs', 'ras'} and dataset[3:].isdigit() and 'recif' in DATA_DIRS:
+    if dataset[:3] in {'rvs', 'rvt', 'ras'} and dataset[3:].isdigit() and 'recif' in DATA_DIRS:
         return DATA_DIRS['recif']
     if dataset.startswith('minds') and dataset[5:].isdigit() and 'mind' in DATA_DIRS:
         return DATA_DIRS['mind']

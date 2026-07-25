@@ -256,10 +256,13 @@ def compare_pairs(summaries):
             right = by_data.get('ras' + data[2:])
             if right:
                 rows.append((data, right['data'], left, right))
-        if data.startswith('rv') and not data.startswith('rvs'):
+        if data.startswith('rv') and not data.startswith(('rvs', 'rvt')):
             right = by_data.get('rvs' + data[2:])
             if right:
                 rows.append((data, right['data'], left, right))
+            tiny = by_data.get('rvt' + data[2:])
+            if tiny:
+                rows.append((data, tiny['data'], left, tiny))
     return rows
 
 
@@ -271,13 +274,13 @@ def ratio(numerator, denominator):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Diagnose RecIF scale formatter statistics for RA/RAS/RV/RVS comparisons.'
+        description='Diagnose RecIF scale formatter statistics for RA/RAS/RV/RVS/RVT comparisons.'
     )
     parser.add_argument('--root', default=str(ROOT), help='Path to secommenders-algorithm root.')
     parser.add_argument(
         '--data',
         required=True,
-        help='Comma-separated datasets, e.g. ra1,ras1,ra5,ras5,ra20,ras20.',
+        help='Comma-separated datasets, e.g. rv1,rvs1,rvt1,ra5,ras5.',
     )
     parser.add_argument('--json-output', default=None, help='Optional path to write full JSON summary.')
     args = parser.parse_args()
