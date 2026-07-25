@@ -339,12 +339,29 @@ def dcg(values):
     return total
 
 
-def retrieval_metrics_from_scorer(score_anchor_fn, num_items, relevance, *, topks, max_anchors, rng):
-    anchors = [anchor for anchor, rel in relevance.items() if rel]
-    if max_anchors and len(anchors) > max_anchors:
-        anchors = rng.sample(anchors, max_anchors)
+def retrieval_metrics_from_scorer(
+    score_anchor_fn,
+    num_items,
+    relevance,
+    *,
+    topks,
+    max_anchors,
+    rng,
+    candidate_items=None,
+    anchor_items=None,
+):
+    if anchor_items is None:
+        anchors = [anchor for anchor, rel in relevance.items() if rel]
+        if max_anchors and len(anchors) > max_anchors:
+            anchors = rng.sample(anchors, max_anchors)
+    else:
+        anchors = [int(anchor) for anchor in anchor_items if relevance.get(int(anchor))]
+    if candidate_items is None:
+        candidate_items = np.arange(num_items, dtype=np.int64)
+    else:
+        candidate_items = np.asarray(sorted(candidate_items), dtype=np.int64)
     rows = []
-    max_topk = max(topks)
+    per_item = {int(anchor): {} for anchor in anchors}
     for topk in topks:
         ndcgs = []
         recalls = []
@@ -353,20 +370,29 @@ def retrieval_metrics_from_scorer(score_anchor_fn, num_items, relevance, *, topk
             rel = relevance.get(anchor) or {}
             if not rel:
                 continue
-            scores = score_anchor_fn(anchor).copy()
-            scores[anchor] = -np.inf
-            candidate_count = min(max_topk, num_items - 1)
+            scores = np.asarray(score_anchor_fn(anchor), dtype=np.float32)
+            candidate_mask = candidate_items != anchor
+            candidates = candidate_items[candidate_mask]
+            candidate_scores = scores[candidates]
+            candidate_count = min(topk, len(candidates))
             if candidate_count <= 0:
                 continue
-            nearest = np.argpartition(-scores, candidate_count - 1)[:candidate_count]
-            nearest = nearest[np.argsort(-scores[nearest])][:topk]
+            nearest_positions = np.argpartition(-candidate_scores, candidate_count - 1)[:candidate_count]
+            nearest_positions = nearest_positions[np.argsort(-candidate_scores[nearest_positions])]
+            nearest = candidates[nearest_positions]
             gains = [rel.get(int(item), 0.0) for item in nearest]
             ideal = sorted(rel.values(), reverse=True)[:topk]
             ideal_dcg = dcg(ideal)
-            ndcgs.append(dcg(gains) / ideal_dcg if ideal_dcg > 0 else 0.0)
+            ndcg = dcg(gains) / ideal_dcg if ideal_dcg > 0 else 0.0
             relevant_top = set(sorted(rel, key=rel.get, reverse=True)[:topk])
-            recalls.append(len(set(int(item) for item in nearest) & relevant_top) / max(len(relevant_top), 1))
-            hits.append(1.0 if any(value > 0 for value in gains) else 0.0)
+            recall = len(set(int(item) for item in nearest) & relevant_top) / max(len(relevant_top), 1)
+            hit = 1.0 if any(value > 0 for value in gains) else 0.0
+            ndcgs.append(ndcg)
+            recalls.append(recall)
+            hits.append(hit)
+            per_item[int(anchor)][f'ndcg@{topk}'] = ndcg
+            per_item[int(anchor)][f'recall@{topk}'] = recall
+            per_item[int(anchor)][f'hit_rate@{topk}'] = hit
         rows.append(
             {
                 'topk': topk,
@@ -376,11 +402,53 @@ def retrieval_metrics_from_scorer(score_anchor_fn, num_items, relevance, *, topk
                 'hit_rate': float(np.mean(hits)) if hits else 0.0,
             }
         )
-    return rows
+    return rows, per_item
 
 
 def sid_anchor_similarity(codes, anchor):
-    return np.mean(codes == codes[anchor], axis=1).astype(np.float32)
+    """Score hierarchical SIDs by longest common prefix with the anchor."""
+    matches = codes == codes[anchor]
+    return np.cumprod(matches, axis=1).sum(axis=1).astype(np.float32)
+
+
+def merge_per_item_metrics(target, prefix, metrics):
+    for item_index, values in metrics.items():
+        row = target.setdefault(int(item_index), {})
+        for name, value in values.items():
+            row[f'{prefix}_{name}'] = value
+
+
+def add_quantization_loss_metrics(rows, topks):
+    for row in rows.values():
+        for topk in topks:
+            content_key = f'content_ndcg@{topk}'
+            sid_key = f'sid_ndcg@{topk}'
+            if content_key in row and sid_key in row:
+                row[f'quantization_loss_ndcg@{topk}'] = row[content_key] - row[sid_key]
+
+
+def write_per_item_report(path, item_ids, item_counts, reference_item_counts, rows):
+    records = []
+    for item_index in sorted(rows):
+        records.append(
+            {
+                'item_id': item_ids[item_index],
+                'item_index': item_index,
+                'local_frequency': int(item_counts.get(item_index, 0)),
+                'reference_frequency': int(reference_item_counts.get(item_index, 0)),
+                **rows[item_index],
+            }
+        )
+    frame = pd.DataFrame(records)
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.suffix.lower() == '.json':
+        output_path.write_text(frame.to_json(orient='records', indent=2, force_ascii=False) + '\n')
+    elif output_path.suffix.lower() == '.csv':
+        frame.to_csv(output_path, index=False)
+    else:
+        frame.to_parquet(output_path, index=False)
+    return len(frame)
 
 
 def print_score_report(rows):
@@ -418,6 +486,16 @@ def main():
     parser = argparse.ArgumentParser(description='Analyze whether item content/SID similarity aligns with sequence co-occurrence.')
     parser.add_argument('--data', required=True)
     parser.add_argument('--splits', default='finetune', help='Comma-separated processed splits, e.g. finetune,valid.')
+    parser.add_argument(
+        '--reference-data',
+        default=None,
+        help='Optional full-scale dataset whose behavioral co-occurrence defines relevance, e.g. ras99.',
+    )
+    parser.add_argument(
+        '--reference-splits',
+        default=None,
+        help='Comma-separated splits for --reference-data. Defaults to --splits.',
+    )
     parser.add_argument('--window', type=int, default=10)
     parser.add_argument('--min-item-freq', type=int, default=5)
     parser.add_argument('--max-pairs', type=int, default=2_000_000)
@@ -436,6 +514,11 @@ def main():
     parser.add_argument('--buckets', type=int, default=10)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--json-out', default=None)
+    parser.add_argument(
+        '--per-item-out',
+        default=None,
+        help='Optional per-item transfer-quality output (.parquet, .csv, or .json).',
+    )
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
@@ -452,6 +535,26 @@ def main():
         window=args.window,
         max_pairs=args.max_pairs,
     )
+    local_item_counts = item_counts
+    local_total_events = total_events
+    reference_data = args.reference_data.lower() if args.reference_data else data
+    reference_frames = frames
+    reference_history_col = history_col
+    reference_histories = histories
+    if reference_data != data:
+        reference_split_names = [
+            part.strip()
+            for part in (args.reference_splits or args.splits).split(',')
+            if part.strip()
+        ]
+        _, _, reference_frames, reference_history_col = load_processed(reference_data, reference_split_names)
+        pair_counts, item_counts, total_events, reference_histories = build_cooccurrence(
+            reference_frames,
+            reference_history_col,
+            item_to_index,
+            window=args.window,
+            max_pairs=args.max_pairs,
+        )
     eligible_items = {item for item, count in item_counts.items() if count >= args.min_item_freq}
     pair_counts = Counter(
         {
@@ -471,11 +574,15 @@ def main():
     print_kv(
         [
             ('splits', ','.join(frames.keys())),
+            ('reference_data', reference_data),
+            ('reference_splits', ','.join(reference_frames.keys())),
             ('history_col', history_col),
             ('items', fmt(len(item_ids))),
             ('histories', fmt(histories)),
+            ('reference_histories', fmt(reference_histories)),
             ('window', fmt(args.window)),
-            ('total_item_events', fmt(total_events)),
+            ('local_item_events', fmt(local_total_events)),
+            ('reference_item_events', fmt(total_events)),
             ('cooccurrence_pairs', fmt(len(pair_counts))),
             ('eligible_items', fmt(len(eligible_items))),
             ('positive_sample_pairs', fmt(len(positive_pairs))),
@@ -486,9 +593,14 @@ def main():
     reports = {
         'data': data,
         'splits': list(frames.keys()),
+        'reference_data': reference_data,
+        'reference_splits': list(reference_frames.keys()),
         'window': args.window,
         'item_count': len(item_ids),
         'history_count': histories,
+        'local_item_events': local_total_events,
+        'reference_history_count': reference_histories,
+        'reference_item_events': total_events,
         'total_item_events': total_events,
         'cooccurrence_pair_count': len(pair_counts),
         'eligible_item_count': len(eligible_items),
@@ -496,7 +608,11 @@ def main():
     }
 
     score_rows = []
+    per_item_rows = {}
     relevance = build_anchor_relevance(ppmi)
+    evaluation_anchors = sorted(relevance)
+    if args.max_anchors and len(evaluation_anchors) > args.max_anchors:
+        evaluation_anchors = rng.sample(evaluation_anchors, args.max_anchors)
 
     if args.embedding_model:
         embeddings = load_embedding(data, args.embedding_model, item_ids)
@@ -510,16 +626,19 @@ def main():
             f'embedding:{args.embedding_model} positive-rate by similarity bucket',
             bucket_by_similarity(pos_scores, neg_scores, bins=args.buckets),
         )
-        retrieval_rows = retrieval_metrics_from_scorer(
+        retrieval_rows, retrieval_items = retrieval_metrics_from_scorer(
             lambda anchor: embeddings @ embeddings[anchor],
             len(item_ids),
             relevance,
             topks=topks,
             max_anchors=args.max_anchors,
             rng=rng,
+            candidate_items=eligible_items,
+            anchor_items=evaluation_anchors,
         )
         print_retrieval_report(f'embedding:{args.embedding_model}', retrieval_rows)
         reports['spaces'].setdefault(f'embedding:{args.embedding_model}', {})['retrieval'] = retrieval_rows
+        merge_per_item_metrics(per_item_rows, 'content', retrieval_items)
 
     sid_embedding_model = args.sid_embedding_model or args.embedding_model
     if sid_embedding_model and args.sid_coder:
@@ -537,16 +656,19 @@ def main():
         print_kv([('export_dir', export_dir), ('code_shape', list(codes.shape))])
         print_histogram('SID prefix positive-rate bucket', bucket_by_similarity(pos_prefix, neg_prefix, bins=min(args.buckets, codes.shape[1] + 1)))
         print_histogram('SID hamming positive-rate bucket', bucket_by_similarity(-pos_hamming, -neg_hamming, bins=min(args.buckets, codes.shape[1] + 1)))
-        retrieval_rows = retrieval_metrics_from_scorer(
+        retrieval_rows, retrieval_items = retrieval_metrics_from_scorer(
             lambda anchor: sid_anchor_similarity(codes, anchor),
             len(item_ids),
             relevance,
             topks=topks,
             max_anchors=args.max_anchors,
             rng=rng,
+            candidate_items=eligible_items,
+            anchor_items=evaluation_anchors,
         )
         print_retrieval_report(f'sid:{args.sid_coder}/{args.sid_export}', retrieval_rows)
         reports['spaces'][f'sid:{args.sid_coder}/{args.sid_export}:retrieval'] = retrieval_rows
+        merge_per_item_metrics(per_item_rows, 'sid', retrieval_items)
 
     if score_rows:
         print_score_report(score_rows)
@@ -558,8 +680,18 @@ def main():
         output_path = Path(args.json_out)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(reports, indent=2, ensure_ascii=False) + '\n')
-        print()
-        print(f'wrote summary json to {output_path}')
+        print(f'wrote summary report to {output_path}')
+
+    if args.per_item_out:
+        add_quantization_loss_metrics(per_item_rows, topks)
+        row_count = write_per_item_report(
+            args.per_item_out,
+            item_ids,
+            local_item_counts,
+            item_counts,
+            per_item_rows,
+        )
+        print(f'wrote {row_count:,} per-item transfer-quality rows to {args.per_item_out}')
 
 
 if __name__ == '__main__':

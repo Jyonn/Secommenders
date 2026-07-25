@@ -145,6 +145,32 @@ The script reuses each experiment's persisted successful batch size when availab
 whose `best.pt` checkpoint does not exist, streams trainer progress, and prints every completed
 experiment's bucket table to the terminal.
 
+### SID Transfer Quality
+
+Measure whether content or SID-prefix neighbors recover behavioral co-occurrence
+neighbors. A full-scale dataset can provide the behavioral reference while
+representations and candidates remain restricted to the requested subset:
+
+```bash
+python cooccurrence_analyzer.py \
+  --data ras10 \
+  --reference-data ras99 \
+  --embedding-model llama3 \
+  --sid-coder rqvae \
+  --sid-export coll \
+  --topk 20 \
+  --max-anchors 0 \
+  --json-out reports/ras10_transfer_quality.json \
+  --per-item-out reports/ras10_transfer_quality.parquet
+```
+
+The summary reports content- and SID-neighbor NDCG/Recall against behavioral
+PPMI relevance. SID proximity is the longest common code prefix, matching
+hierarchical decoding. The per-item output includes local/reference frequency,
+content and SID retrieval metrics, and their NDCG difference as quantization
+loss. Omit `--reference-data` to measure alignment against the subset's own
+behavioral evidence.
+
 ### Trained Artifact Registry
 
 `config/trainer.yaml` is the canonical experiment template. It keeps the user-facing schedule arguments small while expanding them into explicit `representation`, `upstreams`, `decoder`, `model`, and `trainer` sections. Signatures are computed from this canonical template, not from user-provided artifact signs.
