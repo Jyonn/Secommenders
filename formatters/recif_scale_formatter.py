@@ -550,10 +550,41 @@ class RecIFVideoSmallScaleFormatter(RecIFSmallScaleFormatter, RecIFVideoScaleFor
 
 
 class RecIFVideoTinyScaleFormatter(RecIFVideoSmallScaleFormatter, abc.ABC):
-    VER = 'v1.0-video-tiny-scale'
+    VER = 'v1.1-video-tiny-scale'
     DEFAULT_N_CORE = 30
     DEFAULT_MIN_LENGTH = 5
     DEFAULT_MAX_LENGTH = 20
+    TINY_USER_SAMPLE_SIZE = 80_000
+    TINY_USER_SAMPLE_SEED = 'RECIF:TINY:USERS:v1'
+
+    def _extra_meta(self):
+        meta = super()._extra_meta()
+        meta.update(
+            {
+                'tiny_user_sample_size': int(self.TINY_USER_SAMPLE_SIZE),
+                'tiny_user_sample_seed': self.TINY_USER_SAMPLE_SEED,
+                'tiny_user_sample_policy': 'stable-shuffle-raw-users-prefix-before-filtering',
+            }
+        )
+        return meta
+
+    def _load_raw_users(self):
+        raw_users = super()._load_raw_users()
+        sample_size = int(self.TINY_USER_SAMPLE_SIZE)
+        if len(raw_users) <= sample_size:
+            pnt(
+                f'RecIF video tiny raw user sample skipped because users={len(raw_users)} '
+                f'<= sample_size={sample_size}'
+            )
+            return raw_users.reset_index(drop=True)
+
+        sampled_indexes = stable_shuffle(range(len(raw_users)), seed=self.TINY_USER_SAMPLE_SEED)[:sample_size]
+        sampled = raw_users.iloc[sampled_indexes].reset_index(drop=True)
+        pnt(
+            f'RecIF video tiny sampled raw users {len(sampled)}/{len(raw_users)} '
+            f'seed={self.TINY_USER_SAMPLE_SEED}'
+        )
+        return sampled
 
     @classmethod
     def _scale_dataset_prefix(cls):
