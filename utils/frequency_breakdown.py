@@ -52,6 +52,7 @@ class FrequencyBreakdownAccumulator:
         self.boundaries = normalize_frequency_boundaries(boundaries)
         self.ks = sorted({int(k) for k in ks})
         self._buckets = {}
+        self._records = []
 
     def _bucket(self, label):
         if label not in self._buckets:
@@ -65,10 +66,17 @@ class FrequencyBreakdownAccumulator:
             }
         return self._buckets[label]
 
-    def add(self, target_uid: int, rank: int | None):
+    def add(self, target_uid: int, rank: int | None, raw_item_id=None):
         target_uid = int(target_uid)
         frequency = int(self.frequencies.get(target_uid, 0))
         label = frequency_bucket(frequency, self.boundaries)
+        self._records.append({
+            'target_uid': target_uid,
+            'raw_item_id': str(raw_item_id) if raw_item_id is not None else None,
+            'frequency': frequency,
+            'frequency_bucket': label,
+            'rank': int(rank) if rank is not None else None,
+        })
         bucket = self._bucket(label)
         bucket['target_count'] += 1
         bucket['target_uids'].add(target_uid)
@@ -126,4 +134,5 @@ class FrequencyBreakdownAccumulator:
             'boundaries': list(self.boundaries),
             'total_test_targets': total_targets,
             'buckets': buckets,
+            'records': list(self._records),
         }

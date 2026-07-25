@@ -63,6 +63,31 @@ def test_breakdown_aggregates_single_target_ranking_metrics():
     assert cold['hr@5'] == 0
     assert cold['hr@10'] == 1
     assert cold['ndcg@10'] == pytest.approx(1 / math.log2(11))
+    assert summary['records'][0] == {
+        'target_uid': 10,
+        'raw_item_id': None,
+        'frequency': 2,
+        'frequency_bucket': '1-5',
+        'rank': 1,
+    }
+
+
+def test_breakdown_records_raw_item_id_for_transfer_quality_join():
+    accumulator = FrequencyBreakdownAccumulator(
+        frequencies={3: 7},
+        boundaries=[0, 5, 20, 100],
+        ks=[10],
+    )
+
+    accumulator.add(target_uid=3, rank=4, raw_item_id='news-42')
+
+    assert accumulator.summary()['records'] == [{
+        'target_uid': 3,
+        'raw_item_id': 'news-42',
+        'frequency': 7,
+        'frequency_bucket': '6-20',
+        'rank': 4,
+    }]
 
 
 def test_empty_buckets_are_preserved_with_null_metrics():

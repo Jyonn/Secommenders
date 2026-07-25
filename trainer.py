@@ -378,7 +378,12 @@ class Trainer:
                             f'got {len(ranking_records)} records for batch size {len(batch)}'
                         )
                     for record in ranking_records:
-                        frequency_accumulator.add(record['target_uid'], record['rank'])
+                        target_uid = int(record['target_uid'])
+                        frequency_accumulator.add(
+                            target_uid,
+                            record['rank'],
+                            raw_item_id=self.compiled.uid_raw_items[target_uid],
+                        )
             if is_train:
                 loss.backward()
                 if should_step:

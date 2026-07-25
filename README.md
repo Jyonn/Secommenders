@@ -143,7 +143,27 @@ python scripts/scheduler_frequency_breakdown.py \
 
 The script reuses each experiment's persisted successful batch size when available, skips plans
 whose `best.pt` checkpoint does not exist, streams trainer progress, and prints every completed
-experiment's bucket table to the terminal.
+experiment's bucket table to the terminal. It also stores per-target raw item
+IDs, frequencies, and ranks, plus a plan-level manifest used by downstream
+slice analysis. Existing analyses with per-target records are reused; older
+bucket-only outputs are regenerated automatically.
+
+After generating per-item transfer quality, join it with all comparable UID/SID
+experiments in the scheduler plan:
+
+```bash
+python scripts/transfer_frequency_analysis.py \
+  --plan config/recif_ads_small_scaling_scheduler.yaml \
+  --transfer-quality 'reports/transfer_quality/{data}.parquet' \
+  --tq-column 'content_ndcg@20' \
+  --metric-k 10 \
+  --output reports/transfer_frequency.csv
+```
+
+The script pairs UID and SID experiments with the same dataset, backbone, and
+history-side semantic additions. It reports macro-averaged UID, SID, and
+SID-minus-UID ranking metrics for every frequency bucket crossed with low/high
+per-item transfer quality.
 
 ### SID Transfer Quality
 

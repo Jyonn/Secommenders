@@ -122,7 +122,7 @@ def build_frequency_args(
     )
     args['frequency_breakdown'] = True
     args['frequency_buckets'] = boundaries
-    args['overwrite'] = 'auto'
+    args['overwrite'] = 'true'
     args['num_gpus'] = 1
     return args
 
@@ -167,6 +167,25 @@ def print_breakdown(name: str, analysis_path: Path):
     print(f'analysis={analysis_path}', flush=True)
 
 
+def write_manifest(path: Path, plan_path: Path, entries: list[dict]):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'plan': str(plan_path),
+        'experiments': entries,
+    }
+    path.write_text(json.dumps(payload, indent=2) + '\n')
+
+
+def has_per_target_records(path: Path):
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+    return isinstance(payload.get('records'), list) and bool(payload['records'])
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Compute target-frequency ranking breakdowns for all trained experiments in a scheduler plan.'
@@ -183,6 +202,7 @@ def main():
     plan, experiments = load_plan_experiments(plan_path)
     effective_batch_size = int(plan.get('effective_batch_size', 64))
     state_by_name, state_path = load_scheduler_state(plan, plan_path)
+    manifest_path = state_path.parent / 'frequency_breakdown_manifest.json'
 
     print(
         f'frequency breakdown plan={plan.get("name") or plan_path.stem} '
@@ -193,6 +213,8 @@ def main():
     completed = 0
     skipped = 0
     failed = 0
+    manifest_entries = []
+    write_manifest(manifest_path, plan_path, manifest_entries)
     for index, experiment in enumerate(experiments, start=1):
         name = experiment['name']
         state_experiment = state_by_name.get(name)
@@ -214,32 +236,43 @@ def main():
         analysis_path = test_run_dir / 'analysis' / 'frequency_breakdown_test.json'
         command = trainer_command_from_args(frequency_args)
         print(f'checkpoint={checkpoint}', flush=True)
-        print(f'command={" ".join(command)}', flush=True)
-        env = os.environ.copy()
-        env.setdefault('PYTHONUNBUFFERED', '1')
-        for key in (
-            'SECOMMENDER_REPORT_URI',
-            'SECOMMENDER_REPORT_AUTH_TOKEN',
-            'SECOMMENDER_REPORT_SESSION',
-            'SECOMMENDER_REPORT_PHASE',
-        ):
-            env.pop(key, None)
-        result = subprocess.run(command, cwd=ROOT, env=env)
-        if result.returncode != 0:
-            failed += 1
-            print(f'failed: trainer exited with code {result.returncode}', flush=True)
-            continue
+        if has_per_target_records(analysis_path):
+            print(f'reuse per-target analysis={analysis_path}', flush=True)
+        else:
+            print(f'command={" ".join(command)}', flush=True)
+            env = os.environ.copy()
+            env.setdefault('PYTHONUNBUFFERED', '1')
+            for key in (
+                'SECOMMENDER_REPORT_URI',
+                'SECOMMENDER_REPORT_AUTH_TOKEN',
+                'SECOMMENDER_REPORT_SESSION',
+                'SECOMMENDER_REPORT_PHASE',
+            ):
+                env.pop(key, None)
+            result = subprocess.run(command, cwd=ROOT, env=env)
+            if result.returncode != 0:
+                failed += 1
+                print(f'failed: trainer exited with code {result.returncode}', flush=True)
+                continue
         if not analysis_path.exists():
             failed += 1
             print(f'failed: analysis was not written to {analysis_path}', flush=True)
             continue
         print_breakdown(name, analysis_path)
+        manifest_entries.append({
+            'name': name,
+            'args': experiment['base_args'],
+            'analysis_path': str(analysis_path),
+            'checkpoint': str(checkpoint),
+        })
+        write_manifest(manifest_path, plan_path, manifest_entries)
         completed += 1
 
     print(
         f'\nfrequency breakdown finished completed={completed} skipped={skipped} failed={failed}',
         flush=True,
     )
+    print(f'manifest={manifest_path}', flush=True)
     if failed:
         raise SystemExit(1)
 
