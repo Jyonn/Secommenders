@@ -134,6 +134,17 @@ context-only item of each trajectory is excluded. The command reads compiled art
 rebuilding or modifying them and writes the breakdown to
 `<test-only-run>/analysis/frequency_breakdown_test.json`.
 
+To run this analysis sequentially for every trained experiment in a scheduler plan:
+
+```bash
+python scripts/scheduler_frequency_breakdown.py \
+  --plan config/mind_scaling_scheduler.yaml
+```
+
+The script reuses each experiment's persisted successful batch size when available, skips plans
+whose `best.pt` checkpoint does not exist, streams trainer progress, and prints every completed
+experiment's bucket table to the terminal.
+
 ### Trained Artifact Registry
 
 `config/trainer.yaml` is the canonical experiment template. It keeps the user-facing schedule arguments small while expanding them into explicit `representation`, `upstreams`, `decoder`, `model`, and `trainer` sections. Signatures are computed from this canonical template, not from user-provided artifact signs.
