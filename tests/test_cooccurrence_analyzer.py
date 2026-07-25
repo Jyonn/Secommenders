@@ -5,6 +5,8 @@ import pytest
 
 from cooccurrence_analyzer import (
     add_quantization_loss_metrics,
+    resolve_batch_output,
+    resolve_references,
     retrieval_metrics_from_scorer,
     sid_anchor_similarity,
 )
@@ -85,3 +87,23 @@ def test_quantization_loss_is_content_minus_sid_ndcg():
     add_quantization_loss_metrics(rows, [20])
 
     assert rows[7]['quantization_loss_ndcg@20'] == pytest.approx(0.15)
+
+
+def test_one_reference_can_be_reused_for_multiple_datasets():
+    assert resolve_references(['ras1', 'ras5', 'ras20'], 'ras99') == [
+        'ras99',
+        'ras99',
+        'ras99',
+    ]
+
+
+def test_reference_list_must_match_dataset_list():
+    with pytest.raises(ValueError):
+        resolve_references(['ras1', 'minds1'], 'ras99,minds99,extra')
+
+
+def test_batch_outputs_are_suffixed_without_template():
+    assert resolve_batch_output('reports/tq.json', 'ras5', True) == 'reports/tq_ras5.json'
+    assert resolve_batch_output('reports/{data}/items.parquet', 'ras5', True) == (
+        'reports/ras5/items.parquet'
+    )

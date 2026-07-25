@@ -171,6 +171,29 @@ content and SID retrieval metrics, and their NDCG difference as quantization
 loss. Omit `--reference-data` to measure alignment against the subset's own
 behavioral evidence.
 
+For a scale comparison, pass all datasets together and use a shared raw-item
+universe. One reference dataset is reused for every scale:
+
+```bash
+python cooccurrence_analyzer.py \
+  --data ras1,ras5,ras10,ras20,ras40,ras80,ras99 \
+  --reference-data ras99 \
+  --common-items \
+  --max-pairs 0 \
+  --embedding-model pretrain-multimodal \
+  --sid-coder rqvae \
+  --sid-export recon \
+  --topk 20 \
+  --max-anchors 0 \
+  --json-out 'reports/transfer_quality/{data}.json' \
+  --per-item-out 'reports/transfer_quality/{data}.parquet'
+```
+
+`--reference-data` also accepts an equally sized list when datasets need
+different references. If an output path omits `{data}`, the analyzer
+automatically appends the dataset name before its extension to prevent
+overwriting another result.
+
 ### Trained Artifact Registry
 
 `config/trainer.yaml` is the canonical experiment template. It keeps the user-facing schedule arguments small while expanding them into explicit `representation`, `upstreams`, `decoder`, `model`, and `trainer` sections. Signatures are computed from this canonical template, not from user-provided artifact signs.

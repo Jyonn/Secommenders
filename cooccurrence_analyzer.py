@@ -482,14 +482,17 @@ def print_retrieval_report(name, rows):
     )
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description='Analyze whether item content/SID similarity aligns with sequence co-occurrence.')
-    parser.add_argument('--data', required=True)
+    parser.add_argument('--data', required=True, help='One dataset or a comma-separated list, e.g. ras1,ras5,ras20.')
     parser.add_argument('--splits', default='finetune', help='Comma-separated processed splits, e.g. finetune,valid.')
     parser.add_argument(
         '--reference-data',
         default=None,
-        help='Optional full-scale dataset whose behavioral co-occurrence defines relevance, e.g. ras99.',
+        help=(
+            'Optional behavioral reference. Pass one dataset for every --data entry, '
+            'or an equally sized comma-separated list.'
+        ),
     )
     parser.add_argument(
         '--reference-splits',
@@ -513,16 +516,69 @@ def main():
     parser.add_argument('--max-anchors', type=int, default=2000)
     parser.add_argument('--buckets', type=int, default=10)
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--json-out', default=None)
+    parser.add_argument(
+        '--common-items',
+        action='store_true',
+        help='Restrict anchors and candidates to raw item ids shared by every --data dataset.',
+    )
+    parser.add_argument(
+        '--json-out',
+        default=None,
+        help='Summary output. For multiple datasets, use {data} or filenames are suffixed automatically.',
+    )
     parser.add_argument(
         '--per-item-out',
         default=None,
-        help='Optional per-item transfer-quality output (.parquet, .csv, or .json).',
+        help=(
+            'Optional per-item output (.parquet, .csv, or .json). For multiple datasets, '
+            'use {data} or filenames are suffixed automatically.'
+        ),
     )
-    args = parser.parse_args()
+    return parser
 
+
+def split_names(value):
+    return [part.strip().lower() for part in str(value).split(',') if part.strip()]
+
+
+def resolve_references(data_names, raw_references):
+    if not raw_references:
+        return list(data_names)
+    references = split_names(raw_references)
+    if len(references) == 1:
+        return references * len(data_names)
+    if len(references) != len(data_names):
+        raise ValueError(
+            f'--reference-data must contain one value or {len(data_names)} values; '
+            f'got {len(references)}'
+        )
+    return references
+
+
+def resolve_batch_output(raw_path, data, multiple):
+    if not raw_path:
+        return None
+    if '{data}' in raw_path:
+        return raw_path.format(data=data)
+    path = Path(raw_path)
+    if not multiple:
+        return str(path)
+    if path.suffix:
+        return str(path.with_name(f'{path.stem}_{data}{path.suffix}'))
+    return str(path / data)
+
+
+def common_processed_item_ids(data_names, split_names_value):
+    shared = None
+    for data in data_names:
+        _, item_ids, _, _ = load_processed(data, split_names_value)
+        current = set(item_ids)
+        shared = current if shared is None else shared & current
+    return shared or set()
+
+
+def run_analysis(args, data, reference_data, *, common_item_ids=None, json_out=None, per_item_out=None):
     rng = random.Random(args.seed)
-    data = args.data.lower()
     split_names = [part.strip() for part in args.splits.split(',') if part.strip()]
     topks = [int(part.strip()) for part in args.topk.split(',') if part.strip()]
 
@@ -537,7 +593,6 @@ def main():
     )
     local_item_counts = item_counts
     local_total_events = total_events
-    reference_data = args.reference_data.lower() if args.reference_data else data
     reference_frames = frames
     reference_history_col = history_col
     reference_histories = histories
@@ -555,7 +610,27 @@ def main():
             window=args.window,
             max_pairs=args.max_pairs,
         )
+    if common_item_ids is not None:
+        behavior_item_to_index = {
+            item_id: item_to_index[item_id]
+            for item_id in common_item_ids
+            if item_id in item_to_index
+        }
+        pair_counts, item_counts, total_events, reference_histories = build_cooccurrence(
+            reference_frames,
+            reference_history_col,
+            behavior_item_to_index,
+            window=args.window,
+            max_pairs=args.max_pairs,
+        )
     eligible_items = {item for item, count in item_counts.items() if count >= args.min_item_freq}
+    if common_item_ids is not None:
+        common_indices = {
+            item_to_index[item_id]
+            for item_id in common_item_ids
+            if item_id in item_to_index
+        }
+        eligible_items &= common_indices
     pair_counts = Counter(
         {
             pair: count for pair, count in pair_counts.items()
@@ -585,6 +660,7 @@ def main():
             ('reference_item_events', fmt(total_events)),
             ('cooccurrence_pairs', fmt(len(pair_counts))),
             ('eligible_items', fmt(len(eligible_items))),
+            ('common_item_scope', fmt(len(common_item_ids)) if common_item_ids is not None else 'disabled'),
             ('positive_sample_pairs', fmt(len(positive_pairs))),
             ('negative_sample_pairs', fmt(len(negative_pairs))),
         ]
@@ -604,6 +680,7 @@ def main():
         'total_item_events': total_events,
         'cooccurrence_pair_count': len(pair_counts),
         'eligible_item_count': len(eligible_items),
+        'common_item_count': len(common_item_ids) if common_item_ids is not None else None,
         'spaces': {},
     }
 
@@ -676,22 +753,54 @@ def main():
         print_section('no representation spaces requested')
         print('  pass --embedding-model and/or --sid-coder')
 
-    if args.json_out:
-        output_path = Path(args.json_out)
+    if json_out:
+        output_path = Path(json_out)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(reports, indent=2, ensure_ascii=False) + '\n')
         print(f'wrote summary report to {output_path}')
 
-    if args.per_item_out:
+    if per_item_out:
         add_quantization_loss_metrics(per_item_rows, topks)
         row_count = write_per_item_report(
-            args.per_item_out,
+            per_item_out,
             item_ids,
             local_item_counts,
             item_counts,
             per_item_rows,
         )
-        print(f'wrote {row_count:,} per-item transfer-quality rows to {args.per_item_out}')
+        print(f'wrote {row_count:,} per-item transfer-quality rows to {per_item_out}')
+    return reports
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    data_names = split_names(args.data)
+    if not data_names:
+        parser.error('--data must contain at least one dataset')
+    try:
+        reference_names = resolve_references(data_names, args.reference_data)
+    except ValueError as error:
+        parser.error(str(error))
+
+    processed_splits = [part.strip() for part in args.splits.split(',') if part.strip()]
+    common_item_ids = None
+    if args.common_items:
+        common_item_ids = common_processed_item_ids(data_names, processed_splits)
+        if not common_item_ids:
+            parser.error('--common-items found no raw item ids shared by all requested datasets')
+        print(f'common item universe across {len(data_names)} datasets: {len(common_item_ids):,}')
+
+    multiple = len(data_names) > 1
+    for data, reference_data in zip(data_names, reference_names):
+        run_analysis(
+            args,
+            data,
+            reference_data,
+            common_item_ids=common_item_ids,
+            json_out=resolve_batch_output(args.json_out, data, multiple),
+            per_item_out=resolve_batch_output(args.per_item_out, data, multiple),
+        )
 
 
 if __name__ == '__main__':
