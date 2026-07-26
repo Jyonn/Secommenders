@@ -128,7 +128,47 @@ def pair_experiments(entries):
     return pairs
 
 
-def summarize_pair(uid_frame, sid_frame, transfer, *, tq_column, k):
+def balanced_tie_preserving_threshold(values):
+    """Choose the most balanced binary split without separating equal values."""
+    counts = values.value_counts().sort_index()
+    if len(counts) < 2:
+        return None
+    cumulative = counts.cumsum()
+    total = int(counts.sum())
+    candidates = cumulative.iloc[:-1]
+    split_position = (candidates - (total - candidates)).abs().argmin()
+    return float(counts.index[split_position])
+
+
+def assign_transfer_quality(joined, *, tq_column, tq_split):
+    joined = joined.copy()
+    if tq_split == 'global':
+        threshold = float(joined[tq_column].median())
+        joined['tq_threshold'] = threshold
+    elif tq_split == 'within-bucket':
+        thresholds = joined.groupby('frequency_bucket', sort=False)[tq_column].transform(
+            balanced_tie_preserving_threshold
+        )
+        joined['tq_threshold'] = thresholds
+    else:
+        raise ValueError(f'unsupported transfer-quality split: {tq_split!r}')
+
+    joined = joined.dropna(subset=['tq_threshold']).copy()
+    joined['transfer_quality'] = (
+        joined[tq_column] > joined['tq_threshold']
+    ).map({True: 'high', False: 'low'})
+    return joined
+
+
+def summarize_pair(
+    uid_frame,
+    sid_frame,
+    transfer,
+    *,
+    tq_column,
+    k,
+    tq_split='within-bucket',
+):
     joined = uid_frame.merge(
         sid_frame,
         on=['item_id', 'frequency', 'frequency_bucket'],
@@ -142,9 +182,10 @@ def summarize_pair(uid_frame, sid_frame, transfer, *, tq_column, k):
     joined = joined.dropna(subset=[tq_column]).copy()
     if joined.empty:
         return joined, pd.DataFrame()
-    threshold = float(joined[tq_column].median())
-    joined['transfer_quality'] = joined[tq_column].map(
-        lambda value: 'low' if float(value) <= threshold else 'high'
+    joined = assign_transfer_quality(
+        joined,
+        tq_column=tq_column,
+        tq_split=tq_split,
     )
     metric_names = [f'hr@{k}', f'ndcg@{k}', 'mrr']
     rows = []
@@ -157,7 +198,8 @@ def summarize_pair(uid_frame, sid_frame, transfer, *, tq_column, k):
             'transfer_quality': transfer_quality,
             'item_count': len(group),
             'tq_mean': float(group[tq_column].mean()),
-            'tq_median_threshold': threshold,
+            'tq_threshold': float(group['tq_threshold'].iloc[0]),
+            'tq_split': tq_split,
         }
         for metric in metric_names:
             uid_value = float(group[f'{metric}_uid'].mean())
@@ -179,6 +221,7 @@ def print_summary(label, summary, k):
         'transfer_quality',
         'item_count',
         'tq_mean',
+        'tq_threshold',
         f'uid_hr@{k}',
         f'sid_hr@{k}',
         f'delta_hr@{k}',
@@ -210,6 +253,16 @@ def main():
         help='Per-item transfer output path or template containing {data}.',
     )
     parser.add_argument('--tq-column', default='content_ndcg@20')
+    parser.add_argument(
+        '--tq-split',
+        choices=['within-bucket', 'global'],
+        default='within-bucket',
+        help=(
+            'How to form high/low Transfer Quality groups. The default chooses '
+            'a balanced, tie-preserving threshold separately within each '
+            'frequency bucket; global reproduces the legacy whole-pair median.'
+        ),
+    )
     parser.add_argument('--metric-k', type=int, default=10)
     parser.add_argument('--output', default=None, help='Optional combined CSV output.')
     args = parser.parse_args()
@@ -217,7 +270,10 @@ def main():
     plan_path = Path(args.plan).resolve()
     manifest, manifest_path = load_manifest(plan_path)
     pairs = pair_experiments(manifest.get('experiments') or [])
-    print(f'manifest={manifest_path} comparable_pairs={len(pairs)}')
+    print(
+        f'manifest={manifest_path} comparable_pairs={len(pairs)} '
+        f'tq_split={args.tq_split}'
+    )
     all_summaries = []
     transfer_cache = {}
     for key, uid_entry, sid_entry in pairs:
@@ -239,6 +295,7 @@ def main():
             transfer,
             tq_column=args.tq_column,
             k=args.metric_k,
+            tq_split=args.tq_split,
         )
         label = (
             f'data={data} model={model} addons={"+".join(addons) or "none"} '
