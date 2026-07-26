@@ -138,7 +138,8 @@ To run this analysis sequentially for every trained experiment in a scheduler pl
 
 ```bash
 python scripts/scheduler_frequency_breakdown.py \
-  --plan config/mind_scaling_scheduler.yaml
+  --plan config/mind_scaling_scheduler.yaml \
+  --batch-size-cap 4
 ```
 
 The script reuses each experiment's persisted successful batch size when available, skips plans
@@ -146,7 +147,9 @@ whose `best.pt` checkpoint does not exist, streams trainer progress, and prints 
 experiment's bucket table to the terminal. It also stores per-target raw item
 IDs, frequencies, and ranks, plus a plan-level manifest used by downstream
 slice analysis. Existing analyses with per-target records are reused; older
-bucket-only outputs are regenerated automatically.
+bucket-only outputs are regenerated automatically. `--batch-size-cap` applies
+only to these test-only runs and is useful when SID decoding needs more memory
+than training.
 
 After generating per-item transfer quality, join it with all comparable UID/SID
 experiments in the scheduler plan:

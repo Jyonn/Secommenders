@@ -20,6 +20,29 @@ def test_choose_batch_size_uses_divisor_of_effective_batch():
     assert choose_batch_size(experiment, None, 64) == 8
 
 
+def test_analysis_batch_cap_overrides_larger_persisted_batch():
+    experiment = {'batch_size_cap': 32}
+    state_experiment = {'batch_size': 16}
+
+    assert choose_batch_size(
+        experiment,
+        state_experiment,
+        64,
+        batch_size_cap=4,
+    ) == 4
+
+
+def test_analysis_batch_cap_still_uses_effective_batch_divisor():
+    experiment = {'batch_size_cap': 32}
+
+    assert choose_batch_size(
+        experiment,
+        None,
+        60,
+        batch_size_cap=8,
+    ) == 4
+
+
 def test_load_plan_supports_args_and_commands(tmp_path):
     plan_path = tmp_path / 'plan.yaml'
     plan_path.write_text(

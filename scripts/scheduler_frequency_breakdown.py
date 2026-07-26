@@ -69,14 +69,24 @@ def load_scheduler_state(plan: dict, plan_path: Path):
     return by_name, state_path
 
 
-def choose_batch_size(experiment: dict, state_experiment: dict | None, effective_batch_size: int):
+def choose_batch_size(
+    experiment: dict,
+    state_experiment: dict | None,
+    effective_batch_size: int,
+    batch_size_cap: int | None = None,
+):
+    batch_cap = min(int(experiment.get('batch_size_cap') or effective_batch_size), effective_batch_size)
+    if batch_size_cap is not None:
+        batch_cap = min(batch_cap, int(batch_size_cap))
     persisted_batch_size = (state_experiment or {}).get('batch_size')
     if persisted_batch_size is not None:
         persisted_batch_size = int(persisted_batch_size)
-        if persisted_batch_size > 0 and effective_batch_size % persisted_batch_size == 0:
+        if (
+            0 < persisted_batch_size <= batch_cap
+            and effective_batch_size % persisted_batch_size == 0
+        ):
             return persisted_batch_size
 
-    batch_cap = min(int(experiment.get('batch_size_cap') or effective_batch_size), effective_batch_size)
     for candidate in BATCH_LADDER:
         if candidate <= batch_cap and effective_batch_size % candidate == 0:
             return candidate
@@ -111,8 +121,14 @@ def build_frequency_args(
     effective_batch_size: int,
     checkpoint: Path,
     boundaries: str,
+    batch_size_cap: int | None = None,
 ):
-    batch_size = choose_batch_size(experiment, state_experiment, effective_batch_size)
+    batch_size = choose_batch_size(
+        experiment,
+        state_experiment,
+        effective_batch_size,
+        batch_size_cap=batch_size_cap,
+    )
     args = build_args_for_phase(
         experiment['base_args'],
         batch_size=batch_size,
@@ -196,7 +212,15 @@ def main():
         default='0,5,20,100',
         help='Absolute finetune target-frequency boundaries (default: 0,5,20,100).',
     )
+    parser.add_argument(
+        '--batch-size-cap',
+        type=int,
+        default=None,
+        help='Maximum test-only batch size; completed per-target analyses are still reused.',
+    )
     args = parser.parse_args()
+    if args.batch_size_cap is not None and args.batch_size_cap <= 0:
+        parser.error('--batch-size-cap must be positive')
 
     plan_path = Path(args.plan).resolve()
     plan, experiments = load_plan_experiments(plan_path)
@@ -206,7 +230,8 @@ def main():
 
     print(
         f'frequency breakdown plan={plan.get("name") or plan_path.stem} '
-        f'experiments={len(experiments)} state={state_path}',
+        f'experiments={len(experiments)} state={state_path} '
+        f'batch_size_cap={args.batch_size_cap or "plan/default"}',
         flush=True,
     )
 
@@ -231,6 +256,7 @@ def main():
             effective_batch_size=effective_batch_size,
             checkpoint=checkpoint,
             boundaries=args.frequency_buckets,
+            batch_size_cap=args.batch_size_cap,
         )
         test_run_dir = run_dir_for_args(frequency_args)
         analysis_path = test_run_dir / 'analysis' / 'frequency_breakdown_test.json'
