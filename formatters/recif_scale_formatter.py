@@ -550,11 +550,11 @@ class RecIFVideoSmallScaleFormatter(RecIFSmallScaleFormatter, RecIFVideoScaleFor
 
 
 class RecIFVideoTinyScaleFormatter(RecIFVideoSmallScaleFormatter, abc.ABC):
-    VER = 'v1.1-video-tiny-scale'
-    DEFAULT_N_CORE = 30
+    VER = 'v1.2-video-tiny-scale'
+    DEFAULT_N_CORE = 20
     DEFAULT_MIN_LENGTH = 5
     DEFAULT_MAX_LENGTH = 20
-    TINY_USER_SAMPLE_SIZE = 80_000
+    TINY_USER_SAMPLE_SIZE = 20_000
     TINY_USER_SAMPLE_SEED = 'RECIF:TINY:USERS:v1'
 
     def _extra_meta(self):
