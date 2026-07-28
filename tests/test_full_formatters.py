@@ -16,7 +16,11 @@ def test_full_formatters_are_registered():
     assert formatters['rvf'] is RVFFormatter
     assert MINDFFormatter.USE_ALL_USERS_IN_PROCESSOR
     assert MINDFFormatter.SPLIT_RATIO == 0.997
-    assert not RVFFormatter.PROVIDES_TEST_SET
+    assert RAFFormatter.PROVIDES_TEST_SET
+    assert RVFFormatter.PROVIDES_TEST_SET
+    assert RAFFormatter.FULL_TEST_RATIO == 0.003
+    assert RVFFormatter.FULL_TEST_RATIO == 0.003
+    assert RAFFormatter.MULTI_ITEM_COL is None
 
 
 def test_mindf_keeps_latest_user_history_and_drops_unused_items(monkeypatch):
@@ -89,8 +93,8 @@ def test_raf_disables_ncore_and_keeps_latest_history(monkeypatch):
     long_history = list(range(300))
     raw_users = pd.DataFrame(
         {
-            'uid': ['u1', 'u2'],
-            'history': [long_history, [999]],
+            'uid': ['u1', 'u2', 'u3'],
+            'history': [long_history, [999], [0, 1, 2, 3, 4]],
         }
     )
 
@@ -110,15 +114,21 @@ def test_raf_disables_ncore_and_keeps_latest_history(monkeypatch):
     formatter = RAFFormatter(data_dir='unused')
     formatted_items = formatter.load_items()
     formatted_users = formatter.load_users()
+    formatted_test_users = formatter.load_test_users()
 
     assert formatter.max_length == 256
     assert formatter.min_length == 5
     assert len(formatted_users) == 1
-    assert formatted_users.iloc[0]['history'] == list(range(44, 300))
+    assert len(formatted_test_users) == 1
+    all_histories = formatted_users['history'].tolist() + formatted_test_users['history'].tolist()
+    assert list(range(44, 300)) in all_histories
+    assert [0, 1, 2, 3, 4] in all_histories
     assert 999 not in set(formatted_items['pid'])
     assert formatter._extra_stats()['item_count_before'] == 301
     assert formatter._extra_stats()['item_count_after'] == 256
-    assert formatter._extra_stats()['interaction_count_after'] == 256
+    assert formatter._extra_stats()['interaction_count_after'] == 261
+    assert formatter._extra_stats()['full_train_user_count'] == 1
+    assert formatter._extra_stats()['full_test_user_count'] == 1
     assert formatter._extra_stats()['user_sequence_length_before']['summary']['max'] == 300
     assert formatter._extra_stats()['user_sequence_length_after']['summary']['max'] == 256
 

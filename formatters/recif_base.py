@@ -10,6 +10,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from formatters.base_formatter import BaseFormatter
+from utils.stable_random import stable_shuffle
 
 
 class RecIFBaseFormatter(BaseFormatter):
@@ -288,7 +289,16 @@ class RecIFBaseFormatter(BaseFormatter):
 
 
 class RecIFFullFormatterMixin:
-    VER = 'v1.1-full'
+    VER = 'v1.2-full'
+    PROVIDES_TEST_SET = True
+    MULTI_ITEM_COL = None
+    USE_ALL_USERS_IN_PROCESSOR = True
+    SPLIT_RATIO = 0.9
+
+    FULL_TEST_RATIO = 0.003
+    FULL_SHUFFLE_SEED = 'RECIF'
+    FULL_SHUFFLE_VERSION = 'v1'
+
     FILTER_ROUNDS = 0
     DEFAULT_N_CORE = 1
     DEFAULT_MIN_LENGTH = 5
@@ -297,6 +307,7 @@ class RecIFFullFormatterMixin:
     def __init__(self, data_dir=None):
         super().__init__(data_dir=data_dir)
         self._full_stats: dict = {}
+        self._filtered_test_users: pd.DataFrame | None = None
 
     def _extra_meta(self):
         return {
@@ -305,8 +316,26 @@ class RecIFFullFormatterMixin:
             'max_history_length': int(self.max_length),
             'item_filter_policy': 'no-n-core',
             'history_policy': 'latest-items',
-            'filter_pipeline': ['caption-exists-once', 'latest-256', 'min-length-5'],
+            'full_test_ratio': float(self.FULL_TEST_RATIO),
+            'full_shuffle_seed': self.FULL_SHUFFLE_SEED,
+            'full_shuffle_version': self.FULL_SHUFFLE_VERSION,
+            'full_split_policy': 'stable-shuffle-train-tail-test',
+            'filter_pipeline': [
+                'caption-exists-once',
+                'latest-256',
+                'min-length-5',
+                'stable-shuffle-sequences',
+                'tail-test',
+            ],
         }
+
+    def _cache_meta_matches(self, cached_meta):
+        return (
+            super()._cache_meta_matches(cached_meta)
+            and float(cached_meta.get('full_test_ratio', -1.0)) == float(self.FULL_TEST_RATIO)
+            and cached_meta.get('full_shuffle_seed') == self.FULL_SHUFFLE_SEED
+            and cached_meta.get('full_shuffle_version') == self.FULL_SHUFFLE_VERSION
+        )
 
     def _extra_stats(self):
         return dict(self._full_stats)
@@ -346,6 +375,17 @@ class RecIFFullFormatterMixin:
         final_item_ids = self._history_item_set(users)
         items = items[items[self.IID_COL].isin(final_item_ids)].reset_index(drop=True)
 
+        users = pd.DataFrame(stable_shuffle(users.to_dict('records'), seed=self.FULL_SHUFFLE_SEED))
+        test_start = int(len(users) * (1.0 - self.FULL_TEST_RATIO))
+        if len(users) > 1:
+            test_start = min(max(test_start, 1), len(users) - 1)
+        train_users = users.iloc[:test_start].reset_index(drop=True)
+        test_users = users.iloc[test_start:].reset_index(drop=True)
+        if train_users.empty or test_users.empty:
+            raise ValueError(
+                f'RecIF {self.DOMAIN} full split requires at least two filtered users; got {len(users)}'
+            )
+
         interaction_count_after = int(users[self.HIS_COL].map(len).sum())
         sequence_lengths_after = self._history_length_stats(users[self.HIS_COL].tolist())
         self._full_stats = {
@@ -353,6 +393,9 @@ class RecIFFullFormatterMixin:
             'min_history_length_limit': int(self.min_length),
             'max_history_length_limit': int(self.max_length),
             'item_filter_policy': 'no-n-core; keep items observed in final user histories',
+            'full_test_ratio': float(self.FULL_TEST_RATIO),
+            'full_train_user_count': int(len(train_users)),
+            'full_test_user_count': int(len(test_users)),
             'caption_item_count': int(len(caption_pid_set)),
             'item_count_before': item_count_before,
             'item_count_after': int(len(items)),
@@ -369,7 +412,8 @@ class RecIFFullFormatterMixin:
         }
 
         self._filtered_items = items.sort_values(self.IID_COL).reset_index(drop=True)
-        self._filtered_users = users.reset_index(drop=True)
+        self._filtered_users = train_users
+        self._filtered_test_users = test_users
 
         pnt(
             f'RecIF {self.DOMAIN} full count transition: items {item_count_before}->{len(items)} '
@@ -380,5 +424,10 @@ class RecIFFullFormatterMixin:
         self._print_history_length_stats(f'RecIF {self.DOMAIN} full after', sequence_lengths_after)
         pnt(
             f'RecIF {self.DOMAIN} full formatting complete with items={len(self._filtered_items)} '
-            f'users={len(self._filtered_users)} interactions={interaction_count_after}'
+            f'train_users={len(self._filtered_users)} test_users={len(self._filtered_test_users)} '
+            f'interactions={interaction_count_after}'
         )
+
+    def load_test_users(self) -> pd.DataFrame:
+        self._run_filter_pipeline()
+        return cast(pd.DataFrame, self._filtered_test_users)
