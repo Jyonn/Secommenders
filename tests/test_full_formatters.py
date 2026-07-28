@@ -15,7 +15,9 @@ def test_full_formatters_are_registered():
     assert formatters['raf'] is RAFFormatter
     assert formatters['rvf'] is RVFFormatter
     assert MINDFFormatter.USE_ALL_USERS_IN_PROCESSOR
-    assert MINDFFormatter.SPLIT_RATIO == 0.997
+    assert MINDFFormatter.PROVIDES_TEST_SET
+    assert MINDFFormatter.SPLIT_RATIO == 99.0 / 99.5
+    assert MINDFFormatter.FULL_TEST_RATIO == 0.005
     assert RAFFormatter.PROVIDES_TEST_SET
     assert RVFFormatter.PROVIDES_TEST_SET
     assert RAFFormatter.FULL_TEST_RATIO == 0.005
@@ -62,6 +64,11 @@ def test_mindf_keeps_latest_user_history_and_drops_unused_items(monkeypatch):
                 'time': '2026-01-04',
                 'history': 'n1 n2 n3 n4',
             },
+            {
+                'uid': 'u4',
+                'time': '2026-01-05',
+                'history': 'n0 n1 n2 n3 n4',
+            },
         ]
     )
 
@@ -71,24 +78,31 @@ def test_mindf_keeps_latest_user_history_and_drops_unused_items(monkeypatch):
     formatter = MINDFFormatter(data_dir='unused')
     formatted_items = formatter.load_items()
     formatted_users = formatter.load_users()
+    formatted_test_users = formatter.load_test_users()
 
     assert len(formatted_users) == 1
-    assert formatted_users.iloc[0]['history'] == [f'n{index}' for index in range(44, 300)]
-    assert 'u3' not in set(formatted_users['uid'])
-    assert set(formatted_items['nid']) == set(formatted_users.iloc[0]['history'])
+    assert len(formatted_test_users) == 1
+    all_users = pd.concat([formatted_users, formatted_test_users], ignore_index=True)
+    assert [f'n{index}' for index in range(44, 300)] in all_users['history'].tolist()
+    assert 'u3' not in set(all_users['uid'])
+    assert set(formatted_items['nid']) == {
+        item for history in all_users['history'].tolist() for item in history
+    }
     assert formatter._extra_stats()['item_count_before'] == 306
-    assert formatter._extra_stats()['item_count_after'] == 256
+    assert formatter._extra_stats()['item_count_after'] == 261
     assert formatter._extra_stats()['min_history_length_limit'] == 5
-    assert formatter._extra_stats()['user_count_before'] == 3
-    assert formatter._extra_stats()['user_count_after'] == 1
-    assert formatter._extra_stats()['interaction_count_after'] == 256
-    assert formatter._extra_stats()['user_sequence_length_before']['summary']['count'] == 5
+    assert formatter._extra_stats()['user_count_before'] == 4
+    assert formatter._extra_stats()['user_count_after'] == 2
+    assert formatter._extra_stats()['interaction_count_after'] == 261
+    assert formatter._extra_stats()['full_train_user_count'] == 1
+    assert formatter._extra_stats()['full_test_user_count'] == 1
+    assert formatter._extra_stats()['user_sequence_length_before']['summary']['count'] == 6
     assert formatter._extra_stats()['user_sequence_length_after']['summary']['max'] == 256
     diagnostics = formatter._extra_stats()['filter_diagnostics']
-    assert diagnostics['raw_behavior_rows']['rows'] == 5
-    assert diagnostics['after_item_align_and_latest_256']['rows'] == 5
-    assert diagnostics['after_latest_per_user']['rows'] == 3
-    assert diagnostics['after_min_length_5']['rows'] == 1
+    assert diagnostics['raw_behavior_rows']['rows'] == 6
+    assert diagnostics['after_item_align_and_latest_256']['rows'] == 6
+    assert diagnostics['after_latest_per_user']['rows'] == 4
+    assert diagnostics['after_min_length_5']['rows'] == 2
 
 
 def test_raf_disables_ncore_and_keeps_latest_history(monkeypatch):

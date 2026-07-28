@@ -5,6 +5,7 @@ import pandas as pd
 from pigmento import pnt
 
 from formatters.base_formatter import BaseFormatter
+from utils.stable_random import stable_shuffle
 
 
 class MINDFormatter(BaseFormatter):
@@ -56,9 +57,14 @@ class MINDFormatter(BaseFormatter):
 
 
 class MINDFFormatter(MINDFormatter):
-    VER = 'v1.1-full'
+    VER = 'v1.2-full'
+    PROVIDES_TEST_SET = True
+    MULTI_ITEM_COL = None
     USE_ALL_USERS_IN_PROCESSOR = True
-    SPLIT_RATIO = 0.997
+    SPLIT_RATIO = 99.0 / 99.5
+    FULL_TEST_RATIO = 0.005
+    FULL_SHUFFLE_SEED = 'MIND'
+    FULL_SHUFFLE_VERSION = 'v1'
     MIN_HISTORY_LENGTH = 5
     MAX_HISTORY_LENGTH = 256
 
@@ -66,6 +72,7 @@ class MINDFFormatter(MINDFormatter):
         super().__init__(data_dir=data_dir)
         self._full_items: pd.DataFrame | None = None
         self._full_users: pd.DataFrame | None = None
+        self._full_test_users: pd.DataFrame | None = None
         self._full_stats: dict = {}
 
     @staticmethod
@@ -132,6 +139,15 @@ class MINDFFormatter(MINDFormatter):
         items = raw_items[raw_items[self.IID_COL].isin(final_item_ids)]
         items = items.drop_duplicates(subset=[self.IID_COL], keep='first').reset_index(drop=True)
 
+        users = pd.DataFrame(stable_shuffle(users.to_dict('records'), seed=self.FULL_SHUFFLE_SEED))
+        test_start = int(len(users) * (1.0 - self.FULL_TEST_RATIO))
+        if len(users) > 1:
+            test_start = min(max(test_start, 1), len(users) - 1)
+        train_users = users.iloc[:test_start].reset_index(drop=True)
+        test_users = users.iloc[test_start:].reset_index(drop=True)
+        if train_users.empty or test_users.empty:
+            raise ValueError(f'MIND full split requires at least two filtered users; got {len(users)}')
+
         interaction_count_after = int(users[self.HIS_COL].map(len).sum())
         sequence_lengths_after = self._history_length_stats(users[self.HIS_COL].tolist())
         self._full_stats = {
@@ -139,6 +155,9 @@ class MINDFFormatter(MINDFormatter):
             'min_history_length_limit': int(self.MIN_HISTORY_LENGTH),
             'max_history_length_limit': int(self.MAX_HISTORY_LENGTH),
             'item_filter_policy': 'no-n-core; keep items observed in final user histories',
+            'full_test_ratio': float(self.FULL_TEST_RATIO),
+            'full_train_user_count': int(len(train_users)),
+            'full_test_user_count': int(len(test_users)),
             'item_count_before': item_count_before,
             'item_count_after': int(len(items)),
             'item_count_removed': int(item_count_before - len(items)),
@@ -160,7 +179,8 @@ class MINDFFormatter(MINDFormatter):
         }
 
         self._full_items = items
-        self._full_users = users
+        self._full_users = train_users
+        self._full_test_users = test_users
 
         pnt(
             f'MIND full count transition: items {item_count_before}->{len(items)} '
@@ -195,7 +215,8 @@ class MINDFFormatter(MINDFormatter):
         self._print_history_length_stats('MIND full before', sequence_lengths_before)
         self._print_history_length_stats('MIND full after', sequence_lengths_after)
         pnt(
-            f'MIND full formatting complete with items={len(self._full_items)} users={len(self._full_users)} '
+            f'MIND full formatting complete with items={len(self._full_items)} '
+            f'train_users={len(self._full_users)} test_users={len(self._full_test_users)} '
             f'interactions={interaction_count_after}'
         )
 
@@ -206,12 +227,20 @@ class MINDFFormatter(MINDFormatter):
             'max_history_length': int(self.MAX_HISTORY_LENGTH),
             'item_filter_policy': 'no-n-core',
             'history_policy': 'latest-items',
+            'full_test_ratio': float(self.FULL_TEST_RATIO),
+            'full_shuffle_seed': self.FULL_SHUFFLE_SEED,
+            'full_shuffle_version': self.FULL_SHUFFLE_VERSION,
+            'full_split_policy': 'stable-shuffle-train-tail-test',
+            'remaining_users_as_valid': True,
         }
 
     def _cache_meta_matches(self, cached_meta):
         return (
             int(cached_meta.get('min_history_length', -1)) == int(self.MIN_HISTORY_LENGTH)
             and int(cached_meta.get('max_history_length', -1)) == int(self.MAX_HISTORY_LENGTH)
+            and float(cached_meta.get('full_test_ratio', -1.0)) == float(self.FULL_TEST_RATIO)
+            and cached_meta.get('full_shuffle_seed') == self.FULL_SHUFFLE_SEED
+            and cached_meta.get('full_shuffle_version') == self.FULL_SHUFFLE_VERSION
         )
 
     def _extra_stats(self):
@@ -224,3 +253,7 @@ class MINDFFormatter(MINDFormatter):
     def load_users(self) -> pd.DataFrame:
         self._run_full_pipeline()
         return cast(pd.DataFrame, self._full_users)
+
+    def load_test_users(self) -> pd.DataFrame:
+        self._run_full_pipeline()
+        return cast(pd.DataFrame, self._full_test_users)
