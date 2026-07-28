@@ -215,9 +215,11 @@ def _dataset_sort_key(name: str):
         'recifadsall': 20,
         'recifadslargeall': 21,
         'recifadsxlargeall': 22,
+        'raf': 23,
     }
     base_order = {
         'mind': 0,
+        'mindf': 0.5,
         'movielens': 1,
         'goodreads': 2,
         'yelp': 3,

@@ -83,6 +83,9 @@ class BaseFormatter(abc.ABC):
     def _extra_meta(self):
         return {}
 
+    def _extra_stats(self):
+        return {}
+
     def _cache_meta_matches(self, cached_meta):
         return True
 
@@ -125,6 +128,7 @@ class BaseFormatter(abc.ABC):
                     'test_max_history_length': int(test_history_lengths.max()),
                 }
             )
+        stats.update(self._extra_stats())
         stats_path.write_text(json.dumps(stats, indent=2) + '\n')
 
     @staticmethod
