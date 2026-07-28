@@ -206,6 +206,19 @@ class Processor:
     def finetune_set_required(self):
         return self.use_all_users_in_processor or self.num_finetune > 0
 
+    @staticmethod
+    def _parquet_file_looks_valid(path: Path):
+        try:
+            if path.stat().st_size < 8:
+                return False
+            with path.open('rb') as file:
+                head = file.read(4)
+                file.seek(-4, 2)
+                tail = file.read(4)
+            return head == b'PAR1' and tail == b'PAR1'
+        except OSError:
+            return False
+
     @property
     def processed_valid(self):
         paths = self._paths()
@@ -217,6 +230,17 @@ class Processor:
         if self.finetune_set_required:
             required.append(paths['finetune'])
         if not all(path.exists() for path in required):
+            return False
+        corrupt_parquets = [
+            path
+            for path in required
+            if path.suffix == '.parquet' and not self._parquet_file_looks_valid(path)
+        ]
+        if corrupt_parquets:
+            pnt(
+                f'processed {self.get_name()} cache has invalid parquet file(s): '
+                f'{", ".join(str(path) for path in corrupt_parquets)}; rebuilding cache'
+            )
             return False
 
         processed_meta = self._load_meta(paths['meta'])
