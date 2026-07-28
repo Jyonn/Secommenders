@@ -12,7 +12,7 @@ from utils.stable_random import stable_shuffle
 
 
 class Processor:
-    VER = 'v2.5'
+    VER = 'v2.6'
 
     NUM_TEST = 5_000
     NUM_FINETUNE = 40_000
@@ -38,6 +38,7 @@ class Processor:
         self.multi_item_col: Optional[str] = None
         self.use_all_users_in_processor = False
         self.split_ratio = 0.9
+        self.remaining_users_as_valid = False
         self.user_order_seed: Optional[str] = None
 
         self.items: Optional[pd.DataFrame] = None
@@ -100,6 +101,7 @@ class Processor:
         self.multi_item_col = meta.get('multi_item_col')
         self.use_all_users_in_processor = bool(meta.get('use_all_users_in_processor', False))
         self.split_ratio = float(meta.get('split_ratio', 0.9))
+        self.remaining_users_as_valid = bool(meta.get('remaining_users_as_valid', False))
         self.user_order_seed = str(meta.get('user_order_seed') or f'{self.get_name()}:user-order')
 
     def _load_formatted_meta(self):
@@ -266,6 +268,9 @@ class Processor:
             and counts_match
             and float(processed_meta.get('valid_ratio', -1)) == float(self.VALID_RATIO)
             and str(processed_meta.get('user_order_seed') or '') == str(formatted_meta.get('user_order_seed') or '')
+            and float(processed_meta.get('split_ratio', -1.0)) == float(formatted_meta.get('split_ratio', 0.9))
+            and bool(processed_meta.get('remaining_users_as_valid', False))
+            == bool(formatted_meta.get('remaining_users_as_valid', False))
         )
 
     def load_formatted(self):
@@ -338,6 +343,7 @@ class Processor:
             'multi_item_col': self.multi_item_col,
             'use_all_users_in_processor': bool(self.use_all_users_in_processor),
             'split_ratio': float(self.split_ratio),
+            'remaining_users_as_valid': bool(self.remaining_users_as_valid),
         }
         paths['meta'].write_text(json.dumps(meta, indent=2) + '\n')
 
@@ -392,7 +398,11 @@ class Processor:
             finetune_count = self._resolve_finetune_count_from_ratio(len(ordered_users))
             raw_test_set = ordered_users.iloc[finetune_count:].reset_index(drop=True)
             self.finetune_set = ordered_users.iloc[:finetune_count].reset_index(drop=True)
-            self.valid_set, self.test_set = self._split_valid_from_test(raw_test_set)
+            if self.provides_test_set and self.remaining_users_as_valid:
+                self.valid_set = raw_test_set
+                self.test_set = self.formatted_test_set.reset_index(drop=True)
+            else:
+                self.valid_set, self.test_set = self._split_valid_from_test(raw_test_set)
             if self.provides_test_set:
                 self.test_set = self.formatted_test_set.reset_index(drop=True)
             self.valid_set.to_parquet(paths['valid'], index=False)

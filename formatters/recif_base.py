@@ -289,13 +289,13 @@ class RecIFBaseFormatter(BaseFormatter):
 
 
 class RecIFFullFormatterMixin:
-    VER = 'v1.2-full'
+    VER = 'v1.3-full'
     PROVIDES_TEST_SET = True
     MULTI_ITEM_COL = None
     USE_ALL_USERS_IN_PROCESSOR = True
-    SPLIT_RATIO = 0.9
+    SPLIT_RATIO = 99.0 / 99.5
 
-    FULL_TEST_RATIO = 0.003
+    FULL_TEST_RATIO = 0.005
     FULL_SHUFFLE_SEED = 'RECIF'
     FULL_SHUFFLE_VERSION = 'v1'
 
@@ -320,6 +320,7 @@ class RecIFFullFormatterMixin:
             'full_shuffle_seed': self.FULL_SHUFFLE_SEED,
             'full_shuffle_version': self.FULL_SHUFFLE_VERSION,
             'full_split_policy': 'stable-shuffle-train-tail-test',
+            'remaining_users_as_valid': True,
             'filter_pipeline': [
                 'caption-exists-once',
                 'latest-256',

@@ -18,8 +18,10 @@ def test_full_formatters_are_registered():
     assert MINDFFormatter.SPLIT_RATIO == 0.997
     assert RAFFormatter.PROVIDES_TEST_SET
     assert RVFFormatter.PROVIDES_TEST_SET
-    assert RAFFormatter.FULL_TEST_RATIO == 0.003
-    assert RVFFormatter.FULL_TEST_RATIO == 0.003
+    assert RAFFormatter.FULL_TEST_RATIO == 0.005
+    assert RVFFormatter.FULL_TEST_RATIO == 0.005
+    assert RAFFormatter.SPLIT_RATIO == 99.0 / 99.5
+    assert RVFFormatter.SPLIT_RATIO == 99.0 / 99.5
     assert RAFFormatter.MULTI_ITEM_COL is None
 
 
