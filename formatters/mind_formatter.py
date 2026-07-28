@@ -56,7 +56,8 @@ class MINDFormatter(BaseFormatter):
 
 
 class MINDFFormatter(MINDFormatter):
-    VER = 'v1.0-full'
+    VER = 'v1.1-full'
+    MIN_HISTORY_LENGTH = 5
     MAX_HISTORY_LENGTH = 256
 
     def __init__(self, data_dir=None):
@@ -87,7 +88,10 @@ class MINDFFormatter(MINDFormatter):
         if self._full_items is not None and self._full_users is not None:
             return
 
-        pnt(f'MIND full formatting settings: max_length={self.MAX_HISTORY_LENGTH}, item_n_core=disabled')
+        pnt(
+            f'MIND full formatting settings: min_length={self.MIN_HISTORY_LENGTH}, '
+            f'max_length={self.MAX_HISTORY_LENGTH}, item_n_core=disabled'
+        )
 
         raw_items = self._load_raw_items()
         raw_item_set = set(raw_items[self.IID_COL].dropna().unique())
@@ -105,8 +109,8 @@ class MINDFFormatter(MINDFormatter):
         users[self.HIS_COL] = users[self.HIS_COL].apply(
             lambda history: [item for item in history if item in raw_item_set][-self.MAX_HISTORY_LENGTH :]
         )
-        users = users[users[self.HIS_COL].map(len) > 0].reset_index(drop=True)
         users = self.deduplicate_users(users)
+        users = users[users[self.HIS_COL].map(len) >= self.MIN_HISTORY_LENGTH].reset_index(drop=True)
 
         final_item_ids = set()
         for history in users[self.HIS_COL].tolist():
@@ -119,6 +123,7 @@ class MINDFFormatter(MINDFormatter):
         sequence_lengths_after = self._history_length_stats(users[self.HIS_COL].tolist())
         self._full_stats = {
             'formatter_mode': 'full',
+            'min_history_length_limit': int(self.MIN_HISTORY_LENGTH),
             'max_history_length_limit': int(self.MAX_HISTORY_LENGTH),
             'item_filter_policy': 'no-n-core; keep items observed in final user histories',
             'item_count_before': item_count_before,
@@ -153,13 +158,17 @@ class MINDFFormatter(MINDFormatter):
     def _extra_meta(self):
         return {
             'formatter_mode': 'full',
+            'min_history_length': int(self.MIN_HISTORY_LENGTH),
             'max_history_length': int(self.MAX_HISTORY_LENGTH),
             'item_filter_policy': 'no-n-core',
             'history_policy': 'latest-items',
         }
 
     def _cache_meta_matches(self, cached_meta):
-        return int(cached_meta.get('max_history_length', -1)) == int(self.MAX_HISTORY_LENGTH)
+        return (
+            int(cached_meta.get('min_history_length', -1)) == int(self.MIN_HISTORY_LENGTH)
+            and int(cached_meta.get('max_history_length', -1)) == int(self.MAX_HISTORY_LENGTH)
+        )
 
     def _extra_stats(self):
         return dict(self._full_stats)

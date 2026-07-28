@@ -1,6 +1,6 @@
 import pandas as pd
 
-from formatters.recif_base import RecIFBaseFormatter
+from formatters.recif_base import RecIFBaseFormatter, RecIFFullFormatterMixin
 
 
 class RecIFVideoFormatter(RecIFBaseFormatter):
@@ -49,3 +49,12 @@ class RecIFVideoXLargeAllOfficialFormatter(RecIFVideoXLargeFormatter):
 
     def load_test_users(self) -> pd.DataFrame:
         return self._load_official_test_users()
+
+
+class RVFFormatter(RecIFFullFormatterMixin, RecIFVideoFormatter):
+    USE_ALL_USERS_IN_PROCESSOR = True
+    SPLIT_RATIO = 0.9
+
+    @classmethod
+    def get_seed(cls):
+        return 'rvf'

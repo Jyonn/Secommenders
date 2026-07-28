@@ -2,6 +2,7 @@ import pandas as pd
 
 from formatters.mind_formatter import MINDFFormatter
 from formatters.recif_ads_formatter import RAFFormatter
+from formatters.recif_video_formatter import RVFFormatter
 from utils.class_hub import ClassHub
 
 
@@ -10,6 +11,8 @@ def test_full_formatters_are_registered():
 
     assert formatters['mindf'] is MINDFFormatter
     assert formatters['raf'] is RAFFormatter
+    assert formatters['rvf'] is RVFFormatter
+    assert not RVFFormatter.PROVIDES_TEST_SET
 
 
 def test_mindf_keeps_latest_user_history_and_drops_unused_items(monkeypatch):
@@ -39,6 +42,16 @@ def test_mindf_keeps_latest_user_history_and_drops_unused_items(monkeypatch):
                 'time': '2026-01-03',
                 'history': 'missing',
             },
+            {
+                'uid': 'u3',
+                'time': '2026-01-01',
+                'history': ' '.join(f'n{index}' for index in range(10)),
+            },
+            {
+                'uid': 'u3',
+                'time': '2026-01-04',
+                'history': 'n1 n2 n3 n4',
+            },
         ]
     )
 
@@ -51,13 +64,15 @@ def test_mindf_keeps_latest_user_history_and_drops_unused_items(monkeypatch):
 
     assert len(formatted_users) == 1
     assert formatted_users.iloc[0]['history'] == [f'n{index}' for index in range(44, 300)]
+    assert 'u3' not in set(formatted_users['uid'])
     assert set(formatted_items['nid']) == set(formatted_users.iloc[0]['history'])
     assert formatter._extra_stats()['item_count_before'] == 306
     assert formatter._extra_stats()['item_count_after'] == 256
-    assert formatter._extra_stats()['user_count_before'] == 2
+    assert formatter._extra_stats()['min_history_length_limit'] == 5
+    assert formatter._extra_stats()['user_count_before'] == 3
     assert formatter._extra_stats()['user_count_after'] == 1
     assert formatter._extra_stats()['interaction_count_after'] == 256
-    assert formatter._extra_stats()['user_sequence_length_before']['summary']['count'] == 3
+    assert formatter._extra_stats()['user_sequence_length_before']['summary']['count'] == 5
     assert formatter._extra_stats()['user_sequence_length_after']['summary']['max'] == 256
 
 
@@ -88,12 +103,12 @@ def test_raf_disables_ncore_and_keeps_latest_history(monkeypatch):
     formatted_users = formatter.load_users()
 
     assert formatter.max_length == 256
-    assert len(formatted_users) == 2
+    assert formatter.min_length == 5
+    assert len(formatted_users) == 1
     assert formatted_users.iloc[0]['history'] == list(range(44, 300))
-    assert formatted_users.iloc[1]['history'] == [999]
-    assert 999 in set(formatted_items['pid'])
+    assert 999 not in set(formatted_items['pid'])
     assert formatter._extra_stats()['item_count_before'] == 301
-    assert formatter._extra_stats()['item_count_after'] == 257
-    assert formatter._extra_stats()['interaction_count_after'] == 257
+    assert formatter._extra_stats()['item_count_after'] == 256
+    assert formatter._extra_stats()['interaction_count_after'] == 256
     assert formatter._extra_stats()['user_sequence_length_before']['summary']['max'] == 300
     assert formatter._extra_stats()['user_sequence_length_after']['summary']['max'] == 256

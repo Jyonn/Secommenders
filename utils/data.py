@@ -26,7 +26,7 @@ def get_data_dir(dataset):
 
     if dataset == 'mindf' and 'mind' in DATA_DIRS:
         return DATA_DIRS['mind']
-    if dataset == 'raf' and 'recif' in DATA_DIRS:
+    if dataset in {'raf', 'rvf'} and 'recif' in DATA_DIRS:
         return DATA_DIRS['recif']
     if dataset.startswith('recif') and 'recif' in DATA_DIRS:
         return DATA_DIRS['recif']

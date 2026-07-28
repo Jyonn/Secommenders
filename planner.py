@@ -212,6 +212,7 @@ def _dataset_sort_key(name: str):
         'recifvideolargeall': 14,
         'recifvideoxlargeall': 15,
         'recifvideoxlargeallofficial': 16,
+        'rvf': 17,
         'recifadsall': 20,
         'recifadslargeall': 21,
         'recifadsxlargeall': 22,
