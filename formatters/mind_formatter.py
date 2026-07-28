@@ -99,6 +99,7 @@ class MINDFFormatter(MINDFormatter):
         item_count_before = int(raw_items[self.IID_COL].dropna().nunique())
         user_count_before = int(raw_users[self.UID_COL].dropna().nunique())
         interaction_count_before = int(raw_users[self.HIS_COL].map(len).sum())
+        sequence_lengths_before = self._history_length_stats(raw_users[self.HIS_COL].tolist())
 
         users = raw_users.copy()
         users[self.HIS_COL] = users[self.HIS_COL].apply(
@@ -115,6 +116,7 @@ class MINDFFormatter(MINDFormatter):
         items = items.drop_duplicates(subset=[self.IID_COL], keep='first').reset_index(drop=True)
 
         interaction_count_after = int(users[self.HIS_COL].map(len).sum())
+        sequence_lengths_after = self._history_length_stats(users[self.HIS_COL].tolist())
         self._full_stats = {
             'formatter_mode': 'full',
             'max_history_length_limit': int(self.MAX_HISTORY_LENGTH),
@@ -129,11 +131,20 @@ class MINDFFormatter(MINDFormatter):
             'interaction_count_before': interaction_count_before,
             'interaction_count_after': interaction_count_after,
             'interaction_count_removed': int(interaction_count_before - interaction_count_after),
+            'user_sequence_length_before': sequence_lengths_before,
+            'user_sequence_length_after': sequence_lengths_after,
         }
 
         self._full_items = items
         self._full_users = users
 
+        pnt(
+            f'MIND full count transition: items {item_count_before}->{len(items)} '
+            f'users {user_count_before}->{len(users)} '
+            f'interactions {interaction_count_before}->{interaction_count_after}'
+        )
+        self._print_history_length_stats('MIND full before', sequence_lengths_before)
+        self._print_history_length_stats('MIND full after', sequence_lengths_after)
         pnt(
             f'MIND full formatting complete with items={len(self._full_items)} users={len(self._full_users)} '
             f'interactions={interaction_count_after}'

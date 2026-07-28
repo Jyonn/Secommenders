@@ -104,6 +104,7 @@ class RAFFormatter(RecIFAdsFormatter):
         item_count_before = int(len(self._history_item_set(raw_users)))
         user_count_before = int(raw_users[self.UID_COL].dropna().nunique())
         interaction_count_before = int(sum(len(history) for history in raw_histories))
+        sequence_lengths_before = self._history_length_stats(raw_histories)
 
         caption_pid_set = self._stream_caption_pid_set()
         users = self._apply_allowed_item_filter(raw_users, caption_pid_set, desc='caption-filter')
@@ -119,6 +120,7 @@ class RAFFormatter(RecIFAdsFormatter):
         items = items[items[self.IID_COL].isin(final_item_ids)].reset_index(drop=True)
 
         interaction_count_after = int(users[self.HIS_COL].map(len).sum())
+        sequence_lengths_after = self._history_length_stats(users[self.HIS_COL].tolist())
         self._full_stats = {
             'formatter_mode': 'full',
             'max_history_length_limit': int(self.max_length),
@@ -134,11 +136,20 @@ class RAFFormatter(RecIFAdsFormatter):
             'interaction_count_before': interaction_count_before,
             'interaction_count_after': interaction_count_after,
             'interaction_count_removed': int(interaction_count_before - interaction_count_after),
+            'user_sequence_length_before': sequence_lengths_before,
+            'user_sequence_length_after': sequence_lengths_after,
         }
 
         self._filtered_items = items.sort_values(self.IID_COL).reset_index(drop=True)
         self._filtered_users = users.reset_index(drop=True)
 
+        pnt(
+            f'RecIF {self.DOMAIN} full count transition: items {item_count_before}->{len(items)} '
+            f'users {user_count_before}->{len(users)} '
+            f'interactions {interaction_count_before}->{interaction_count_after}'
+        )
+        self._print_history_length_stats(f'RecIF {self.DOMAIN} full before', sequence_lengths_before)
+        self._print_history_length_stats(f'RecIF {self.DOMAIN} full after', sequence_lengths_after)
         pnt(
             f'RecIF {self.DOMAIN} full formatting complete with items={len(self._filtered_items)} '
             f'users={len(self._filtered_users)} interactions={interaction_count_after}'

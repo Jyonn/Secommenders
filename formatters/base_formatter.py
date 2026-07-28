@@ -11,6 +11,19 @@ from utils.artifact import ArtifactStore
 
 class BaseFormatter(abc.ABC):
     VER = 'v2.5'
+    HISTORY_LENGTH_BUCKETS = (
+        (0, 0),
+        (1, 1),
+        (2, 2),
+        (3, 4),
+        (5, 8),
+        (9, 16),
+        (17, 32),
+        (33, 64),
+        (65, 128),
+        (129, 256),
+        (257, None),
+    )
 
     IID_COL: str
     UID_COL: str
@@ -88,6 +101,85 @@ class BaseFormatter(abc.ABC):
 
     def _cache_meta_matches(self, cached_meta):
         return True
+
+    @classmethod
+    def _history_length_stats(cls, histories):
+        lengths = [
+            len(history) if hasattr(history, '__len__') and not isinstance(history, str) else 0
+            for history in histories
+        ]
+        if not lengths:
+            return {
+                'summary': {
+                    'count': 0,
+                    'min': None,
+                    'mean': None,
+                    'p25': None,
+                    'p50': None,
+                    'p75': None,
+                    'p90': None,
+                    'p95': None,
+                    'p99': None,
+                    'max': None,
+                },
+                'buckets': [],
+            }
+
+        series = pd.Series(lengths, dtype='float64')
+        count = int(len(series))
+        summary = {
+            'count': count,
+            'min': int(series.min()),
+            'mean': float(series.mean()),
+            'p25': float(series.quantile(0.25)),
+            'p50': float(series.quantile(0.50)),
+            'p75': float(series.quantile(0.75)),
+            'p90': float(series.quantile(0.90)),
+            'p95': float(series.quantile(0.95)),
+            'p99': float(series.quantile(0.99)),
+            'max': int(series.max()),
+        }
+
+        buckets = []
+        for lower, upper in cls.HISTORY_LENGTH_BUCKETS:
+            if upper is None:
+                mask = series >= lower
+                label = f'{lower}+'
+            elif lower == upper:
+                mask = series == lower
+                label = str(lower)
+            else:
+                mask = (series >= lower) & (series <= upper)
+                label = f'{lower}-{upper}'
+            bucket_count = int(mask.sum())
+            buckets.append(
+                {
+                    'range': label,
+                    'count': bucket_count,
+                    'ratio': float(bucket_count / count),
+                }
+            )
+
+        return {'summary': summary, 'buckets': buckets}
+
+    @staticmethod
+    def _print_history_length_stats(label: str, stats: dict):
+        summary = stats.get('summary', {})
+        if not summary or not summary.get('count'):
+            pnt(f'{label} history lengths: empty')
+            return
+
+        pnt(
+            f'{label} history lengths: count={summary["count"]} min={summary["min"]} '
+            f'mean={summary["mean"]:.2f} p50={summary["p50"]:.1f} p90={summary["p90"]:.1f} '
+            f'p95={summary["p95"]:.1f} p99={summary["p99"]:.1f} max={summary["max"]}'
+        )
+        bucket_text = ' | '.join(
+            f'{bucket["range"]}:{bucket["count"]}'
+            for bucket in stats.get('buckets', [])
+            if bucket.get('count', 0) > 0
+        )
+        pnt(f'{label} history length buckets: {bucket_text or "empty"}')
 
     def _save_meta(self):
         meta_path = self._paths()['meta']
