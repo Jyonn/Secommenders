@@ -75,6 +75,16 @@ GROUPS = {
         'code_beam_chunk_size': 0,
         'code_collision_loss_weight': 0.1,
     },
+    'hash': {
+        'hash_embedding_model': None,
+        'hash_num_bits': 24,
+        'hash_num_tables': 1,
+        'hash_projection_distribution': 'gaussian',
+        'hash_use_median_thresholds': True,
+        'hash_num_iterations': 50,
+        'hash_normalize_inputs': True,
+        'code_collision_loss_weight': 0.1,
+    },
     'uid': {
         'uid_cluster_embedding_source': 'collaborative',
         'uid_cluster_content_model': None,
@@ -142,6 +152,7 @@ class PlanSelections:
     sid_variants: list[str]
     uid_variants: list[str]
     hash_coders: list[str]
+    seeds: list[int]
     params: dict[str, Any]
 
 
@@ -237,6 +248,13 @@ def _parse_csv(value: str | None):
     if not value:
         return []
     return [part.strip().lower() for part in value.split(',') if part.strip()]
+
+
+def _parse_int_csv(value: str | None, default: list[int] | None = None):
+    values = _parse_csv(value)
+    if not values:
+        return list(default or [])
+    return [int(value) for value in values]
 
 
 def _ensure_color():
@@ -362,12 +380,6 @@ def _wizard_validation_error(step: ChoiceStep, steps: list[ChoiceStep]):
                 _parse_representation_pair(pair)
             except ValueError as exc:
                 return str(exc)
-        selected_by_key = {item.key: item.selected for item in steps}
-        if 'scratch' in selected_by_key.get('models', []):
-            for pair in step.selected:
-                _, history = _parse_representation_pair(pair)
-                if 'text' in history:
-                    return 'scratch model does not support representation pairs containing text.'
     return None
 
 
@@ -538,8 +550,8 @@ def run_choice_wizard(stdscr, steps: list[ChoiceStep]):
     return {step.key: _selected_ordered(step) for step in steps}
 
 
-def edit_parameters(stdscr, params: dict[str, Any]):
-    groups = list(GROUPS)
+def edit_parameters(stdscr, params: dict[str, Any], groups: list[str] | None = None):
+    groups = list(groups or GROUPS)
     group_index = 0
     cursors = {group: 0 for group in groups}
     offsets = {group: 0 for group in groups}
@@ -682,6 +694,10 @@ def _used_views(representation_pairs: list[str]):
     return used
 
 
+def _target_views(representation_pairs: list[str]):
+    return {_parse_representation_pair(pair)[0] for pair in representation_pairs}
+
+
 def _parse_sid_variants(values: list[str]):
     variants = []
     for value in values:
@@ -724,6 +740,7 @@ def _compact_args(params: dict[str, Any]):
         'notificator_name',
         'notificator_token',
         'notificator_bark',
+        'seed',
     }
     defaults = _defaults()
     args = {}
@@ -736,12 +753,113 @@ def _compact_args(params: dict[str, Any]):
     return args
 
 
+def _compact_common_args(params: dict[str, Any]):
+    args = _compact_args(params)
+    view_specific_keys = (
+        _keys_for_group('sid')
+        | _keys_for_group('hash')
+        | _keys_for_group('uid')
+        | {
+            'uid_decoding',
+            'uid_cluster_levels',
+            'uid_cluster_topk',
+            'repr_source_model',
+            'sid_coder',
+            'sid_export',
+            'hash_coder',
+        }
+    )
+    for key in view_specific_keys:
+        args.pop(key, None)
+    return args
+
+
+def _keys_for_group(group: str):
+    return set(GROUPS.get(group, {}))
+
+
+def _compact_args_for_experiment(params: dict[str, Any], *, target: str, history: tuple[str, ...]):
+    args = _compact_args(params)
+    used_views = set(history) | {target}
+
+    if 'sid' not in used_views:
+        for key in _keys_for_group('sid'):
+            args.pop(key, None)
+    elif target != 'sid':
+        for key in ('code_decoding', 'code_beam_width', 'code_beam_chunk_size'):
+            args.pop(key, None)
+
+    if 'hash' not in used_views:
+        for key in _keys_for_group('hash'):
+            args.pop(key, None)
+
+    if target != 'uid':
+        for key in _keys_for_group('uid'):
+            args.pop(key, None)
+        args.pop('uid_decoding', None)
+        args.pop('uid_cluster_levels', None)
+        args.pop('uid_cluster_topk', None)
+    elif str(args.get('uid_decoding', 'flat')).strip().lower() != 'hierarchical':
+        for key in _keys_for_group('uid'):
+            args.pop(key, None)
+        args.pop('uid_cluster_levels', None)
+        args.pop('uid_cluster_topk', None)
+
+    if not any(view in {'sid', 'hash'} for view in used_views):
+        args.pop('code_collision_loss_weight', None)
+    if 'text' not in used_views:
+        args.pop('item_text_max_tokens', None)
+    if len(used_views) <= 1:
+        args.pop('repr_combine', None)
+    return args
+
+
 def _group_pairs_by_target(representation_pairs: list[str]):
     grouped: dict[str, list[tuple[str, ...]]] = {}
     for pair in representation_pairs:
         target, history = _parse_representation_pair(pair)
         grouped.setdefault(target, []).append(history)
     return grouped
+
+
+def _is_scratch_model(model: str):
+    return str(model).strip().lower() in {'scratch', 'scratchlegacy'}
+
+
+def _models_compatible_with_history(models: list[str], history: tuple[str, ...]):
+    if 'text' not in history:
+        return list(models)
+    return [model for model in models if not _is_scratch_model(model)]
+
+
+def _seed_suffix(seed: int, seeds: list[int]):
+    return f'_s{seed}' if len(seeds) > 1 else ''
+
+
+def _history_label(history: tuple[str, ...]):
+    return '+'.join(history)
+
+
+def _editable_groups_for_selection(
+    representation_pairs: list[str],
+    uid_variants: list[str],
+):
+    used_views = _used_views(representation_pairs)
+    target_views = _target_views(representation_pairs)
+    groups = ['schedule', 'trainer', 'representation']
+    if 'sid' in used_views:
+        groups.append('sid')
+    if 'hash' in used_views:
+        groups.append('hash')
+    parsed_uid_variants = _parse_uid_variants(uid_variants or [])
+    uses_hierarchical_uid = any(
+        isinstance(variant, tuple) and variant and variant[0] == 'hierarchical'
+        for variant in parsed_uid_variants
+    )
+    if 'uid' in target_views and uses_hierarchical_uid:
+        groups.append('uid')
+    groups.extend(['model', 'backend', 'notificator'])
+    return groups
 
 
 def build_payload(selection: PlanSelections):
@@ -757,31 +875,51 @@ def build_payload(selection: PlanSelections):
         backend_host_env=params.get('backend_uri_env'),
         backend_auth_env=params.get('backend_auth_env'),
     )
-    schedule.defaults(**_compact_args(params))
+    schedule.defaults(**_compact_common_args(params))
     if params.get('priority') is not None or params.get('batch_size_cap') is not None:
         schedule.plan_defaults(priority=params.get('priority'), batch_size_cap=params.get('batch_size_cap'))
 
-    used_views = _used_views(selection.representation_pairs)
-    source_models = selection.source_models if used_views & {'sid', 'hash', 'embedding'} else None
-    sid_variants = _parse_sid_variants(selection.sid_variants) if 'sid' in used_views else None
-    hash_coders = selection.hash_coders if 'hash' in used_views else None
-    uid_variants = _parse_uid_variants(selection.uid_variants) if any(
-        _parse_representation_pair(pair)[0] == 'uid' for pair in selection.representation_pairs
-    ) else None
-
-    for target, histories in _group_pairs_by_target(selection.representation_pairs).items():
-        schedule.grid(
-            f'{selection.name}_{target}',
-            datasets=selection.datasets,
-            models=selection.models,
-            targets=[target],
-            histories=histories,
-            source_models=source_models,
-            sid_variants=sid_variants,
-            uid_variants=uid_variants,
-            hash_coders=hash_coders,
-        )
+    skipped = []
+    seeds = selection.seeds or [42]
+    generated_studies = 0
+    for pair in selection.representation_pairs:
+        target, history = _parse_representation_pair(pair)
+        used_views = set(history) | {target}
+        models = _models_compatible_with_history(selection.models, history)
+        excluded_models = [model for model in selection.models if model not in models]
+        if excluded_models:
+            skipped.append(f'{pair}: skipped text-incompatible models {", ".join(excluded_models)}')
+        if not models:
+            skipped.append(f'{pair}: no compatible model after excluding scratch text pairs')
+            continue
+        source_models = selection.source_models if used_views & {'sid', 'hash', 'embedding'} else None
+        sid_variants = _parse_sid_variants(selection.sid_variants) if 'sid' in used_views else None
+        hash_coders = selection.hash_coders if 'hash' in used_views else None
+        uid_variants = _parse_uid_variants(selection.uid_variants) if target == 'uid' else None
+        base_args = _compact_args_for_experiment(params, target=target, history=history)
+        for seed in seeds:
+            args = deepcopy(base_args)
+            if int(seed) != 42 or len(seeds) > 1:
+                args['seed'] = int(seed)
+            schedule.grid(
+                f'{selection.name}{_seed_suffix(int(seed), seeds)}',
+                datasets=selection.datasets,
+                models=models,
+                targets=[target],
+                histories=[history],
+                args=args,
+                source_models=source_models,
+                sid_variants=sid_variants,
+                uid_variants=uid_variants,
+                hash_coders=hash_coders,
+            )
+            generated_studies += 1
+    if not generated_studies:
+        detail = '; '.join(skipped) if skipped else 'no representation pairs selected'
+        raise ValueError(f'No valid planner experiments generated: {detail}')
     payload = schedule.to_dict(path=selection.output)
+    if skipped:
+        payload['planner_warnings'] = skipped
 
     notificator = {
         'name': params.get('notificator_name'),
@@ -815,6 +953,7 @@ def preview_payload(stdscr, selection: PlanSelections):
             f'name: {payload["name"]}',
             f'output: {selection.output}',
             f'experiments: {len(payload["experiments"])}',
+            f'seeds: {", ".join(str(seed) for seed in selection.seeds)}',
             f'pairs: {", ".join(selection.representation_pairs)}',
             f'backend: {"yes" if payload.get("backend") else "no"}',
             f'notificator: {"yes" if payload.get("notificator") else "no"}',
@@ -825,6 +964,10 @@ def preview_payload(stdscr, selection: PlanSelections):
             lines.append(f'  - {exp["name"]}')
         if len(payload['experiments']) > 8:
             lines.append(f'  ... {len(payload["experiments"]) - 8} more')
+        if payload.get('planner_warnings'):
+            lines.extend(['', 'warnings:'])
+            for warning in payload['planner_warnings'][:4]:
+                lines.append(f'  - {warning}')
         lines.extend(['', 'press any key'])
         attr = _attr(2)
     except Exception as exc:
@@ -845,7 +988,7 @@ def _dynamic_steps(args, model_choices: list[str]):
             title='Datasets',
             choices=_available_dataset_choices(),
             selected=_parse_csv(args.datasets),
-            hint='Choose one or more datasets. Type "ra" or "rvs" to narrow RecIF scales.',
+            hint='Choose one or more datasets. Type "ra", "rvs", or "rvt" to narrow RecIF scales.',
         ),
         ChoiceStep(
             key='models',
@@ -860,6 +1003,13 @@ def _dynamic_steps(args, model_choices: list[str]):
             choices=list(REPRESENTATION_PAIR_CHOICES),
             selected=_parse_csv(args.representations) or _pairs_from_legacy_args(args),
             hint='Each option is atomic, e.g. uid2uid or sid2sid. No task/history cross product is created.',
+        ),
+        ChoiceStep(
+            key='seeds',
+            title='Seeds',
+            choices=['42', '0', '1', '2', '3', '4', '5', '2024', '2025'],
+            selected=[str(seed) for seed in _parse_int_csv(args.seeds, default=[42])],
+            hint='Choose one or more random seeds. Press F2 to enter custom comma-separated seeds.',
         ),
     ]
     return base_steps
@@ -936,7 +1086,11 @@ def collect_selection(stdscr, args):
     conditional = run_choice_wizard(stdscr, _conditional_steps(args, primary))
 
     params = _defaults()
-    edit_parameters(stdscr, params)
+    editable_groups = _editable_groups_for_selection(
+        primary['representation_pairs'],
+        conditional.get('uid_variants', ['flat']),
+    )
+    edit_parameters(stdscr, params, editable_groups)
 
     selection = PlanSelections(
         name=name,
@@ -948,6 +1102,7 @@ def collect_selection(stdscr, args):
         sid_variants=conditional.get('sid_variants', ['rqvae/coll']),
         uid_variants=conditional.get('uid_variants', ['flat']),
         hash_coders=conditional.get('hash_coders', ['simhash']),
+        seeds=[int(seed) for seed in primary.get('seeds', ['42'])],
         params=params,
     )
     preview_payload(stdscr, selection)
@@ -963,6 +1118,7 @@ def build_parser():
     parser.add_argument('--datasets', default=None, help='Optional comma-separated preselection.')
     parser.add_argument('--models', default=None, help='Optional comma-separated preselection.')
     parser.add_argument('--representations', '--pairs', default=None, help='Comma-separated pairs, e.g. uid2uid,sid2sid.')
+    parser.add_argument('--seeds', default=None, help='Comma-separated random seeds, e.g. 42,43,44.')
     parser.add_argument('--targets', default=None, help='Legacy preselection; combined with --histories only.')
     parser.add_argument('--histories', default=None, help='Legacy preselection; combined with --targets only.')
     parser.add_argument('--source-models', default=None, help='Optional comma-separated preselection.')
