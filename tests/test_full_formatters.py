@@ -14,6 +14,8 @@ def test_full_formatters_are_registered():
     assert formatters['mindf'] is MINDFFormatter
     assert formatters['raf'] is RAFFormatter
     assert formatters['rvf'] is RVFFormatter
+    assert MINDFFormatter.USE_ALL_USERS_IN_PROCESSOR
+    assert MINDFFormatter.SPLIT_RATIO == 0.997
     assert not RVFFormatter.PROVIDES_TEST_SET
 
 

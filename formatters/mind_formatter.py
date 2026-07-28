@@ -57,6 +57,8 @@ class MINDFormatter(BaseFormatter):
 
 class MINDFFormatter(MINDFormatter):
     VER = 'v1.1-full'
+    USE_ALL_USERS_IN_PROCESSOR = True
+    SPLIT_RATIO = 0.997
     MIN_HISTORY_LENGTH = 5
     MAX_HISTORY_LENGTH = 256
 
