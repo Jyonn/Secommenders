@@ -84,6 +84,13 @@ class MINDFFormatter(MINDFormatter):
             usecols=[self.UID_COL, 'time', self.HIS_COL],
         )
 
+    def _stage_counts(self, users: pd.DataFrame):
+        return {
+            'rows': int(len(users)),
+            'unique_users': int(users[self.UID_COL].dropna().nunique()),
+            'interactions': int(users[self.HIS_COL].map(len).sum()),
+        }
+
     def _run_full_pipeline(self):
         if self._full_items is not None and self._full_users is not None:
             return
@@ -109,8 +116,12 @@ class MINDFFormatter(MINDFormatter):
         users[self.HIS_COL] = users[self.HIS_COL].apply(
             lambda history: [item for item in history if item in raw_item_set][-self.MAX_HISTORY_LENGTH :]
         )
+        raw_stage_counts = self._stage_counts(raw_users)
+        aligned_stage_counts = self._stage_counts(users)
         users = self.deduplicate_users(users)
+        dedup_stage_counts = self._stage_counts(users)
         users = users[users[self.HIS_COL].map(len) >= self.MIN_HISTORY_LENGTH].reset_index(drop=True)
+        final_stage_counts = self._stage_counts(users)
 
         final_item_ids = set()
         for history in users[self.HIS_COL].tolist():
@@ -138,6 +149,12 @@ class MINDFFormatter(MINDFormatter):
             'interaction_count_removed': int(interaction_count_before - interaction_count_after),
             'user_sequence_length_before': sequence_lengths_before,
             'user_sequence_length_after': sequence_lengths_after,
+            'filter_diagnostics': {
+                'raw_behavior_rows': raw_stage_counts,
+                'after_item_align_and_latest_256': aligned_stage_counts,
+                'after_latest_per_user': dedup_stage_counts,
+                'after_min_length_5': final_stage_counts,
+            },
         }
 
         self._full_items = items
@@ -147,6 +164,31 @@ class MINDFFormatter(MINDFormatter):
             f'MIND full count transition: items {item_count_before}->{len(items)} '
             f'users {user_count_before}->{len(users)} '
             f'interactions {interaction_count_before}->{interaction_count_after}'
+        )
+        pnt(
+            'MIND full filter diagnostics: '
+            f'raw_rows={raw_stage_counts["rows"]} raw_unique_users={raw_stage_counts["unique_users"]} '
+            f'raw_interactions={raw_stage_counts["interactions"]}'
+        )
+        pnt(
+            'MIND full after item-align+latest-256: '
+            f'rows={aligned_stage_counts["rows"]} unique_users={aligned_stage_counts["unique_users"]} '
+            f'interactions={aligned_stage_counts["interactions"]} '
+            f'removed_interactions={raw_stage_counts["interactions"] - aligned_stage_counts["interactions"]}'
+        )
+        pnt(
+            'MIND full after latest-per-user: '
+            f'rows={dedup_stage_counts["rows"]} unique_users={dedup_stage_counts["unique_users"]} '
+            f'interactions={dedup_stage_counts["interactions"]} '
+            f'removed_rows={aligned_stage_counts["rows"] - dedup_stage_counts["rows"]} '
+            f'removed_interactions={aligned_stage_counts["interactions"] - dedup_stage_counts["interactions"]}'
+        )
+        pnt(
+            f'MIND full after min-length>={self.MIN_HISTORY_LENGTH}: '
+            f'rows={final_stage_counts["rows"]} unique_users={final_stage_counts["unique_users"]} '
+            f'interactions={final_stage_counts["interactions"]} '
+            f'removed_users={dedup_stage_counts["unique_users"] - final_stage_counts["unique_users"]} '
+            f'removed_interactions={dedup_stage_counts["interactions"] - final_stage_counts["interactions"]}'
         )
         self._print_history_length_stats('MIND full before', sequence_lengths_before)
         self._print_history_length_stats('MIND full after', sequence_lengths_after)

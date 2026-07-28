@@ -76,6 +76,11 @@ def test_mindf_keeps_latest_user_history_and_drops_unused_items(monkeypatch):
     assert formatter._extra_stats()['interaction_count_after'] == 256
     assert formatter._extra_stats()['user_sequence_length_before']['summary']['count'] == 5
     assert formatter._extra_stats()['user_sequence_length_after']['summary']['max'] == 256
+    diagnostics = formatter._extra_stats()['filter_diagnostics']
+    assert diagnostics['raw_behavior_rows']['rows'] == 5
+    assert diagnostics['after_item_align_and_latest_256']['rows'] == 5
+    assert diagnostics['after_latest_per_user']['rows'] == 3
+    assert diagnostics['after_min_length_5']['rows'] == 1
 
 
 def test_raf_disables_ncore_and_keeps_latest_history(monkeypatch):
