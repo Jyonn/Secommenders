@@ -174,12 +174,19 @@ class BaseFormatter(abc.ABC):
             f'mean={summary["mean"]:.2f} p50={summary["p50"]:.1f} p90={summary["p90"]:.1f} '
             f'p95={summary["p95"]:.1f} p99={summary["p99"]:.1f} max={summary["max"]}'
         )
-        bucket_text = ' | '.join(
-            f'{bucket["range"]}:{bucket["count"]}'
-            for bucket in stats.get('buckets', [])
-            if bucket.get('count', 0) > 0
-        )
-        pnt(f'{label} history length buckets: {bucket_text or "empty"}')
+        buckets = [bucket for bucket in stats.get('buckets', []) if bucket.get('count', 0) > 0]
+        if not buckets:
+            pnt(f'{label} history length histogram: empty')
+            return
+
+        max_count = max(bucket['count'] for bucket in buckets)
+        width = 40
+        pnt(f'{label} history length histogram:')
+        for bucket in buckets:
+            bar_width = max(1, int(round(bucket['count'] / max_count * width)))
+            bar = '#' * bar_width
+            ratio = bucket.get('ratio', 0.0) * 100
+            pnt(f'  {bucket["range"]:>7} | {bar:<{width}} {bucket["count"]:>8} ({ratio:5.2f}%)')
 
     def _save_meta(self):
         meta_path = self._paths()['meta']

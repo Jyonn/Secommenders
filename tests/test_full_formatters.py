@@ -1,5 +1,7 @@
 import pandas as pd
 
+import formatters.base_formatter as base_formatter
+from formatters.base_formatter import BaseFormatter
 from formatters.mind_formatter import MINDFFormatter
 from formatters.recif_ads_formatter import RAFFormatter
 from formatters.recif_video_formatter import RVFFormatter
@@ -112,3 +114,16 @@ def test_raf_disables_ncore_and_keeps_latest_history(monkeypatch):
     assert formatter._extra_stats()['interaction_count_after'] == 256
     assert formatter._extra_stats()['user_sequence_length_before']['summary']['max'] == 300
     assert formatter._extra_stats()['user_sequence_length_after']['summary']['max'] == 256
+
+
+def test_history_length_distribution_prints_histogram(monkeypatch):
+    messages = []
+    stats = BaseFormatter._history_length_stats([[1], [1, 2], list(range(12)), list(range(12))])
+
+    monkeypatch.setattr(base_formatter, 'pnt', messages.append)
+
+    BaseFormatter._print_history_length_stats('demo', stats)
+
+    assert any('demo history length histogram:' in message for message in messages)
+    assert any('|' in message and '#' in message and '%' in message for message in messages)
+    assert not any('history length buckets:' in message for message in messages)
