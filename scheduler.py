@@ -1422,9 +1422,18 @@ class Scheduler:
         )
 
 
-def main():
+def build_arg_parser():
     parser = argparse.ArgumentParser(description='Batch experiment scheduler for Secommenders.')
-    parser.add_argument('--plan', required=True, help='Path to scheduler plan YAML file.')
+    parser.add_argument(
+        '--plan',
+        required=True,
+        nargs='+',
+        action='append',
+        help=(
+            'Path(s) to scheduler plan YAML file(s). '
+            'Supports both `--plan a.yaml b.yaml` and repeated `--plan a.yaml --plan b.yaml`.'
+        ),
+    )
     parser.add_argument(
         '--local-only',
         action='store_true',
@@ -1435,10 +1444,24 @@ def main():
         action='store_true',
         help='Reset failed experiments in the persisted scheduler state to pending and rerun them.',
     )
+    return parser
+
+
+def main():
+    parser = build_arg_parser()
     args = parser.parse_args()
 
-    scheduler = Scheduler(Path(args.plan), local_only=args.local_only, retry_failed=args.retry_failed)
-    scheduler.run()
+    plan_paths = [Path(plan) for group in args.plan for plan in group]
+    total = len(plan_paths)
+    if total > 1:
+        print(f'scheduler multi-plan start plans={total}')
+    for index, plan_path in enumerate(plan_paths, start=1):
+        if total > 1:
+            print(f'scheduler multi-plan [{index}/{total}] plan={plan_path}')
+        scheduler = Scheduler(plan_path, local_only=args.local_only, retry_failed=args.retry_failed)
+        scheduler.run()
+    if total > 1:
+        print(f'scheduler multi-plan finished plans={total}')
 
 
 if __name__ == '__main__':
