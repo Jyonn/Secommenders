@@ -102,6 +102,17 @@ class BaseFormatter(abc.ABC):
     def _cache_meta_matches(self, cached_meta):
         return True
 
+    def cache_meta_valid(self, cached_meta: dict) -> bool:
+        return (
+            cached_meta.get('version') == self.VER
+            and bool(cached_meta.get('provides_test_set', False)) == bool(self.PROVIDES_TEST_SET)
+            and cached_meta.get('multi_item_col') == self.MULTI_ITEM_COL
+            and bool(cached_meta.get('use_all_users_in_processor', False))
+            == bool(self.USE_ALL_USERS_IN_PROCESSOR)
+            and float(cached_meta.get('split_ratio', -1.0)) == float(self.SPLIT_RATIO)
+            and self._cache_meta_matches(cached_meta)
+        )
+
     @classmethod
     def _history_length_stats(cls, histories):
         lengths = [
@@ -284,15 +295,7 @@ class BaseFormatter(abc.ABC):
         if meta_path.exists():
             try:
                 cached_meta = json.loads(meta_path.read_text())
-                cache_meta_valid = (
-                    cached_meta.get('version') == self.VER
-                    and bool(cached_meta.get('provides_test_set', False)) == bool(self.PROVIDES_TEST_SET)
-                    and cached_meta.get('multi_item_col') == self.MULTI_ITEM_COL
-                    and bool(cached_meta.get('use_all_users_in_processor', False))
-                    == bool(self.USE_ALL_USERS_IN_PROCESSOR)
-                    and float(cached_meta.get('split_ratio', -1.0)) == float(self.SPLIT_RATIO)
-                    and self._cache_meta_matches(cached_meta)
-                )
+                cache_meta_valid = self.cache_meta_valid(cached_meta)
             except json.JSONDecodeError:
                 cache_meta_valid = False
 

@@ -221,6 +221,23 @@ class Processor:
         except OSError:
             return False
 
+    def _formatted_cache_current(self):
+        paths = self._formatted_paths()
+        required = [paths['items'], paths['users'], paths['meta']]
+        if not all(path.exists() for path in required):
+            return False
+        try:
+            meta = self._load_meta(paths['meta'])
+            from utils.data import get_data_dir
+            from utils.function import load_formatter
+
+            formatter = load_formatter(self.dataset, data_dir=get_data_dir(self.dataset))
+            if formatter.PROVIDES_TEST_SET and not paths['test_users'].exists():
+                return False
+            return formatter.cache_meta_valid(meta)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return False
+
     @property
     def processed_valid(self):
         paths = self._paths()
@@ -247,6 +264,12 @@ class Processor:
 
         processed_meta = self._load_meta(paths['meta'])
         formatted_meta_path = self._formatted_paths()['meta']
+        if not self._formatted_cache_current():
+            pnt(
+                f'formatted {self.get_name()} cache is stale for current formatter code; '
+                'rebuilding formatted and processed artifacts'
+            )
+            return False
         counts_match = (
             bool(processed_meta.get('use_all_users_in_processor', False))
             or (
@@ -274,10 +297,10 @@ class Processor:
         )
 
     def load_formatted(self):
-        meta = self._load_formatted_meta()
         paths = self._formatted_paths()
-        if not paths['items'].exists() or not paths['users'].exists():
+        if not self._formatted_cache_current():
             ensure_formatted(self.dataset)
+        meta = self._load_formatted_meta()
 
         self.items = self._stringify(pd.read_parquet(paths['items']))
         self.users = self._stringify(pd.read_parquet(paths['users']))
