@@ -47,7 +47,13 @@ class RecIFPretrainModel(BaseModel):
             raise ValueError('embedding value is empty')
         return vector
 
-    def embed_items(self, item_ids: list, data_dir: str | Path, normalize=False):
+    def embed_items(
+        self,
+        item_ids: list,
+        data_dir: str | Path,
+        normalize=False,
+        dataset: str | None = None,
+    ):
         if not self.EMBEDDING_COLUMNS:
             raise ValueError(f'{self.get_name()} does not define EMBEDDING_COLUMNS')
         if not data_dir:
@@ -63,7 +69,11 @@ class RecIFPretrainModel(BaseModel):
         row_seen = set()
         found_by_column = {column: {} for column in self.EMBEDDING_COLUMNS}
         parse_errors = {column: {} for column in self.EMBEDDING_COLUMNS}
-        filtered_path = ensure_filtered_recif_embeddings(data_dir, candidate_pids=candidate_pids)
+        filtered_path = ensure_filtered_recif_embeddings(
+            data_dir,
+            dataset=dataset,
+            candidate_pids=candidate_pids,
+        )
         parquet_paths = [filtered_path]
 
         columns = ['pid', *self.EMBEDDING_COLUMNS]
@@ -98,8 +108,8 @@ class RecIFPretrainModel(BaseModel):
             preview = ', '.join(str(item_id) for item_id in missing[:10])
             raise ValueError(
                 f'RecIF filtered embedding cache is missing {len(missing)}/{len(normalized_item_ids)} '
-                f'processed items; first missing: {preview}. Regenerate formatted artifacts with the '
-                'embedding completeness filter.'
+                f'processed items for dataset={dataset or "unknown"}; first missing: {preview}. '
+                'Regenerate formatted artifacts with the embedding completeness filter.'
             )
 
         for column in self.EMBEDDING_COLUMNS:
@@ -112,7 +122,8 @@ class RecIFPretrainModel(BaseModel):
                 raise ValueError(
                     f'RecIF pretrain embeddings have invalid {column} values for '
                     f'{len(missing_column_items)}/{len(normalized_item_ids)} processed items; '
-                    f'first invalid: {preview}. Regenerate embeddings/filtered.parquet from formatter.'
+                    f'first invalid: {preview}. Regenerate the dataset-family filtered embedding '
+                    'cache from formatter.'
                 )
 
         merged = []

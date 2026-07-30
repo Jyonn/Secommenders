@@ -8,12 +8,12 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from formatters.recif_base import RecIFBaseFormatter
-from utils.recif_embedding_cache import filtered_embeddings_path, load_filtered_embedding_pids
+from utils.recif_embedding_cache import filtered_embeddings_path
 from utils.stable_random import stable_shuffle
 
 
 class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
-    VER = 'v1.3-scale'
+    VER = 'v1.4-scale'
 
     PROVIDES_TEST_SET = True
     USE_ALL_USERS_IN_PROCESSOR = True
@@ -58,7 +58,9 @@ class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
                 'stable-shuffle-sequences',
                 'prefix-scale-train-tail-test',
             ],
-            'embedding_filter_cache': str(filtered_embeddings_path(self.data_dir)),
+            'embedding_filter_cache': str(
+                filtered_embeddings_path(self.data_dir, dataset=self.get_name())
+            ),
             'embedding_filter_policy': 'drop items without complete text and vision embeddings',
         }
         if self._scale_total_sequences is not None:
@@ -250,10 +252,6 @@ class RecIFScaleFormatter(RecIFBaseFormatter, abc.ABC):
         for record in records:
             item_set.update(record[self.HIS_COL])
         return item_set
-
-    def _load_complete_embedding_item_set(self, candidate_item_ids: set) -> set:
-        raw_pids = load_filtered_embedding_pids(self.data_dir, candidate_pids=candidate_item_ids)
-        return {self._normalize_item_id(pid) for pid in raw_pids}
 
     def _records_to_users(self, records: list[dict], split: str):
         rows = []
@@ -542,7 +540,7 @@ class RecIFSmallScaleFormatter(RecIFScaleFormatter, abc.ABC):
 
 
 class RecIFVideoSmallScaleFormatter(RecIFSmallScaleFormatter, RecIFVideoScaleFormatter, abc.ABC):
-    VER = 'v1.0-video-small-scale'
+    VER = 'v1.1-video-small-scale'
 
     @classmethod
     def _scale_dataset_prefix(cls):
@@ -550,7 +548,7 @@ class RecIFVideoSmallScaleFormatter(RecIFSmallScaleFormatter, RecIFVideoScaleFor
 
 
 class RecIFVideoTinyScaleFormatter(RecIFVideoSmallScaleFormatter, abc.ABC):
-    VER = 'v1.2-video-tiny-scale'
+    VER = 'v1.3-video-tiny-scale'
     DEFAULT_N_CORE = 10
     DEFAULT_MIN_LENGTH = 5
     DEFAULT_MAX_LENGTH = 20
@@ -604,7 +602,7 @@ class RecIFAdsScaleFormatter(RecIFScaleFormatter, abc.ABC):
 
 
 class RecIFAdsSmallScaleFormatter(RecIFSmallScaleFormatter, RecIFAdsScaleFormatter, abc.ABC):
-    VER = 'v1.0-ads-small-scale'
+    VER = 'v1.1-ads-small-scale'
 
     @classmethod
     def _scale_dataset_prefix(cls):

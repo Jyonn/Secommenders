@@ -266,7 +266,12 @@ class Embedder:
             )
             pnt(f'loading RecIF provided embeddings for {self.data}/{self.model_name}')
             item_ids = self.processor.items[self.processor.IID_COL].tolist()
-            embeddings = self.caller.embed_items(item_ids, data_dir=self.data_dir, normalize=self.conf.normalize)
+            embeddings = self.caller.embed_items(
+                item_ids,
+                data_dir=self.data_dir,
+                normalize=self.conf.normalize,
+                dataset=self.data,
+            )
             np.save(self.embedding_path, embeddings)
             self.processor.items[[self.processor.IID_COL]].to_parquet(self.item_ids_path, index=False)
             self.save_meta(embeddings)

@@ -10,6 +10,7 @@ from pigmento import pnt
 from tqdm import tqdm
 
 from formatters.base_formatter import BaseFormatter
+from utils.recif_embedding_cache import filtered_embeddings_path, load_filtered_embedding_pids
 from utils.stable_random import stable_shuffle
 
 
@@ -253,6 +254,14 @@ class RecIFBaseFormatter(BaseFormatter):
         self._run_filter_pipeline()
         return cast(pd.DataFrame, self._filtered_users)
 
+    def _load_complete_embedding_item_set(self, candidate_item_ids: set) -> set:
+        raw_pids = load_filtered_embedding_pids(
+            self.data_dir,
+            dataset=self.get_name(),
+            candidate_pids=candidate_item_ids,
+        )
+        return {self._normalize_item_id(pid) for pid in raw_pids}
+
     def _load_official_test_users(self) -> pd.DataFrame:
         self._run_filter_pipeline()
         final_item_set = set(cast(pd.DataFrame, self._filtered_items)[self.IID_COL].tolist())
@@ -289,7 +298,7 @@ class RecIFBaseFormatter(BaseFormatter):
 
 
 class RecIFFullFormatterMixin:
-    VER = 'v1.3-full'
+    VER = 'v1.4-full'
     PROVIDES_TEST_SET = True
     MULTI_ITEM_COL = None
     USE_ALL_USERS_IN_PROCESSOR = True
@@ -321,10 +330,16 @@ class RecIFFullFormatterMixin:
             'full_shuffle_version': self.FULL_SHUFFLE_VERSION,
             'full_split_policy': 'stable-shuffle-train-tail-test',
             'remaining_users_as_valid': True,
+            'embedding_filter_cache': str(
+                filtered_embeddings_path(self.data_dir, dataset=self.get_name())
+            ),
+            'embedding_filter_policy': 'drop items without complete text and vision embeddings',
             'filter_pipeline': [
                 'caption-exists-once',
                 'latest-256',
                 'min-length-5',
+                'complete-pretrain-embedding-filter',
+                'min-length-5-after-embedding-filter',
                 'stable-shuffle-sequences',
                 'tail-test',
             ],
@@ -366,6 +381,11 @@ class RecIFFullFormatterMixin:
         caption_pid_set = self._stream_caption_pid_set()
         users = self._apply_allowed_item_filter(raw_users, caption_pid_set, desc='caption-filter')
         users = self._apply_length_constraints(users, desc='latest-length')
+
+        candidate_item_ids = self._history_item_set(users)
+        embedding_item_set = self._load_complete_embedding_item_set(candidate_item_ids)
+        users = self._apply_allowed_item_filter(users, embedding_item_set, desc='embedding-complete-filter')
+        users = self._apply_length_constraints(users, desc='embedding-complete-length')
 
         final_item_ids = self._history_item_set(users)
         items = self._load_caption_rows(final_item_ids)

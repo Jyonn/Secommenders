@@ -118,6 +118,11 @@ def test_raf_disables_ncore_and_keeps_latest_history(monkeypatch):
     monkeypatch.setattr(RAFFormatter, '_stream_caption_pid_set', lambda self: set(long_history + [999]))
     monkeypatch.setattr(
         RAFFormatter,
+        '_load_complete_embedding_item_set',
+        lambda self, candidate_item_ids: candidate_item_ids,
+    )
+    monkeypatch.setattr(
+        RAFFormatter,
         '_load_caption_rows',
         lambda self, item_ids: pd.DataFrame(
             {
