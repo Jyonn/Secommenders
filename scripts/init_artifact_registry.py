@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from utils.artifact_identity import (  # noqa: E402
     TRAINED_INDEX_NAME,
     TRAINED_PHASES,
+    TRAINED_SPEC_VERSION,
     TrainedArtifactRegistryConflict,
     canonical_trained_run_dir,
     GENERIC_SPEC_VERSIONS,
@@ -527,6 +528,8 @@ def summarize_run_dir(run_dir: Path):
                 'accumulate_batch',
                 'learning_rate',
                 'weight_decay',
+                'lr_scheduler',
+                'warmup_ratio',
             )
             if key in config
         }
@@ -951,6 +954,17 @@ def init_trained_registry(
             legacy_signature = legacy_signature_from_folder(folder)
             if legacy_signature:
                 aliases.append(legacy_signature)
+            previous_identity = (
+                meta.get('artifact_identity')
+                if isinstance(meta.get('artifact_identity'), dict)
+                else {}
+            )
+            previous_signature = previous_identity.get('signature')
+            if (
+                previous_signature
+                and previous_identity.get('schema_version') != TRAINED_SPEC_VERSION
+            ):
+                aliases.append(str(previous_signature))
             identity = update_trained_meta(meta_path, config, apply=False, aliases=aliases)
             target_run_dir = canonical_trained_run_dir(config, root=root)
             resolved.append(
@@ -1054,8 +1068,7 @@ def init_trained_registry(
                         )
                         continue
                     final_meta = read_json(final_meta_path)
-                    if migrated_legacy_scratch:
-                        final_meta['config'] = config
+                    final_meta['config'] = config
                     final_meta['run_dir'] = str(target_run_dir)
                     final_meta['artifact_identity'] = trained_artifact_identity(
                         config,

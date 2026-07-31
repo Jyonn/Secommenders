@@ -2,7 +2,9 @@ from copy import deepcopy
 
 from utils.artifact_identity import (
     TRAIN_CONFIG_DEFAULTS,
+    TRAINED_SPEC_VERSION,
     compiled_signature_from_config,
+    migrate_train_config_dict,
     trained_signature_from_config,
 )
 from utils.compile import CompileConfig
@@ -60,3 +62,23 @@ def test_inherited_and_explicit_sid_embedding_models_share_signature():
     )
     assert compiled_signature_from_config(inherited_compile) == compiled_signature_from_config(explicit_compile)
     assert trained_signature_from_config(inherited) == trained_signature_from_config(explicit)
+
+
+def test_lr_scheduler_and_warmup_participate_in_trained_signature():
+    baseline = _sid_train_config('llama3')
+    cosine = deepcopy(baseline)
+    cosine.update({'epochs': 20, 'lr_scheduler': 'cosine', 'warmup_ratio': 0.1})
+
+    assert TRAINED_SPEC_VERSION == 'trained.v3'
+    assert trained_signature_from_config(baseline) != trained_signature_from_config(cosine)
+
+
+def test_legacy_train_config_migrates_with_historical_scheduler_defaults():
+    legacy = _sid_train_config('llama3')
+    legacy.pop('lr_scheduler', None)
+    legacy.pop('warmup_ratio', None)
+
+    migrated = migrate_train_config_dict(legacy)
+
+    assert migrated['lr_scheduler'] == 'constant'
+    assert migrated['warmup_ratio'] == 0.0

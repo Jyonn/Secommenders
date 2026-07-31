@@ -46,6 +46,8 @@ GROUPS = {
         'epochs': 0,
         'learning_rate': 0.0001,
         'weight_decay': 0.01,
+        'lr_scheduler': 'constant',
+        'warmup_ratio': 0.0,
         'seed': 42,
         'batch_size': 64,
         'valid_only': False,

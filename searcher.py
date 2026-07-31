@@ -40,6 +40,8 @@ FILTER_KEYS = [
     'accumulate_batch',
     'learning_rate',
     'weight_decay',
+    'lr_scheduler',
+    'warmup_ratio',
     'seed',
     'uid_decoding',
     'uid_cluster_levels',
@@ -666,6 +668,8 @@ def main():
     parser.add_argument('--accumulate_batch', type=int)
     parser.add_argument('--learning_rate', '--lr', dest='learning_rate', type=float)
     parser.add_argument('--weight_decay', '--wd', dest='weight_decay', type=float)
+    parser.add_argument('--lr_scheduler', choices=['constant', 'linear', 'cosine'])
+    parser.add_argument('--warmup_ratio', type=float)
     parser.add_argument('--seed', type=int)
     parser.add_argument('--uid_decoding')
     parser.add_argument('--uid_cluster_levels')

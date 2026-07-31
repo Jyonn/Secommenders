@@ -20,7 +20,7 @@ from utils.experiment_template import (
 )
 
 
-TRAINED_SPEC_VERSION = 'trained.v2'
+TRAINED_SPEC_VERSION = 'trained.v3'
 CLUSTERED_SPEC_VERSION = 'clustered.v2'
 COMPILED_SPEC_VERSION = 'compiled.v2'
 QUANTIZED_SPEC_VERSION = 'quantized.v2'
@@ -57,6 +57,8 @@ TRAIN_CONFIG_DEFAULTS = {
     'epochs': 0,
     'learning_rate': 0.0001,
     'weight_decay': 0.01,
+    'lr_scheduler': 'constant',
+    'warmup_ratio': 0.0,
     'seed': 42,
     'device': None,
     'num_gpus': 1,

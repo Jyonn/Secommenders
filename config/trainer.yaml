@@ -130,6 +130,8 @@ trainer:
   epochs: ${epochs:0}$
   learning_rate: ${learning_rate:0.0001}$
   weight_decay: ${weight_decay:0.01}$
+  lr_scheduler: ${lr_scheduler:constant}$
+  warmup_ratio: ${warmup_ratio:0.0}$
   seed: ${seed:42}$
   device: ${device:null}$
   num_gpus: ${num_gpus:1}$

@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import shlex
 import socket
 from contextlib import nullcontext
@@ -318,7 +319,47 @@ class Trainer:
             weight_decay=self.config.weight_decay,
         )
 
-    def _run_loader(self, loader, optimizer=None, desc='train', distributed_reduce=True, max_batches=None):
+    def build_lr_scheduler(self, optimizer):
+        accumulate_batch = max(1, int(self.config.accumulate_batch))
+        steps_per_epoch = max(1, math.ceil(len(self.train_loader) / accumulate_batch))
+        if self.config.epochs <= 0:
+            self._pnt('lr scheduler=constant warmup_ratio=0 optimizer_steps=unbounded')
+            return None
+
+        total_steps = steps_per_epoch * int(self.config.epochs)
+        warmup_steps = int(total_steps * float(self.config.warmup_ratio))
+        if self.config.warmup_ratio > 0:
+            warmup_steps = max(1, warmup_steps)
+        warmup_steps = min(warmup_steps, total_steps)
+        scheduler_name = self.config.lr_scheduler
+
+        def lr_lambda(current_step: int):
+            if warmup_steps > 0 and current_step < warmup_steps:
+                return float(current_step + 1) / float(warmup_steps)
+            if scheduler_name == 'constant':
+                return 1.0
+            decay_steps = max(1, total_steps - warmup_steps)
+            progress = min(max((current_step - warmup_steps) / decay_steps, 0.0), 1.0)
+            if scheduler_name == 'linear':
+                return max(0.0, 1.0 - progress)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+        self._pnt(
+            f'lr scheduler={scheduler_name} warmup_ratio={self.config.warmup_ratio:g} '
+            f'warmup_steps={warmup_steps} total_steps={total_steps} '
+            f'optimizer_steps_per_epoch={steps_per_epoch}'
+        )
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+    def _run_loader(
+        self,
+        loader,
+        optimizer=None,
+        lr_scheduler=None,
+        desc='train',
+        distributed_reduce=True,
+        max_batches=None,
+    ):
         is_train = optimizer is not None
         self.model.train(is_train)
         frequency_accumulator = None
@@ -388,6 +429,8 @@ class Trainer:
                 loss.backward()
                 if should_step:
                     optimizer.step()
+                    if lr_scheduler is not None:
+                        lr_scheduler.step()
                     optimizer.zero_grad()
 
             raw_loss = float(rec_loss.item())
@@ -429,6 +472,8 @@ class Trainer:
         self.model_core.sid_decoding_timing_enabled = False
         self.model_core.enable_ranking_trace(False)
         summary = {'loss': total_loss / max(total_batches, 1)}
+        if is_train:
+            summary['learning_rate'] = float(optimizer.param_groups[0]['lr'])
         for key, value in metric_sums.items():
             summary[key] = value / max(total_batches, 1)
         if frequency_accumulator is not None and self.is_main_process:
@@ -695,6 +740,7 @@ class Trainer:
                 dist.destroy_process_group()
             return
         optimizer = self.build_optimizer()
+        lr_scheduler = self.build_lr_scheduler(optimizer)
         metric_name = self._metric_name()
         main_metric_names = self._main_metric_names()
         main_metric_name = '|'.join(main_metric_names)
@@ -721,13 +767,19 @@ class Trainer:
             epoch += 1
             if self.train_sampler is not None:
                 self.train_sampler.set_epoch(epoch)
-            train_metrics = self._run_loader(self.train_loader, optimizer=optimizer, desc=f'train@{epoch}')
+            train_metrics = self._run_loader(
+                self.train_loader,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                desc=f'train@{epoch}',
+            )
             train_metric_name = metric_name if metric_name in train_metrics else (
                 'sid_token_acc' if 'sid_token_acc' in train_metrics else metric_name
             )
             self._pnt(
                 f'epoch {epoch:03d} train_loss={train_metrics["loss"]:.4f} '
-                f'{train_metric_name}={train_metrics.get(train_metric_name, 0.0):.4f}'
+                f'{train_metric_name}={train_metrics.get(train_metric_name, 0.0):.4f} '
+                f'lr={train_metrics["learning_rate"]:.6g}'
             )
             epoch_valid_metrics = self._evaluate_eval_set(self.valid_loader, desc=f'valid@{epoch}')
             if self.is_main_process:

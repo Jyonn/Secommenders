@@ -346,6 +346,12 @@ class Job:
     def weight_decay(self, value: float):
         return self._set_float_arg('weight_decay', value)
 
+    def lr_scheduler(self, value: str):
+        return self._set_string_arg('lr_scheduler', value, lower=True)
+
+    def warmup_ratio(self, value: float):
+        return self._set_float_arg('warmup_ratio', value)
+
     def seed(self, value: int):
         return self._set_int_arg('seed', value)
 

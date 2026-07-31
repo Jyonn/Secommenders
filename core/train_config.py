@@ -63,6 +63,8 @@ class TrainConfig:
     epochs: int
     learning_rate: float
     weight_decay: float
+    lr_scheduler: str
+    warmup_ratio: float
     seed: int
     device: Optional[str]
     num_gpus: int
@@ -222,6 +224,17 @@ class TrainConfig:
             raise ValueError('evaluator.frequency_breakdown requires trainer.test_only=true')
         if frequency_breakdown and not load_ckpt:
             raise ValueError('evaluator.frequency_breakdown requires trainer.load_ckpt')
+        lr_scheduler = str(getattr(trainer, 'lr_scheduler', 'constant')).strip().lower()
+        if lr_scheduler not in {'constant', 'linear', 'cosine'}:
+            raise ValueError('trainer.lr_scheduler must be one of: constant, linear, cosine')
+        warmup_ratio = float(getattr(trainer, 'warmup_ratio', 0.0))
+        if not 0.0 <= warmup_ratio < 1.0:
+            raise ValueError('trainer.warmup_ratio must be in [0, 1)')
+        if int(trainer.epochs) <= 0 and (warmup_ratio > 0 or lr_scheduler != 'constant'):
+            raise ValueError(
+                'trainer.epochs must be positive when warmup_ratio > 0 or '
+                'lr_scheduler is linear/cosine'
+            )
         if uid_decoding == 'hierarchical' and raw_task_type != 'uid':
             raise ValueError('trainer.uid_decoding=hierarchical is only supported when task_type=uid')
         if uid_decoding == 'hierarchical' and not uid_cluster_levels:
@@ -258,6 +271,8 @@ class TrainConfig:
             epochs=int(trainer.epochs),
             learning_rate=float(trainer.learning_rate),
             weight_decay=float(trainer.weight_decay),
+            lr_scheduler=lr_scheduler,
+            warmup_ratio=warmup_ratio,
             seed=int(trainer.seed),
             device=trainer.device,
             num_gpus=int(getattr(trainer, 'num_gpus', 1)),
@@ -326,6 +341,8 @@ class TrainConfig:
             'testonly' if self.test_only else None,
             f'lr{compact_float(self.learning_rate)}',
             f'wd{compact_float(self.weight_decay)}',
+            f'ls-{self.lr_scheduler}' if self.lr_scheduler != 'constant' else None,
+            f'wu{compact_float(self.warmup_ratio)}' if self.warmup_ratio > 0 else None,
         ]
         parts = [part for part in parts if part]
         if self.repr_combine != 'concat':
