@@ -36,6 +36,15 @@ RECIF_SCALE_SCRATCH_REPRESENTATIONS = [
     for representation in RECIF_SCALE_REPRESENTATIONS
     if 'text' not in representation[0].split('+')
 ]
+QWEN_GRID1_DATASETS = ['raf']
+QWEN_GRID1_MODEL = 'qwen35th08b'
+QWEN_GRID1_SOURCE_MODEL = 'pretrain-multimodal'
+QWEN_GRID1_LEARNING_RATES = [3e-5, 1e-4]
+QWEN_GRID1_EFFECTIVE_BATCH_SIZES = [32, 64]
+QWEN_GRID1_SCHEDULERS = [
+    ('constant', 0.0),
+    ('cosine', 0.1),
+]
 
 
 def build_basic_schedule(dataset: str):
@@ -181,8 +190,87 @@ def build_recif_scaling_schedule(scales=None):
     return schedule.export(Path('config/recif_scaling_ra_20_40.yaml'))
 
 
+def build_qwen_first_round_grid(datasets=None):
+    datasets = QWEN_GRID1_DATASETS if datasets is None else [
+        str(dataset).strip().lower()
+        for dataset in datasets
+        if str(dataset).strip()
+    ]
+    if not datasets:
+        raise ValueError('Qwen first-round grid requires at least one dataset')
+
+    outputs = []
+    for effective_batch_size in QWEN_GRID1_EFFECTIVE_BATCH_SIZES:
+        schedule = (
+            Schedule(
+                name=f'qwen08b_grid1_ebs{effective_batch_size}',
+                effective_batch_size=effective_batch_size,
+            )
+            .main_metric('ndcg@10')
+            .defaults(
+                epochs=20,
+                patience=5,
+                weight_decay=0.01,
+                seed=42,
+                use_lora='true',
+                freeze_backbone='true',
+                lora_rank=8,
+                lora_alpha=32,
+                lora_dropout=0.05,
+                lora_target_modules='all-linear',
+            )
+            .uid_variants('flat')
+            .sid_variants(('rqvae', 'recon'))
+        )
+
+        for learning_rate in QWEN_GRID1_LEARNING_RATES:
+            for lr_scheduler, warmup_ratio in QWEN_GRID1_SCHEDULERS:
+                profile = (
+                    f'lr{learning_rate:g}_'
+                    f'{lr_scheduler}_wu{warmup_ratio:g}'
+                )
+                common_args = {
+                    'learning_rate': learning_rate,
+                    'lr_scheduler': lr_scheduler,
+                    'warmup_ratio': warmup_ratio,
+                }
+                schedule.grid(
+                    f'qwen08b_grid1_{profile}_uid',
+                    datasets=datasets,
+                    models=[QWEN_GRID1_MODEL],
+                    targets=['uid'],
+                    histories=['uid', ('uid', 'text')],
+                    args=common_args,
+                )
+                schedule.grid(
+                    f'qwen08b_grid1_{profile}_sid',
+                    datasets=datasets,
+                    models=[QWEN_GRID1_MODEL],
+                    targets=['sid'],
+                    histories=['sid'],
+                    source_models=[QWEN_GRID1_SOURCE_MODEL],
+                    args={
+                        **common_args,
+                        'sid_embedding_model': QWEN_GRID1_SOURCE_MODEL,
+                        'sid_codebook_size': 128,
+                    },
+                )
+
+        dataset_label = '-'.join(datasets)
+        outputs.append(
+            schedule.export(
+                Path(
+                    f'config/qwen08b_grid1_{dataset_label}_'
+                    f'ebs{effective_batch_size}_scheduler.yaml'
+                )
+            )
+        )
+    return outputs
+
+
 if __name__ == '__main__':
     # build_simple_schedule()
     # build_basic_schedules()
     # build_basic_schedule('recifvideoxlargeall')
-    build_recif_scaling_schedule()
+    # build_recif_scaling_schedule()
+    build_qwen_first_round_grid()
