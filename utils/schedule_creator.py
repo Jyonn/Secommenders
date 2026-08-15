@@ -36,14 +36,17 @@ def _validate_compile_config(config: CompileConfig):
     unsupported_repr_types = [repr_type for repr_type in repr_types if repr_type not in supported_repr_types]
     if unsupported_repr_types:
         raise ValueError(f'Unsupported repr.type entries: {unsupported_repr_types}')
-    if config.task_type not in supported_task_types:
-        raise ValueError(f'Unsupported task.type: {config.task_type}')
+    unsupported_tasks = [task for task in config.task_types if task not in supported_task_types]
+    if unsupported_tasks:
+        raise ValueError(f'Unsupported task.type entries: {unsupported_tasks}')
+    if len(config.task_types) > 1 and config.task_types != ['sid', 'uid']:
+        raise ValueError('multi task decoding currently supports exactly sid+uid')
     if config.repr_combine not in supported_repr_combines:
         raise ValueError(f'Unsupported repr.combine: {config.repr_combine}')
-    if config.task_type not in repr_types:
-        raise ValueError('repr.type must contain task.type so each item block starts with task representation')
-    if repr_types[0] != config.task_type:
-        raise ValueError('task.type must be the first entry in repr.type for causal mixed-view training')
+    if not set(config.task_types).issubset(repr_types):
+        raise ValueError('repr.type must contain every task.type representation')
+    if repr_types[:len(config.task_types)] != config.task_types:
+        raise ValueError('task.type entries must lead repr.type for causal mixed-view training')
     if config.repr_combine == 'add':
         if not (config.task_type == 'uid' and repr_types == ['uid', 'embedding']):
             raise ValueError(
@@ -52,14 +55,14 @@ def _validate_compile_config(config: CompileConfig):
     if is_scratch_model and 'text' in repr_types:
         raise ValueError('scratch backbone currently does not support repr.type containing text')
 
-    external_view_required = any(view in {'sid', 'hash', 'embedding'} for view in repr_types + [config.task_type])
+    external_view_required = any(view in {'sid', 'hash', 'embedding'} for view in repr_types + config.task_types)
     if external_view_required and not config.repr_source_model:
         raise ValueError('data.repr_source_model is required when repr.type or task.type uses sid/hash/embedding')
-    if 'sid' in set(repr_types + [config.task_type]) and not config.sid_export:
+    if 'sid' in set(repr_types + config.task_types) and not config.sid_export:
         raise ValueError('data.sid_export is required when repr.type or task.type uses sid')
-    if 'sid' in set(repr_types + [config.task_type]) and not config.sid_coder:
+    if 'sid' in set(repr_types + config.task_types) and not config.sid_coder:
         raise ValueError('data.sid_coder is required when repr.type or task.type uses sid')
-    if 'hash' in set(repr_types + [config.task_type]) and not config.hash_coder:
+    if 'hash' in set(repr_types + config.task_types) and not config.hash_coder:
         raise ValueError('data.hash_coder is required when repr.type or task.type uses hash')
 
 
@@ -280,6 +283,9 @@ class Job:
     def task(self, value: str):
         return self._set_string_arg('task_type', value, lower=True)
 
+    def task_repr(self, *values: str):
+        return self.task('+'.join(str(value).strip() for value in values if str(value).strip()))
+
     def repr(self, *repr_types: str):
         if not repr_types:
             raise ValueError('repr() expects at least one representation type')
@@ -400,6 +406,18 @@ class Job:
 
     def code_collision_loss_weight(self, value: float):
         return self._set_float_arg('code_collision_loss_weight', value)
+
+    def multi_fusion(self, value: str):
+        return self._set_string_arg('multi_fusion', value, lower=True)
+
+    def multi_uid_weight(self, value: float):
+        return self._set_float_arg('multi_uid_weight', value)
+
+    def multi_frequency_threshold(self, value: float):
+        return self._set_float_arg('multi_frequency_threshold', value)
+
+    def multi_frequency_smoothing(self, value: float):
+        return self._set_float_arg('multi_frequency_smoothing', value)
 
     def model_dtype(self, value: str):
         return self._set_string_arg('model_dtype', value, lower=True)

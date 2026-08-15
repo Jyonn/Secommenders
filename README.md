@@ -117,6 +117,31 @@ python trainer.py ... \
 
 This is useful when training succeeds but final test evaluation needs a smaller batch size or safer decoding settings.
 
+### Frequency-Aware SID + UID Decoding
+
+Use `task_repr` to train one shared backbone with SID and UID target heads. Multi-target names are
+canonicalized alphabetically, so both `uid+sid` and `sid+uid` resolve to `sid+uid` and share one SIGN.
+
+```bash
+python trainer.py \
+  --data mindf \
+  --model scratch \
+  --repr_type sid+uid \
+  --task_repr sid+uid \
+  --repr_source_model llama3 \
+  --sid_coder rqvae \
+  --sid_export coll \
+  --multi_fusion frequency \
+  --multi_frequency_threshold 5 \
+  --multi_frequency_smoothing 2
+```
+
+The UID and SID heads are supervised from the same `<sid+uid>` query anchor. During evaluation,
+their Top-K candidate sets are merged, independently score-normalized, and fused per candidate.
+`frequency` fusion increasingly trusts UID as the candidate item's finetune-target frequency grows;
+`fixed` uses `multi_uid_weight` for an ablation baseline. Candidate and output Top-K values affect
+evaluation cost and are recorded in run metadata, but do not change the trained SIGN.
+
 To report test performance by the target item's finetune supervision frequency, reuse the same
 checkpoint and add:
 

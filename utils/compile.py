@@ -12,23 +12,29 @@ def normalize_model_name(name: Optional[str]):
 
 
 def canonicalize_repr_type(task_type: str, repr_type: Optional[str]):
-    task = str(task_type).strip().lower()
-    if not task:
+    task_parts = canonicalize_task_type(task_type).split('+')
+    if not task_parts:
         raise ValueError('task_type is required')
 
     parts = []
     if repr_type:
         parts = [part.strip().lower() for part in str(repr_type).split('+') if part.strip()]
 
-    if task in parts:
-        parts = [part for part in parts if part != task]
-    parts = [task] + parts
+    parts = [part for part in parts if part not in task_parts]
+    parts = task_parts + parts
 
     deduped = []
     for part in parts:
         if part not in deduped:
             deduped.append(part)
     return '+'.join(deduped)
+
+
+def canonicalize_task_type(task_type: str):
+    parts = sorted({part.strip().lower() for part in str(task_type or '').split('+') if part.strip()})
+    if not parts:
+        raise ValueError('task_type is required')
+    return '+'.join(parts)
 
 
 def short_config_hash(payload: dict, length: int = 8):
@@ -59,7 +65,7 @@ class CompileConfig:
     def __post_init__(self):
         self.data = str(self.data).lower()
         self.model = str(self.model).lower()
-        self.task_type = str(self.task_type).lower()
+        self.task_type = canonicalize_task_type(self.task_type)
         self.repr_type = canonicalize_repr_type(self.task_type, self.repr_type)
         self.repr_combine = str(self.repr_combine).lower()
         self.repr_source_model = normalize_model_name(self.repr_source_model)
@@ -73,8 +79,12 @@ class CompileConfig:
         return [part.strip().lower() for part in self.repr_type.split('+') if part.strip()]
 
     @property
+    def task_types(self):
+        return self.task_type.split('+')
+
+    @property
     def used_views(self):
-        return set(self.repr_types + [self.task_type])
+        return set(self.repr_types + self.task_types)
 
     @property
     def compile_upstreams(self):

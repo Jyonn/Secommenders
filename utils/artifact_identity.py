@@ -74,6 +74,19 @@ TRAIN_CONFIG_DEFAULTS = {
     'code_beam_width': 20,
     'code_beam_chunk_size': None,
     'code_collision_loss_weight': 0.1,
+    'multi_candidate_topk': 100,
+    'multi_output_topk': 20,
+    'multi_fusion': 'frequency',
+    'multi_uid_weight': 0.5,
+    'multi_score_normalization': 'zscore',
+    'multi_temperature_uid': 1.0,
+    'multi_temperature_sid': 1.0,
+    'multi_frequency_threshold': 5.0,
+    'multi_frequency_smoothing': 2.0,
+    'multi_uid_loss_weight': 1.0,
+    'multi_sid_loss_weight': 1.0,
+    'multi_fused_loss_weight': 0.0,
+    'multi_consistency_weight': 0.0,
     'model_dtype': 'auto',
     'use_lora': 'auto',
     'lora_rank': 8,
@@ -1115,7 +1128,11 @@ def _config_sign_payload(config: Any):
     payload.pop('load_ckpt', None)
     payload.pop('overwrite', None)
     payload.pop('code_beam_chunk_size', None)
+    payload.pop('multi_candidate_topk', None)
+    payload.pop('multi_output_topk', None)
     compile_config = _compile_config_from_config(payload)
+    payload['task_type'] = compile_config.task_type
+    payload['repr_type'] = compile_config.repr_type
     used_views = compile_config.used_views
     if not payload.get('upstreams'):
         payload['upstreams'] = build_default_upstreams(payload)
@@ -1135,14 +1152,15 @@ def _config_sign_payload(config: Any):
         payload.pop('sid_coder', None)
     if 'hash' not in used_views:
         payload.pop('hash_coder', None)
-    if payload.get('task_type') != 'uid':
+    task_types = set(str(payload.get('task_type') or '').split('+'))
+    if 'uid' not in task_types:
         payload.pop('uid_decoding', None)
         payload.pop('uid_cluster_levels', None)
         payload.pop('uid_cluster_topk', None)
     elif payload.get('uid_decoding') != 'hierarchical':
         payload.pop('uid_cluster_levels', None)
         payload.pop('uid_cluster_topk', None)
-    if payload.get('task_type') != 'sid':
+    if 'sid' not in task_types:
         payload.pop('code_decoding', None)
         payload.pop('code_beam_width', None)
         payload.pop('code_beam_chunk_size', None)
@@ -1152,6 +1170,10 @@ def _config_sign_payload(config: Any):
         payload.pop('alignment_weight', None)
     if not payload.get('upstreams'):
         payload.pop('upstreams', None)
+    if len(task_types) <= 1:
+        for key in list(payload):
+            if key.startswith('multi_'):
+                payload.pop(key, None)
     if not payload.get('test_only'):
         payload.pop('load_ckpt', None)
     return payload

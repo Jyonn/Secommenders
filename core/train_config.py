@@ -3,7 +3,14 @@ from typing import Optional
 
 from utils import function
 from utils import model as model_utils
-from utils.compile import CompileConfig, canonicalize_repr_type, compact_float, normalize_model_name, short_config_hash
+from utils.compile import (
+    CompileConfig,
+    canonicalize_repr_type,
+    canonicalize_task_type,
+    compact_float,
+    normalize_model_name,
+    short_config_hash,
+)
 from utils.experiment_template import (
     CLUSTERER_CONFIG_DEFAULTS,
     CLUSTERER_EMBEDDING_DEFAULTS,
@@ -80,6 +87,19 @@ class TrainConfig:
     code_beam_width: int
     code_beam_chunk_size: int
     code_collision_loss_weight: float
+    multi_candidate_topk: int
+    multi_output_topk: int
+    multi_fusion: str
+    multi_uid_weight: float
+    multi_score_normalization: str
+    multi_temperature_uid: float
+    multi_temperature_sid: float
+    multi_frequency_threshold: float
+    multi_frequency_smoothing: float
+    multi_uid_loss_weight: float
+    multi_sid_loss_weight: float
+    multi_fused_loss_weight: float
+    multi_consistency_weight: float
     model_dtype: str
     use_lora: str
     lora_rank: int
@@ -96,6 +116,14 @@ class TrainConfig:
     @property
     def effective_batch_size(self):
         return int(self.batch_size) * int(self.accumulate_batch)
+
+    @property
+    def task_types(self):
+        return self.task_type.split('+')
+
+    @property
+    def is_multi_task(self):
+        return len(self.task_types) > 1
 
     @classmethod
     def from_refconfig(cls, configurations):
@@ -114,12 +142,20 @@ class TrainConfig:
         if scratch is None:
             raise ValueError('model.scratch configuration is required')
         raw_repr_type = _get(representation, 'history', _get(data_config, 'repr_type', None))
-        raw_task_type = str(_get(representation, 'target', _get(data_config, 'task_type'))).lower()
+        raw_task_type = canonicalize_task_type(
+            _get(representation, 'target')
+            or _get(representation, 'legacy_target')
+            or _get(data_config, 'task_type')
+        )
         normalized_repr_type = canonicalize_repr_type(raw_task_type, raw_repr_type)
         raw_metrics = getattr(evaluator, 'metrics', [])
         metrics = normalize_metrics(raw_metrics)
         decoder_uid = _get(decoder, 'uid')
         decoder_sid = _get(decoder, 'sid')
+        decoder_multi = _get(decoder, 'multi')
+        multi_fusion = _get(decoder_multi, 'fusion')
+        multi_frequency = _get(decoder_multi, 'frequency')
+        trainer_multi = _get(trainer, 'multi')
         uid_decoding = str(_get(decoder_uid, 'mode', getattr(trainer, 'uid_decoding', 'flat'))).strip().lower()
         uid_cluster_topk = normalize_optional_string(_get(decoder_uid, 'topk', getattr(trainer, 'uid_cluster_topk', None)))
         repr_source_model = normalize_model_name(_get(representation, 'source_model', _get(data_config, 'repr_source_model', None)))
@@ -235,8 +271,15 @@ class TrainConfig:
                 'trainer.epochs must be positive when warmup_ratio > 0 or '
                 'lr_scheduler is linear/cosine'
             )
-        if uid_decoding == 'hierarchical' and raw_task_type != 'uid':
-            raise ValueError('trainer.uid_decoding=hierarchical is only supported when task_type=uid')
+        task_types = raw_task_type.split('+')
+        supported_task_types = {'uid', 'sid', 'hash', 'embedding'}
+        unsupported_task_types = [task for task in task_types if task not in supported_task_types]
+        if unsupported_task_types:
+            raise ValueError(f'unsupported representation.target entries: {unsupported_task_types}')
+        if len(task_types) > 1 and task_types != ['sid', 'uid']:
+            raise ValueError('multi target decoding currently supports exactly representation.target=sid+uid')
+        if uid_decoding == 'hierarchical' and task_types != ['uid']:
+            raise ValueError('trainer.uid_decoding=hierarchical is only supported for a uid-only target')
         if uid_decoding == 'hierarchical' and not uid_cluster_levels:
             raise ValueError('trainer.uid_cluster_levels is required when uid_decoding=hierarchical')
         if uid_decoding == 'hierarchical' and not uid_cluster_topk:
@@ -247,6 +290,38 @@ class TrainConfig:
         )
         if code_beam_chunk_size <= 0:
             code_beam_chunk_size = max(int(trainer.batch_size), code_beam_width * 4)
+        multi_candidate_topk = int(_get(decoder_multi, 'candidate_topk', 100))
+        multi_output_topk = int(_get(decoder_multi, 'output_topk', 20))
+        if multi_candidate_topk <= 0 or multi_output_topk <= 0:
+            raise ValueError('decoder.multi candidate_topk and output_topk must be positive')
+        multi_fusion_mode = str(_get(multi_fusion, 'mode', 'frequency')).strip().lower()
+        if multi_fusion_mode not in {'fixed', 'frequency'}:
+            raise ValueError('decoder.multi.fusion.mode must be fixed or frequency')
+        multi_score_normalization = str(_get(multi_fusion, 'score_normalization', 'zscore')).strip().lower()
+        if multi_score_normalization not in {'none', 'zscore', 'minmax'}:
+            raise ValueError('decoder.multi.fusion.score_normalization must be none, zscore, or minmax')
+        multi_uid_weight = float(_get(multi_fusion, 'uid_weight', 0.5))
+        if not 0.0 <= multi_uid_weight <= 1.0:
+            raise ValueError('decoder.multi.fusion.uid_weight must be in [0, 1]')
+        multi_temperature_uid = float(_get(multi_fusion, 'temperature_uid', 1.0))
+        multi_temperature_sid = float(_get(multi_fusion, 'temperature_sid', 1.0))
+        if multi_temperature_uid <= 0 or multi_temperature_sid <= 0:
+            raise ValueError('decoder.multi fusion temperatures must be positive')
+        multi_frequency_smoothing = float(_get(multi_frequency, 'smoothing', 2.0))
+        if multi_frequency_smoothing <= 0:
+            raise ValueError('decoder.multi.frequency.smoothing must be positive')
+        multi_loss_values = {
+            'uid': float(_get(trainer_multi, 'uid_loss_weight', 1.0)),
+            'sid': float(_get(trainer_multi, 'sid_loss_weight', 1.0)),
+            'fused': float(_get(trainer_multi, 'fused_loss_weight', 0.0)),
+            'consistency': float(_get(trainer_multi, 'consistency_weight', 0.0)),
+        }
+        if any(value < 0 for value in multi_loss_values.values()):
+            raise ValueError('trainer.multi loss weights must be non-negative')
+        if len(task_types) > 1 and multi_loss_values['fused'] > 0:
+            raise ValueError('trainer.multi.fused_loss_weight is reserved for a future differentiable fusion loss')
+        if len(task_types) > 1 and multi_loss_values['consistency'] > 0:
+            raise ValueError('trainer.multi.consistency_weight is reserved for a future cross-head consistency loss')
         return cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
@@ -294,6 +369,19 @@ class TrainConfig:
             code_collision_loss_weight=float(
                 _get(decoder_sid, 'collision_loss_weight', getattr(trainer, 'code_collision_loss_weight', 0.1))
             ),
+            multi_candidate_topk=multi_candidate_topk,
+            multi_output_topk=multi_output_topk,
+            multi_fusion=multi_fusion_mode,
+            multi_uid_weight=multi_uid_weight,
+            multi_score_normalization=multi_score_normalization,
+            multi_temperature_uid=multi_temperature_uid,
+            multi_temperature_sid=multi_temperature_sid,
+            multi_frequency_threshold=float(_get(multi_frequency, 'threshold', 5)),
+            multi_frequency_smoothing=multi_frequency_smoothing,
+            multi_uid_loss_weight=multi_loss_values['uid'],
+            multi_sid_loss_weight=multi_loss_values['sid'],
+            multi_fused_loss_weight=multi_loss_values['fused'],
+            multi_consistency_weight=multi_loss_values['consistency'],
             model_dtype=str(model.dtype).lower(),
             use_lora=str(lora.use).lower(),
             lora_rank=int(lora.rank),
@@ -397,6 +485,8 @@ class TrainConfig:
         payload.pop('frequency_buckets', None)
         payload.pop('overwrite', None)
         payload.pop('code_beam_chunk_size', None)
+        payload.pop('multi_candidate_topk', None)
+        payload.pop('multi_output_topk', None)
         used_views = self.compile_config.used_views
         used_upstreams = used_upstreams_for_config(self.task_type, self.repr_type, self.uid_decoding)
         payload['upstreams'] = {
@@ -410,14 +500,14 @@ class TrainConfig:
             payload.pop('sid_coder', None)
         if 'hash' not in used_views:
             payload.pop('hash_coder', None)
-        if self.task_type != 'uid':
+        if 'uid' not in self.task_type.split('+'):
             payload.pop('uid_decoding', None)
             payload.pop('uid_cluster_levels', None)
             payload.pop('uid_cluster_topk', None)
         elif self.uid_decoding != 'hierarchical':
             payload.pop('uid_cluster_levels', None)
             payload.pop('uid_cluster_topk', None)
-        if self.task_type != 'sid':
+        if 'sid' not in self.task_type.split('+'):
             payload.pop('code_decoding', None)
             payload.pop('code_beam_width', None)
             payload.pop('code_beam_chunk_size', None)
@@ -427,4 +517,8 @@ class TrainConfig:
             payload.pop('alignment_weight', None)
         if not payload.get('upstreams'):
             payload.pop('upstreams', None)
+        if '+' not in self.task_type:
+            for key in list(payload):
+                if key.startswith('multi_'):
+                    payload.pop(key, None)
         return payload

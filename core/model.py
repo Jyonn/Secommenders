@@ -9,6 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from models import build_backbone
 from utils import function
+from utils.multi_decoding import fuse_candidate_scores, uid_frequency_gate
 
 from .encoders import LLMSequenceEncoder, ScratchLlamaSequenceEncoder, ScratchSequenceEncoder
 from .uid_hierarchy import UIDHierarchyArtifacts
@@ -27,7 +28,8 @@ class SequentialRecModel(nn.Module):
         freeze_default = compiled.model_kind == 'llm'
         self.freeze_backbone = function.coerce_bool(config.freeze_backbone, default=freeze_default)
         self.use_lora = function.coerce_bool(config.use_lora, default=compiled.model_kind == 'llm')
-        self.uid_hierarchical_decoding = config.task_type == 'uid' and str(getattr(config, 'uid_decoding', 'flat')).lower() == 'hierarchical'
+        task_types = set(config.task_types)
+        self.uid_hierarchical_decoding = task_types == {'uid'} and str(getattr(config, 'uid_decoding', 'flat')).lower() == 'hierarchical'
 
         if compiled.model_kind == 'llm':
             self.encoder = LLMSequenceEncoder(
@@ -65,9 +67,9 @@ class SequentialRecModel(nn.Module):
         hidden_size = self.encoder.hidden_size
         input_embed_dim = getattr(self.encoder, 'input_embed_dim', hidden_size)
         history_repr_types = set(config.compile_config.repr_types)
-        self.uses_uid_path = 'uid' in history_repr_types or config.task_type == 'uid' or config.repr_combine == 'add'
-        self.uses_sid_path = 'sid' in history_repr_types or config.task_type == 'sid'
-        self.uses_hash_path = 'hash' in history_repr_types or config.task_type == 'hash'
+        self.uses_uid_path = 'uid' in history_repr_types or 'uid' in task_types or config.repr_combine == 'add'
+        self.uses_sid_path = 'sid' in history_repr_types or 'sid' in task_types
+        self.uses_hash_path = 'hash' in history_repr_types or 'hash' in task_types
         self.type_marker_embedding = nn.Embedding(len(self.compiled.special_vocab['tokens']), input_embed_dim)
         self.uid_embedding = nn.Embedding(compiled.num_items, input_embed_dim) if self.uses_uid_path else None
         self.sid_embedding = nn.Embedding(max(compiled.sid_vocab_size, 1), input_embed_dim) if self.uses_sid_path else None
@@ -96,23 +98,23 @@ class SequentialRecModel(nn.Module):
             self.uid_node_heads = nn.ModuleList(
                 [nn.Linear(hidden_size, child_count) for child_count in self.uid_hierarchy.node_child_counts]
             )
-        elif 'uid' in supervised_repr_types or config.task_type == 'uid':
+        elif 'uid' in supervised_repr_types or 'uid' in task_types:
             self.uid_head = nn.Linear(hidden_size, compiled.num_items)
-        if 'sid' in supervised_repr_types or config.task_type == 'sid':
+        if 'sid' in supervised_repr_types or 'sid' in task_types:
             if not compiled.sid_vocab_size or not compiled.sid_num_quantizers:
                 raise ValueError('sid task requires sid vocab metadata in compiled artifacts')
             self.sid_head = nn.Linear(hidden_size, compiled.sid_vocab_size)
-        if 'hash' in supervised_repr_types or config.task_type == 'hash':
+        if 'hash' in supervised_repr_types or 'hash' in task_types:
             if not compiled.hash_vocab_size or not compiled.hash_num_tokens:
                 raise ValueError('hash task requires hash vocab metadata in compiled artifacts')
             self.hash_head = nn.Linear(hidden_size, compiled.hash_vocab_size)
         if 'text' in supervised_repr_types:
             self.model_token_head = nn.Linear(hidden_size, input_embed_dim, bias=False)
-        if 'embedding' in supervised_repr_types or config.task_type == 'embedding':
+        if 'embedding' in supervised_repr_types or 'embedding' in task_types:
             if compiled.embedding_matrix is None:
                 raise ValueError('embedding supervision requires compiled embedding view and source matrix')
             self.embedding_head = nn.Linear(hidden_size, compiled.embedding_matrix.shape[1], bias=False)
-        if config.task_type not in {'uid', 'sid', 'hash', 'embedding'}:
+        if not task_types.issubset({'uid', 'sid', 'hash', 'embedding'}):
             raise ValueError(f'Unsupported task type: {config.task_type}')
 
         self.compute_dtype = getattr(self.encoder, 'compute_dtype', torch.float32)
@@ -137,6 +139,11 @@ class SequentialRecModel(nn.Module):
         else:
             hash_item_codes_tensor = torch.empty((0, 0), dtype=torch.long)
         self.register_buffer('hash_item_codes', hash_item_codes_tensor, persistent=False)
+        target_frequencies = torch.zeros(compiled.num_items, dtype=torch.float32)
+        for sequence in compiled.finetune.get('sequence_uids', []):
+            for uid in function.to_list(sequence)[1:]:
+                target_frequencies[int(uid)] += 1.0
+        self.register_buffer('item_target_frequencies', target_frequencies, persistent=False)
         self.type_marker_embedding.to(dtype=self.compute_dtype)
         if self.uid_embedding is not None:
             self.uid_embedding.to(dtype=self.compute_dtype)
@@ -426,7 +433,11 @@ class SequentialRecModel(nn.Module):
         return padded, attention_mask.long(), lengths
 
     def ranking_ks(self):
-        max_k = max(1, int(self.config.code_beam_width))
+        max_k = (
+            max(1, int(self.config.multi_output_topk))
+            if self.config.is_multi_task
+            else max(1, int(self.config.code_beam_width))
+        )
         ks = [k for k in (5, 10, 20) if k <= max_k]
         if max_k not in ks:
             ks.append(max_k)
@@ -927,6 +938,86 @@ class SequentialRecModel(nn.Module):
             result['sid_kv_diagnostic'] = ' | '.join(self._sid_kv_diagnostics) or 'no KV-cache diagnostic recorded'
         return result
 
+    def _multi_uid_gate(self, uid: int):
+        frequency = float(self.item_target_frequencies[int(uid)].item())
+        return uid_frequency_gate(
+            frequency,
+            mode=self.config.multi_fusion,
+            uid_weight=self.config.multi_uid_weight,
+            threshold=self.config.multi_frequency_threshold,
+            smoothing=self.config.multi_frequency_smoothing,
+        )
+
+    def _fuse_multi_candidates(self, uid_scores: dict[int, float], sid_scores: dict[int, float]):
+        frequencies = {
+            int(uid): float(self.item_target_frequencies[int(uid)].item())
+            for uid in set(uid_scores) | set(sid_scores)
+        }
+        return fuse_candidate_scores(
+            uid_scores,
+            sid_scores,
+            frequencies,
+            fusion_mode=self.config.multi_fusion,
+            uid_weight=self.config.multi_uid_weight,
+            score_normalization=self.config.multi_score_normalization,
+            temperature_uid=self.config.multi_temperature_uid,
+            temperature_sid=self.config.multi_temperature_sid,
+            frequency_threshold=self.config.multi_frequency_threshold,
+            frequency_smoothing=self.config.multi_frequency_smoothing,
+            output_topk=self.config.multi_output_topk,
+        )
+
+    def _compute_multi_ranking_metrics(self, pooled: torch.Tensor, batch):
+        candidate_topk = min(int(self.config.multi_candidate_topk), int(self.compiled.num_items))
+        uid_logits = self._uid_logits(pooled).float()
+        uid_values, uid_indices = torch.topk(uid_logits, k=candidate_topk, dim=-1)
+
+        if self._sid_decoding_mode() == 'parallel':
+            semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled)
+            sid_values, sid_indices = torch.topk(
+                semantic_scores + collision_scores,
+                k=candidate_topk,
+                dim=-1,
+            )
+            sid_scores_by_sample = [
+                {
+                    int(uid): float(score)
+                    for uid, score in zip(indices.tolist(), values.tolist())
+                }
+                for indices, values in zip(sid_indices, sid_values)
+            ]
+        else:
+            beams_by_sample = self._beam_search_sid_items_batch_with_kv_cache(batch)
+            if beams_by_sample is None:
+                beams_by_sample = self._beam_search_sid_items_batch(batch)
+            sid_scores_by_sample = [
+                {
+                    int(uid): float(score)
+                    for uid, score, _ in self._decode_sid_beams_to_items(beams)[:candidate_topk]
+                }
+                for beams in beams_by_sample
+            ]
+
+        ks = self.ranking_ks()
+        totals = self._init_ranking_totals(ks)
+        totals['multi_uid_gate_mean'] = 0.0
+        totals['multi_candidates'] = 0.0
+        for batch_index, (sample, per_sid) in enumerate(zip(batch, sid_scores_by_sample)):
+            per_uid = {
+                int(uid): float(score)
+                for uid, score in zip(uid_indices[batch_index].tolist(), uid_values[batch_index].tolist())
+            }
+            for uid in per_sid:
+                per_uid.setdefault(uid, float(uid_logits[batch_index, uid].item()))
+            fused = self._fuse_multi_candidates(per_uid, per_sid)
+            ranked_uids = [uid for uid, _ in fused]
+            totals['multi_candidates'] += float(len(set(per_uid) | set(per_sid)))
+            if ranked_uids:
+                totals['multi_uid_gate_mean'] += sum(self._multi_uid_gate(uid) for uid in ranked_uids) / len(ranked_uids)
+            self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
+        batch_size = max(len(batch), 1)
+        return {key: value / batch_size for key, value in totals.items()}
+
     def _compute_sid_loss(self, batch):
         total_loss = torch.tensor(0.0, dtype=torch.float32, device=self.device)
         token_correct = 0.0
@@ -1002,6 +1093,29 @@ class SequentialRecModel(nn.Module):
             raise ValueError('sid parallel ranking requires compiled sid item codes')
 
         batch_size = pooled.shape[0]
+        semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled)
+        item_codes = self.sid_item_codes.to(device=self.device)
+
+        ks = self.ranking_ks()
+        totals = self._init_ranking_totals(ks)
+        item_indices = torch.arange(item_codes.shape[0], dtype=torch.long, device=self.device)
+
+        for batch_index, sample in enumerate(batch):
+            self._accumulate_ranking_metrics_from_score_tensors(
+                totals,
+                ks,
+                semantic_scores[batch_index],
+                collision_scores[batch_index],
+                sample,
+                item_indices=item_indices,
+            )
+
+        return {key: value / max(batch_size, 1) for key, value in totals.items()}
+
+    def _sid_parallel_item_scores(self, pooled: torch.Tensor):
+        if self.sid_item_codes.numel() == 0:
+            raise ValueError('sid parallel item scoring requires compiled sid item codes')
+        batch_size = pooled.shape[0]
         item_codes = self.sid_item_codes.to(device=self.device)
         semantic_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
         collision_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
@@ -1019,21 +1133,7 @@ class SequentialRecModel(nn.Module):
             else:
                 collision_scores = collision_scores + slot_scores
 
-        ks = self.ranking_ks()
-        totals = self._init_ranking_totals(ks)
-        item_indices = torch.arange(item_codes.shape[0], dtype=torch.long, device=self.device)
-
-        for batch_index, sample in enumerate(batch):
-            self._accumulate_ranking_metrics_from_score_tensors(
-                totals,
-                ks,
-                semantic_scores[batch_index],
-                collision_scores[batch_index],
-                sample,
-                item_indices=item_indices,
-            )
-
-        return {key: value / max(batch_size, 1) for key, value in totals.items()}
+        return semantic_scores, collision_scores
 
     def _compute_ranking_metrics_from_logits(self, logits: torch.Tensor, target_indices: torch.Tensor, batch=None):
         ks = self.ranking_ks()
@@ -1169,6 +1269,8 @@ class SequentialRecModel(nn.Module):
                 totals[f'ndcg@{k}'] += dcg / idcg if idcg > 0 else 0.0
 
     def _target_token_values(self, target_uid: int):
+        if self.config.is_multi_task:
+            raise ValueError('multi-task supervision builds each target representation independently')
         if self.config.task_type == 'embedding':
             raise ValueError('embedding task uses query-anchor supervision instead of target tokens')
         if self.config.task_type == 'uid':
@@ -1281,6 +1383,8 @@ class SequentialRecModel(nn.Module):
     def _build_finetune_sample_inputs(self, sample):
         if self.config.repr_combine == 'add':
             return self._build_finetune_sample_inputs_add(sample)
+        if self.config.is_multi_task:
+            return self._build_finetune_sample_inputs_multi(sample)
         separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
         sequence_uids = sample['sequence_uids']
         embeddings = []
@@ -1296,9 +1400,12 @@ class SequentialRecModel(nn.Module):
                 append_embedded(self._embed_spec('model_tokens', separator_ids))
 
             include_alignment_repr = item_index < len(sequence_uids) - 1
-            repr_types = [self.config.task_type]
+            repr_types = list(self.config.task_types)
             if include_alignment_repr:
-                repr_types.extend([repr_type for repr_type in self.config.compile_config.repr_types[1:]])
+                repr_types.extend([
+                    repr_type
+                    for repr_type in self.config.compile_config.repr_types[len(self.config.task_types):]
+                ])
 
             for repr_type in repr_types:
                 segment_specs = self._render_single_view_item(uid, repr_type)
@@ -1311,7 +1418,7 @@ class SequentialRecModel(nn.Module):
                     else:
                         payload_positions.extend(range(start, end + 1))
 
-                if repr_type == self.config.task_type and item_index > 0:
+                if repr_type in self.config.task_types and item_index > 0:
                     supervision.extend(
                         self._build_repr_supervision(
                             repr_type=repr_type,
@@ -1321,7 +1428,7 @@ class SequentialRecModel(nn.Module):
                             group='primary',
                         )
                     )
-                elif repr_type != self.config.task_type and self.config.alignment_weight > 0 and include_alignment_repr:
+                elif repr_type not in self.config.task_types and self.config.alignment_weight > 0 and include_alignment_repr:
                     supervision.extend(
                         self._build_repr_supervision(
                             repr_type=repr_type,
@@ -1335,6 +1442,70 @@ class SequentialRecModel(nn.Module):
         sample_embeddings = torch.cat(embeddings, dim=0)
         return {
             'inputs_embeds': sample_embeddings,
+            'supervision': supervision,
+        }
+
+    def _build_finetune_sample_inputs_multi(self, sample):
+        separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
+        embeddings = []
+        supervision = []
+
+        def append_embedded(tensor: torch.Tensor):
+            start = sum(piece.shape[0] for piece in embeddings)
+            embeddings.append(tensor)
+            return start, start + tensor.shape[0] - 1
+
+        for item_index, uid in enumerate(sample['sequence_uids']):
+            if item_index > 0 and separator_ids:
+                append_embedded(self._embed_spec('model_tokens', separator_ids))
+
+            marker_position, _ = append_embedded(self._embed_spec('type_marker', self.config.task_type))
+            payload_positions = {}
+            for task_type in self.config.task_types:
+                positions = []
+                for kind, value in self._render_single_view_item(uid, task_type):
+                    if kind == 'type_marker':
+                        continue
+                    start, end = append_embedded(self._embed_spec(kind, value))
+                    positions.extend(range(start, end + 1))
+                payload_positions[task_type] = positions
+
+            if item_index > 0:
+                for task_type in self.config.task_types:
+                    supervision.extend(
+                        self._build_repr_supervision(
+                            repr_type=task_type,
+                            uid=uid,
+                            marker_position=marker_position,
+                            payload_positions=payload_positions[task_type],
+                            group='primary',
+                        )
+                    )
+
+            if item_index < len(sample['sequence_uids']) - 1:
+                for repr_type in self.config.compile_config.repr_types[len(self.config.task_types):]:
+                    segment_specs = self._render_single_view_item(uid, repr_type)
+                    alignment_marker = None
+                    alignment_positions = []
+                    for kind, value in segment_specs:
+                        start, end = append_embedded(self._embed_spec(kind, value))
+                        if kind == 'type_marker':
+                            alignment_marker = start
+                        else:
+                            alignment_positions.extend(range(start, end + 1))
+                    if self.config.alignment_weight > 0:
+                        supervision.extend(
+                            self._build_repr_supervision(
+                                repr_type=repr_type,
+                                uid=uid,
+                                marker_position=alignment_marker,
+                                payload_positions=alignment_positions,
+                                group='alignment',
+                            )
+                        )
+
+        return {
+            'inputs_embeds': torch.cat(embeddings, dim=0),
             'supervision': supervision,
         }
 
@@ -1568,7 +1739,7 @@ class SequentialRecModel(nn.Module):
         labels = supervision['labels']
         groups = supervision['groups']
         slots = supervision['slots']
-        primary_losses = []
+        primary_losses = {}
         alignment_losses = []
         metrics = {}
 
@@ -1628,14 +1799,25 @@ class SequentialRecModel(nn.Module):
 
             for local_index, loss_value in enumerate(losses):
                 if group_mask[local_index] == 'primary':
-                    primary_losses.append(loss_value)
+                    primary_losses.setdefault(kind, []).append(loss_value)
                 else:
                     alignment_losses.append(loss_value)
 
-        if not primary_losses:
+        if not any(primary_losses.values()):
             raise RuntimeError('no primary supervision entries were constructed for finetune batch')
 
-        primary_loss = torch.stack(primary_losses).mean()
+        task_loss_weights = {
+            'uid': float(getattr(self.config, 'multi_uid_loss_weight', 1.0)),
+            'sid': float(getattr(self.config, 'multi_sid_loss_weight', 1.0)),
+        }
+        primary_parts = []
+        for kind, losses_for_kind in primary_losses.items():
+            kind_loss = torch.stack(losses_for_kind).mean()
+            weight = task_loss_weights.get(kind, 1.0) if self.config.is_multi_task else 1.0
+            primary_parts.append(kind_loss * weight)
+            if self.config.is_multi_task:
+                metrics[f'{kind}_loss'] = float(kind_loss.item())
+        primary_loss = torch.stack(primary_parts).sum() if self.config.is_multi_task else primary_parts[0]
         if alignment_losses:
             alignment_loss = torch.stack(alignment_losses).mean()
             total_loss = primary_loss + self.config.alignment_weight * alignment_loss
@@ -1650,6 +1832,21 @@ class SequentialRecModel(nn.Module):
         inputs_embeds, attention_mask, lengths = self._build_batch_inputs(batch)
         hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
         pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
+
+        if self.config.is_multi_task:
+            uid_loss, uid_metrics = self._compute_uid_loss(pooled, batch)
+            if self._sid_decoding_mode() == 'parallel':
+                sid_loss, sid_metrics = self._compute_sid_parallel_loss(pooled, batch)
+            else:
+                sid_loss, sid_metrics = self._compute_sid_loss(batch)
+            loss = (
+                float(self.config.multi_uid_loss_weight) * uid_loss
+                + float(self.config.multi_sid_loss_weight) * sid_loss
+            )
+            metrics = dict(uid_metrics)
+            metrics.update(sid_metrics)
+            metrics.update(self._compute_multi_ranking_metrics(pooled, batch))
+            return loss, metrics
 
         if self.config.task_type == 'uid':
             if self.uid_hierarchical_decoding:

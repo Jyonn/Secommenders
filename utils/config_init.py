@@ -18,8 +18,8 @@ class ConfigInit:
         aliases = {
             'repr': 'repr_type',
             'representation.history': 'repr_type',
-            'task': 'task_type',
-            'representation.target': 'task_type',
+            'task': 'task_repr',
+            'representation.target': 'task_repr',
             'representation.source_model': 'repr_source_model',
             'representation.combine': 'repr_combine',
             'representation.max_items': 'maxitems',

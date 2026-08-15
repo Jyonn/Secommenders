@@ -193,12 +193,13 @@ def build_default_upstreams(flat: dict):
 
 def used_upstreams_for_config(task_type: str, repr_type: str, uid_decoding: str):
     parts = [part.strip().lower() for part in str(repr_type or '').split('+') if part.strip()]
-    used_views = set(parts + [str(task_type).strip().lower()])
+    task_parts = [part.strip().lower() for part in str(task_type or '').split('+') if part.strip()]
+    used_views = set(parts + task_parts)
     used = set()
     if 'sid' in used_views:
         used.add('sid')
     if 'hash' in used_views:
         used.add('hash')
-    if str(task_type).strip().lower() == 'uid' and str(uid_decoding).strip().lower() == 'hierarchical':
+    if 'uid' in task_parts and str(uid_decoding).strip().lower() == 'hierarchical':
         used.add('uid')
     return used

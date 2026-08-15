@@ -138,7 +138,15 @@ class Trainer:
             f'accumulate_batch={self.config.accumulate_batch} effective_batch_size={effective_batch_size} '
             f'world_size={self.world_size} order=length-sorted'
         )
-        if self.config.task_type == 'uid' and self.config.uid_decoding == 'hierarchical':
+        if self.config.is_multi_task:
+            self._pnt(
+                f'multi decoding tasks={self.config.task_type} fusion={self.config.multi_fusion} '
+                f'candidate_topk={self.config.multi_candidate_topk} output_topk={self.config.multi_output_topk} '
+                f'normalization={self.config.multi_score_normalization} '
+                f'frequency_threshold={self.config.multi_frequency_threshold:g} '
+                f'frequency_smoothing={self.config.multi_frequency_smoothing:g}'
+            )
+        elif self.config.task_type == 'uid' and self.config.uid_decoding == 'hierarchical':
             self._pnt(
                 f'uid decoding=hierarchical levels={self.config.uid_cluster_levels} '
                 f'topk={self.config.uid_cluster_topk}'
@@ -185,7 +193,13 @@ class Trainer:
             f'built test-only dataloader test={len(test_dataset)} batch_size={self.config.batch_size} '
             f'world_size={self.world_size} order=length-sorted'
         )
-        if self.config.task_type == 'uid' and self.config.uid_decoding == 'hierarchical':
+        if self.config.is_multi_task:
+            self._pnt(
+                f'multi decoding tasks={self.config.task_type} fusion={self.config.multi_fusion} '
+                f'candidate_topk={self.config.multi_candidate_topk} output_topk={self.config.multi_output_topk} '
+                f'normalization={self.config.multi_score_normalization}'
+            )
+        elif self.config.task_type == 'uid' and self.config.uid_decoding == 'hierarchical':
             self._pnt(
                 f'uid decoding=hierarchical levels={self.config.uid_cluster_levels} '
                 f'topk={self.config.uid_cluster_topk}'
@@ -211,6 +225,8 @@ class Trainer:
             self._pnt(f'hash decoding=parallel item_scoring ks={self.model_core.ranking_ks()}')
 
     def _metric_name(self):
+        if self.config.is_multi_task:
+            return 'uid_acc'
         if self.config.task_type == 'uid':
             return 'uid_acc'
         if self.config.task_type == 'sid':

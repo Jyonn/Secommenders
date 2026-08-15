@@ -160,7 +160,7 @@ class Compiler:
         return ' + '.join(parts)
 
     def _task_repr_summary(self, uid: int):
-        return self._summarize_view_value(self.config.task_type, uid)
+        return ' + '.join(self._summarize_view_value(task_type, uid) for task_type in self.config.task_types)
 
     @staticmethod
     def _role_name(index: int, history_start: int, target_pos: int):
@@ -283,14 +283,17 @@ class Compiler:
         unsupported_repr_types = [repr_type for repr_type in repr_types if repr_type not in self.SUPPORTED_REPR_TYPES]
         if unsupported_repr_types:
             raise ValueError(f'Unsupported repr.type entries: {unsupported_repr_types}')
-        if self.config.task_type not in self.SUPPORTED_TASK_TYPES:
-            raise ValueError(f'Unsupported task.type: {self.config.task_type}')
+        unsupported_task_types = [task for task in self.config.task_types if task not in self.SUPPORTED_TASK_TYPES]
+        if unsupported_task_types:
+            raise ValueError(f'Unsupported task.type entries: {unsupported_task_types}')
+        if len(self.config.task_types) > 1 and self.config.task_types != ['sid', 'uid']:
+            raise ValueError('multi task decoding currently supports exactly sid+uid')
         if self.config.repr_combine not in self.SUPPORTED_REPR_COMBINES:
             raise ValueError(f'Unsupported repr.combine: {self.config.repr_combine}')
-        if self.config.task_type not in repr_types:
-            raise ValueError('repr.type must contain task.type so each item block starts with task representation')
-        if repr_types[0] != self.config.task_type:
-            raise ValueError('task.type must be the first entry in repr.type for causal mixed-view training')
+        if not set(self.config.task_types).issubset(repr_types):
+            raise ValueError('repr.type must contain every task.type representation')
+        if repr_types[:len(self.config.task_types)] != self.config.task_types:
+            raise ValueError('task.type entries must lead repr.type for causal mixed-view training')
         if self.config.repr_combine == 'add':
             if not (self.config.task_type == 'uid' and repr_types == ['uid', 'embedding']):
                 raise ValueError(
@@ -299,14 +302,14 @@ class Compiler:
         if is_scratch_model and 'text' in repr_types:
             raise ValueError('scratch backbone currently does not support repr.type containing text')
 
-        external_view_required = any(view in {'sid', 'hash', 'embedding'} for view in repr_types + [self.config.task_type])
+        external_view_required = any(view in {'sid', 'hash', 'embedding'} for view in repr_types + self.config.task_types)
         if external_view_required and not self.config.repr_source_model:
             raise ValueError('data.repr_source_model is required when repr.type or task.type uses sid/hash/embedding')
-        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.sid_export:
+        if 'sid' in set(repr_types + self.config.task_types) and not self.config.sid_export:
             raise ValueError('data.sid_export is required when repr.type or task.type uses sid')
-        if 'sid' in set(repr_types + [self.config.task_type]) and not self.config.sid_coder:
+        if 'sid' in set(repr_types + self.config.task_types) and not self.config.sid_coder:
             raise ValueError('data.sid_coder is required when repr.type or task.type uses sid')
-        if 'hash' in set(repr_types + [self.config.task_type]) and not self.config.hash_coder:
+        if 'hash' in set(repr_types + self.config.task_types) and not self.config.hash_coder:
             raise ValueError('data.hash_coder is required when repr.type or task.type uses hash')
 
     def run(self):
@@ -529,7 +532,7 @@ class Compiler:
         )
 
     def requires_view(self, view_name: str):
-        views = {'uid', *self.config.repr_types, self.config.task_type}
+        views = {'uid', *self.config.repr_types, *self.config.task_types}
         return view_name in views
 
     def _upstream(self, name: str):
@@ -962,6 +965,12 @@ class Compiler:
         return [self._compose_history_item(uid) for uid in history_uids]
 
     def _target_value(self, target_uid: int):
+        if len(self.config.task_types) > 1:
+            return [
+                token
+                for task_type in self.config.task_types
+                for token in self._as_token_list(self.item_views[task_type][target_uid])
+            ]
         if self.config.task_type == 'uid':
             return self.item_views['uid'][target_uid]
         return self.item_views[self.config.task_type][target_uid]
@@ -972,9 +981,9 @@ class Compiler:
         return 1 + payload_length
 
     def _finetune_item_length(self, uid: int, include_non_task: bool):
-        total = self._repr_segment_length(self.config.task_type, uid)
+        total = sum(self._repr_segment_length(task_type, uid) for task_type in self.config.task_types)
         if include_non_task:
-            for repr_type in self.config.repr_types[1:]:
+            for repr_type in self.config.repr_types[len(self.config.task_types):]:
                 total += self._repr_segment_length(repr_type, uid)
         return total
 
@@ -1292,7 +1301,12 @@ if __name__ == '__main__':
     parser.add_argument('--hash.coder', dest='hash_coder', default=None, help='Coder/indexer name for hash exports, such as lsh, simhash, pcahash, or itq.')
     parser.add_argument('--repr.combine', dest='repr_combine', default='concat', help='How to combine multiple repr types: concat or add.')
     parser.add_argument('--model.maxlen', dest='model_max_length', type=int, default=0, help='Optional override for backbone max length, e.g. 2048.')
-    parser.add_argument('--task.type', dest='task_type', required=True, choices=['uid', 'sid', 'hash', 'embedding'])
+    parser.add_argument(
+        '--task.type',
+        dest='task_type',
+        required=True,
+        choices=['uid', 'sid', 'hash', 'embedding', 'sid+uid', 'uid+sid'],
+    )
     parser.add_argument('--maxitems', type=int, default=0, help='Maximum history items, 0 means auto by model max length.')
     parser.add_argument('--item-text-max-tokens', type=int, default=50, help='Maximum tokenized length per item text.')
     args = parser.parse_args()

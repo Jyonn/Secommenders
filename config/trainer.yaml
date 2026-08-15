@@ -5,7 +5,8 @@ data:
 
 representation:
   history: ${repr_type:null}$
-  target: ${task_type}$
+  target: ${task_repr:null}$
+  legacy_target: ${task_type:null}$
   source_model: ${repr_source_model:null}$
   combine: ${repr_combine:concat}$
   max_items: ${maxitems:50}$
@@ -119,6 +120,18 @@ decoder:
     collision_loss_weight: ${code_collision_loss_weight:0.1}$
   hash:
     mode: parallel
+  multi:
+    candidate_topk: ${multi_candidate_topk:100}$
+    output_topk: ${multi_output_topk:20}$
+    fusion:
+      mode: ${multi_fusion:frequency}$
+      uid_weight: ${multi_uid_weight:0.5}$
+      score_normalization: ${multi_score_normalization:zscore}$
+      temperature_uid: ${multi_temperature_uid:1.0}$
+      temperature_sid: ${multi_temperature_sid:1.0}$
+    frequency:
+      threshold: ${multi_frequency_threshold:5}$
+      smoothing: ${multi_frequency_smoothing:2.0}$
 
 trainer:
   batch_size: ${batch_size:64}$
@@ -136,6 +149,11 @@ trainer:
   device: ${device:null}$
   num_gpus: ${num_gpus:1}$
   alignment: ${alignment:0}$
+  multi:
+    uid_loss_weight: ${multi_uid_loss_weight:1.0}$
+    sid_loss_weight: ${multi_sid_loss_weight:1.0}$
+    fused_loss_weight: ${multi_fused_loss_weight:0.0}$
+    consistency_weight: ${multi_consistency_weight:0.0}$
 
 evaluator:
   main_metric: ${main_metric:ndcg@10}$

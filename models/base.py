@@ -7,6 +7,7 @@ TYPE_MARKER_TOKENS = {
     'text': '<text>',
     'embedding': '<embedding>',
     'uid+embedding': '<uid+embedding>',
+    'sid+uid': '<sid+uid>',
 }
 TYPE_MARKER_ORDER = list(TYPE_MARKER_TOKENS)
 
