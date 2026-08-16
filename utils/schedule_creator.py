@@ -379,6 +379,30 @@ class Job:
     def uid_cluster_topk(self, value: str):
         return self._set_string_arg('uid_cluster_topk', value)
 
+    def cluster_vector_size(self, value: int):
+        return self._set_int_arg('cluster_vector_size', value)
+
+    def cluster_window(self, value: int):
+        return self._set_int_arg('cluster_window', value)
+
+    def cluster_patience(self, value: int):
+        return self._set_int_arg('cluster_patience', value)
+
+    def cluster_max_epochs(self, value: int):
+        return self._set_int_arg('cluster_max_epochs', value)
+
+    def cluster_learning_rate(self, value: float):
+        return self._set_float_arg('cluster_learning_rate', value)
+
+    def cluster_word2vec_batch_size(self, value: int):
+        return self._set_int_arg('cluster_word2vec_batch_size', value)
+
+    def cluster_valid_batch_size(self, value: int):
+        return self._set_int_arg('cluster_valid_batch_size', value)
+
+    def cluster_min_delta(self, value: float):
+        return self._set_float_arg('cluster_min_delta', value)
+
     def code_decoding(self, value: str):
         return self._set_string_arg('code_decoding', value, lower=True)
 

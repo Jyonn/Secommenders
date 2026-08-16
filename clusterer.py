@@ -6,13 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from pigmento import pnt
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.decomposition import PCA
-from tqdm import tqdm
 
 from processors.base_processor import Processor
 from utils.artifact import ArtifactStore
@@ -25,9 +21,9 @@ from utils.compile import compact_float, normalize_model_name, short_config_hash
 from utils.config_init import ConfigInit
 from utils.data import get_data_dir
 from utils.function import load_processor
-from utils.gpu import GPU
 from utils.logging import setup_logging
 from utils.uid_hierarchy import format_uid_cluster_levels, resolve_uid_cluster_levels
+from utils.word2vec import WORD2VEC_DEFAULTS, normalize_word2vec_config, word2vec_model_ref
 
 
 def _parse_bool(value):
@@ -75,6 +71,11 @@ class ClustererConfig:
     min_count: int
     workers: int
     seed: int
+    max_epochs: int
+    learning_rate: float
+    word2vec_batch_size: int
+    valid_batch_size: int
+    min_delta: float
     embedding_source: str
     content_model: str | None
     content_reduce_dim: int
@@ -98,6 +99,11 @@ class ClustererConfig:
             min_count=int(configurations.config.word2vec.min_count),
             workers=int(configurations.config.word2vec.workers),
             seed=int(configurations.config.word2vec.seed),
+            max_epochs=int(configurations.config.word2vec.max_epochs),
+            learning_rate=float(configurations.config.word2vec.learning_rate),
+            word2vec_batch_size=int(configurations.config.word2vec.batch_size),
+            valid_batch_size=int(configurations.config.word2vec.valid_batch_size),
+            min_delta=float(configurations.config.word2vec.min_delta),
             embedding_source=str(_get_config_value(embedding, 'source', 'collaborative')).strip().lower(),
             content_model=normalize_model_name(_normalize_optional_text(_get_config_value(embedding, 'content_model'))),
             content_reduce_dim=_parse_optional_int(_get_config_value(embedding, 'content_reduce_dim', 128), default=0),
@@ -109,38 +115,8 @@ class ClustererConfig:
         )
 
 
-class _SkipGramNegativeSampling(nn.Module):
-    def __init__(self, vocab_size: int, embedding_dim: int):
-        super().__init__()
-        self.input_embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.output_embedding = nn.Embedding(vocab_size, embedding_dim)
-        nn.init.normal_(self.input_embedding.weight, mean=0.0, std=0.02)
-        nn.init.zeros_(self.output_embedding.weight)
-
-    def forward(self, center_ids: torch.Tensor, positive_ids: torch.Tensor, negative_ids: torch.Tensor):
-        center_vectors = self.input_embedding(center_ids)
-        positive_vectors = self.output_embedding(positive_ids)
-        negative_vectors = self.output_embedding(negative_ids)
-
-        positive_logits = (center_vectors * positive_vectors).sum(dim=-1)
-        negative_logits = torch.einsum('bd,bkd->bk', center_vectors, negative_vectors)
-
-        positive_loss = F.logsigmoid(positive_logits)
-        negative_loss = F.logsigmoid(-negative_logits).sum(dim=-1)
-        return -(positive_loss + negative_loss).mean()
-
-    def export_embeddings(self):
-        return self.input_embedding.weight.detach().cpu().numpy().astype(np.float32)
-
-
 class Clusterer:
     VER = 'v2.0'
-
-    WORD2VEC_MAX_EPOCHS = 100
-    WORD2VEC_BATCH_SIZE = 8192
-    WORD2VEC_VALID_BATCH_SIZE = 16384
-    WORD2VEC_LEARNING_RATE = 3e-3
-    WORD2VEC_MIN_DELTA = 1e-4
 
     def __init__(self, config: ClustererConfig):
         self.config = config
@@ -172,11 +148,7 @@ class Clusterer:
             if self.config.negative <= 0:
                 raise ValueError(f'word2vec.negative must be positive, got {self.config.negative}')
 
-        torch.manual_seed(self.config.seed)
         np.random.seed(self.config.seed)
-        torch.set_num_threads(max(1, self.config.workers))
-
-        self.device = torch.device(GPU.auto_choose(torch_format=True))
         self.processor: Processor = load_processor(self.config.data, data_dir=get_data_dir(self.config.data))
         self.processor.load()
 
@@ -184,19 +156,7 @@ class Clusterer:
         self.item_index = {item_id: index for index, item_id in enumerate(self.item_ids)}
 
         self.train_histories = self._load_histories(self.processor.finetune_set, split_name='finetune')
-        self.valid_histories = self._load_histories(self.processor.valid_set, split_name='valid')
         self.item_frequency = self._count_item_frequency(self.train_histories)
-        self.seen_train_items = self._collect_seen_items(self.train_histories)
-        self.train_pair_count = (
-            self._count_positive_pairs(self.train_histories, window=self.config.window)
-            if self._uses_collaborative
-            else 0
-        )
-        self.valid_pair_count = (
-            self._count_positive_pairs(self.valid_histories, window=self.config.window)
-            if self._uses_collaborative
-            else 0
-        )
 
         self.resolved_levels = resolve_uid_cluster_levels(self.config.levels_spec, len(self.item_ids))
         self.prepare_id = self._build_prepare_id()
@@ -241,30 +201,12 @@ class Clusterer:
             pnt(f'dropped {dropped_short} {split_name} histories with length < 2')
         return histories
 
-    @staticmethod
-    def _collect_seen_items(histories: list[list[int]]):
-        seen = set()
-        for history in histories:
-            seen.update(history)
-        return seen
-
     def _count_item_frequency(self, histories: list[list[int]]):
         counter = Counter()
         for history in histories:
             for item_index in history:
                 counter[self.item_ids[item_index]] += 1
         return counter
-
-    @staticmethod
-    def _count_positive_pairs(histories: list[list[int]], window: int | None = None):
-        if window is None:
-            raise ValueError('window is required')
-        total = 0
-        for history in histories:
-            history_length = len(history)
-            for center_pos in range(history_length):
-                total += min(window, center_pos) + min(window, history_length - center_pos - 1)
-        return total
 
     @property
     def hierarchy_depth(self):
@@ -273,6 +215,16 @@ class Clusterer:
     def _build_prepare_id(self):
         payload = asdict(self.config).copy()
         payload.pop('seed', None)
+        added_word2vec_fields = {
+            'max_epochs': 'max_epochs',
+            'learning_rate': 'learning_rate',
+            'word2vec_batch_size': 'batch_size',
+            'valid_batch_size': 'valid_batch_size',
+            'min_delta': 'min_delta',
+        }
+        for field, default_key in added_word2vec_fields.items():
+            if payload.get(field) == WORD2VEC_DEFAULTS[default_key]:
+                payload.pop(field, None)
         payload['resolved_levels'] = self.resolved_levels
         if self.config.embedding_source == 'collaborative':
             prefix = 'ptw2v'
@@ -330,16 +282,16 @@ class Clusterer:
         norms = np.maximum(norms, 1e-12)
         return (embeddings / norms).astype(np.float32)
 
-    def _load_content_embeddings(self):
+    def _load_embedding_artifact(self, model_ref: str, *, label: str, embedding_spec=None):
         from utils.pipeline import ensure_embedded
 
-        ensure_embedded(self.config.data, self.config.content_model)
-        embedding_dir = ArtifactStore(self.config.data).embedded_dir(self.config.content_model)
+        ensure_embedded(self.config.data, model_ref, embedding_spec=embedding_spec)
+        embedding_dir = ArtifactStore(self.config.data).embedded_dir(model_ref)
         embeddings_path = embedding_dir / 'embeddings.npy'
         item_ids_path = embedding_dir / 'item_ids.parquet'
         if not embeddings_path.exists() or not item_ids_path.exists():
             raise FileNotFoundError(
-                f'embedded artifacts not found for {self.config.data}/{self.config.content_model}: '
+                f'{label} embedding artifacts not found for {self.config.data}/{model_ref}: '
                 f'{embeddings_path}, {item_ids_path}'
             )
 
@@ -349,7 +301,7 @@ class Clusterer:
         content_item_ids = [str(item_id) for item_id in item_ids_frame[id_column].tolist()]
         if len(content_item_ids) != int(content_embeddings.shape[0]):
             raise ValueError(
-                f'embedded item_ids length mismatch for {self.config.data}/{self.config.content_model}: '
+                f'embedded item_ids length mismatch for {self.config.data}/{model_ref}: '
                 f'ids={len(content_item_ids)} embeddings={content_embeddings.shape[0]}'
             )
 
@@ -358,8 +310,8 @@ class Clusterer:
         if missing_items:
             preview = ', '.join(missing_items[:5])
             raise ValueError(
-                f'content embeddings missing {len(missing_items)} processed items for '
-                f'{self.config.data}/{self.config.content_model}; first missing: {preview}'
+                f'{label} embeddings missing {len(missing_items)} processed items for '
+                f'{self.config.data}/{model_ref}; first missing: {preview}'
             )
 
         ordered = np.asarray(
@@ -367,8 +319,41 @@ class Clusterer:
             dtype=np.float32,
         )
         if not np.isfinite(ordered).all():
-            raise ValueError(f'content embeddings contain NaN/Inf for {self.config.data}/{self.config.content_model}')
+            raise ValueError(f'{label} embeddings contain NaN/Inf for {self.config.data}/{model_ref}')
         return ordered
+
+    def _load_content_embeddings(self):
+        return self._load_embedding_artifact(self.config.content_model, label='content')
+
+    def _word2vec_config(self):
+        return normalize_word2vec_config({
+            'vector_size': self.config.vector_size,
+            'window': self.config.window,
+            'patience': self.config.patience,
+            'sg': self.config.sg,
+            'negative': self.config.negative,
+            'min_count': self.config.min_count,
+            'workers': self.config.workers,
+            'seed': self.config.seed,
+            'max_epochs': self.config.max_epochs,
+            'learning_rate': self.config.learning_rate,
+            'batch_size': self.config.word2vec_batch_size,
+            'valid_batch_size': self.config.valid_batch_size,
+            'min_delta': self.config.min_delta,
+        })
+
+    def _load_collaborative_embeddings(self):
+        config = self._word2vec_config()
+        model_ref = word2vec_model_ref(config)
+        embeddings = self._load_embedding_artifact(
+            model_ref,
+            label='collaborative',
+            embedding_spec=config,
+        )
+        meta_path = ArtifactStore(self.config.data).embedded_dir(model_ref) / 'meta.json'
+        meta = json.loads(meta_path.read_text())
+        self.word2vec_summary = meta.get('word2vec_summary')
+        return embeddings
 
     def _prepare_content_embeddings(self):
         content_embeddings = self._load_content_embeddings()
@@ -409,8 +394,8 @@ class Clusterer:
         content_summary = None
 
         if self._uses_collaborative:
-            pnt(f'cluster embedding source={source}: fitting collaborative word2vec block')
-            coll_embeddings = self._fit_word2vec()
+            pnt(f'cluster embedding source={source}: loading collaborative word2vec block')
+            coll_embeddings = self._load_collaborative_embeddings()
         if self._uses_content:
             pnt(
                 f'cluster embedding source={source}: loading content block '
@@ -459,201 +444,6 @@ class Clusterer:
             'normalize_blocks': self.config.normalize_blocks,
             'mix_alpha': self.config.mix_alpha,
         }
-
-    def _iter_pair_batches(self, histories: list[list[int]], batch_size: int, shuffle: bool, seed_offset: int):
-        order = np.arange(len(histories))
-        if shuffle:
-            rng = np.random.default_rng(self.config.seed + seed_offset)
-            rng.shuffle(order)
-
-        center_buffer: list[int] = []
-        positive_buffer: list[int] = []
-
-        for history_index in order.tolist():
-            history = histories[history_index]
-            history_length = len(history)
-            for center_pos, center_item in enumerate(history):
-                left = max(0, center_pos - self.config.window)
-                right = min(history_length, center_pos + self.config.window + 1)
-                for context_pos in range(left, right):
-                    if context_pos == center_pos:
-                        continue
-                    center_buffer.append(center_item)
-                    positive_buffer.append(history[context_pos])
-                    if len(center_buffer) >= batch_size:
-                        yield (
-                            np.asarray(center_buffer, dtype=np.int64),
-                            np.asarray(positive_buffer, dtype=np.int64),
-                        )
-                        center_buffer.clear()
-                        positive_buffer.clear()
-
-        if center_buffer:
-            yield (
-                np.asarray(center_buffer, dtype=np.int64),
-                np.asarray(positive_buffer, dtype=np.int64),
-            )
-
-    def _make_negative_ids(self, batch_size: int, generator: torch.Generator):
-        negatives = torch.randint(
-            low=0,
-            high=len(self.item_ids),
-            size=(batch_size, self.config.negative),
-            generator=generator,
-            device='cpu',
-        )
-        return negatives.to(self.device, non_blocking=self.device.type == 'cuda')
-
-    def _run_word2vec_epoch(
-            self,
-            model: _SkipGramNegativeSampling,
-            histories: list[list[int]],
-            pair_count: int,
-            batch_size: int,
-            epoch_index: int,
-            mode: str,
-            optimizer: torch.optim.Optimizer | None,
-    ):
-        if pair_count <= 0:
-            raise ValueError(f'No positive pairs available for word2vec {mode}')
-
-        is_train = mode == 'train'
-        model.train(is_train)
-        generator = torch.Generator(device='cpu')
-        generator.manual_seed(self.config.seed + (epoch_index if is_train else 0) + (0 if is_train else 100_000))
-
-        total_loss = 0.0
-        total_pairs = 0
-        progress = tqdm(
-            total=pair_count,
-            desc=f'w2v-{mode}@{epoch_index}',
-            leave=False,
-        )
-
-        context = torch.enable_grad if is_train else torch.no_grad
-        with context():
-            for center_ids_np, positive_ids_np in self._iter_pair_batches(
-                    histories=histories,
-                    batch_size=batch_size,
-                    shuffle=is_train,
-                    seed_offset=epoch_index,
-            ):
-                batch_pairs = int(len(center_ids_np))
-                center_ids = torch.from_numpy(center_ids_np).to(self.device, non_blocking=self.device.type == 'cuda')
-                positive_ids = torch.from_numpy(positive_ids_np).to(self.device, non_blocking=self.device.type == 'cuda')
-                negative_ids = self._make_negative_ids(batch_pairs, generator)
-
-                if is_train:
-                    optimizer.zero_grad(set_to_none=True)
-                loss = model(center_ids, positive_ids, negative_ids)
-                if is_train:
-                    loss.backward()
-                    optimizer.step()
-
-                total_loss += float(loss.item()) * batch_pairs
-                total_pairs += batch_pairs
-                progress.update(batch_pairs)
-                progress.set_postfix(loss=f'{loss.item():.4f}')
-
-        progress.close()
-        return total_loss / max(total_pairs, 1)
-
-    def _fit_word2vec(self):
-        pnt(
-            f'training PyTorch word2vec on {len(self.train_histories)} finetune histories '
-            f'and validating on {len(self.valid_histories)} valid histories '
-            f'for {self.config.data} with vector_size={self.config.vector_size} window={self.config.window} '
-            f'device={self.device} patience={self.config.patience}'
-        )
-        pnt(
-            f'word2vec pairs train={self.train_pair_count} valid={self.valid_pair_count} '
-            f'batch_size={self.WORD2VEC_BATCH_SIZE} valid_batch_size={self.WORD2VEC_VALID_BATCH_SIZE}'
-        )
-
-        model = _SkipGramNegativeSampling(
-            vocab_size=len(self.item_ids),
-            embedding_dim=self.config.vector_size,
-        ).to(self.device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=self.WORD2VEC_LEARNING_RATE)
-
-        best_state = None
-        best_epoch = 0
-        best_valid_loss = float('inf')
-        stale_epochs = 0
-
-        for epoch_index in range(1, self.WORD2VEC_MAX_EPOCHS + 1):
-            train_loss = self._run_word2vec_epoch(
-                model=model,
-                histories=self.train_histories,
-                pair_count=self.train_pair_count,
-                batch_size=self.WORD2VEC_BATCH_SIZE,
-                epoch_index=epoch_index,
-                mode='train',
-                optimizer=optimizer,
-            )
-            valid_loss = self._run_word2vec_epoch(
-                model=model,
-                histories=self.valid_histories,
-                pair_count=self.valid_pair_count,
-                batch_size=self.WORD2VEC_VALID_BATCH_SIZE,
-                epoch_index=epoch_index,
-                mode='valid',
-                optimizer=None,
-            )
-
-            improved = valid_loss < (best_valid_loss - self.WORD2VEC_MIN_DELTA)
-            if improved:
-                best_valid_loss = valid_loss
-                best_epoch = epoch_index
-                stale_epochs = 0
-                best_state = {
-                    key: value.detach().cpu().clone()
-                    for key, value in model.state_dict().items()
-                }
-            else:
-                stale_epochs += 1
-
-            pnt(
-                f'word2vec epoch {epoch_index}/{self.WORD2VEC_MAX_EPOCHS} '
-                f'train_loss={train_loss:.4f} valid_loss={valid_loss:.4f} '
-                f'best_valid_loss={best_valid_loss:.4f} stale={stale_epochs}/{self.config.patience}'
-            )
-
-            if stale_epochs >= self.config.patience:
-                pnt(f'word2vec early stop triggered at epoch {epoch_index}, best_epoch={best_epoch}')
-                break
-
-        if best_state is None:
-            raise RuntimeError('word2vec training did not produce a checkpoint')
-
-        model.load_state_dict(best_state)
-        embeddings = model.export_embeddings()
-
-        missing = 0
-        for item_index in range(len(self.item_ids)):
-            if item_index not in self.seen_train_items:
-                embeddings[item_index] = 0.0
-                missing += 1
-        if missing:
-            pnt(f'word2vec unseen train items for {missing} items, filled with zeros')
-
-        self.word2vec_summary = {
-            'algorithm': 'pytorch-sgns',
-            'device': str(self.device),
-            'max_epochs': self.WORD2VEC_MAX_EPOCHS,
-            'patience': self.config.patience,
-            'learning_rate': self.WORD2VEC_LEARNING_RATE,
-            'batch_size': self.WORD2VEC_BATCH_SIZE,
-            'valid_batch_size': self.WORD2VEC_VALID_BATCH_SIZE,
-            'min_delta': self.WORD2VEC_MIN_DELTA,
-            'best_epoch': best_epoch,
-            'best_valid_loss': best_valid_loss,
-            'train_history_count': len(self.train_histories),
-            'valid_history_count': len(self.valid_histories),
-            'train_pair_count': self.train_pair_count,
-            'valid_pair_count': self.valid_pair_count,
-        }
-        return embeddings
 
     def _new_node(self, node_levels, node_parents, level: int, parent_node_id: int):
         node_id = len(node_levels)
@@ -786,6 +576,11 @@ class Clusterer:
                 'min_count': self.config.min_count,
                 'workers': self.config.workers,
                 'seed': self.config.seed,
+                'max_epochs': self.config.max_epochs,
+                'learning_rate': self.config.learning_rate,
+                'batch_size': self.config.word2vec_batch_size,
+                'valid_batch_size': self.config.valid_batch_size,
+                'min_delta': self.config.min_delta,
                 'summary': self.word2vec_summary,
             },
             'cluster': {
@@ -856,6 +651,15 @@ if __name__ == '__main__':
         type=float,
         help='Collaborative block distance weight for concat source.',
     )
+    parser.add_argument('--cluster_vector_size', type=int, default=None)
+    parser.add_argument('--cluster_window', type=int, default=None)
+    parser.add_argument('--cluster_patience', type=int, default=None)
+    parser.add_argument('--cluster_negative', type=int, default=None)
+    parser.add_argument('--cluster_max_epochs', type=int, default=None)
+    parser.add_argument('--cluster_learning_rate', type=float, default=None)
+    parser.add_argument('--cluster_word2vec_batch_size', type=int, default=None)
+    parser.add_argument('--cluster_valid_batch_size', type=int, default=None)
+    parser.add_argument('--cluster_min_delta', type=float, default=None)
     parser.add_argument('--config', default='config/clusterer.yaml', help='Clusterer config path.')
     args = parser.parse_args()
 
@@ -867,6 +671,15 @@ if __name__ == '__main__':
         'cluster_content_reduce_dim': args.cluster_content_reduce_dim,
         'cluster_normalize_blocks': args.cluster_normalize_blocks,
         'cluster_mix_alpha': args.cluster_mix_alpha,
+        'cluster_vector_size': args.cluster_vector_size,
+        'cluster_window': args.cluster_window,
+        'cluster_patience': args.cluster_patience,
+        'cluster_negative': args.cluster_negative,
+        'cluster_max_epochs': args.cluster_max_epochs,
+        'cluster_learning_rate': args.cluster_learning_rate,
+        'cluster_word2vec_batch_size': args.cluster_word2vec_batch_size,
+        'cluster_valid_batch_size': args.cluster_valid_batch_size,
+        'cluster_min_delta': args.cluster_min_delta,
         'config': args.config,
     }
     kwargs = {key: value for key, value in kwargs.items() if value is not None}

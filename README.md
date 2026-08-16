@@ -429,3 +429,19 @@ The benchmark is still evolving. The most actively developed paths right now are
 - semantic-augmented history representations
 - hierarchical UID decoding
 - batch experiment automation
+# Collaborative embedding artifacts
+
+Word2Vec collaborative embeddings are standard embedded artifacts and can be prepared independently:
+
+```bash
+python embedder.py --data mindf --model word2vec --vector_size 64 --window 5 --patience 5
+```
+
+Parameterized variants are stored under `artifacts/embedded/<data>/word2vec/<sign>/`. Existing pure-collaborative
+clustered artifacts can be migrated without retraining:
+
+```bash
+python scripts/migrate_word2vec_embeddings.py --data mindf
+python scripts/migrate_word2vec_embeddings.py --data mindf --apply
+python scripts/init_artifact_registry.py --stage clustered --apply
+```

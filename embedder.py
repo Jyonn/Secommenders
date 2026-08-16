@@ -12,6 +12,7 @@ from utils.artifact import ArtifactStore
 from utils.artifact_run import ArtifactRunCoordinator
 from utils.gpu import GPU
 from utils.logging import setup_logging
+from utils.word2vec import normalize_word2vec_config, word2vec_model_ref
 
 
 class Embedder:
@@ -19,7 +20,15 @@ class Embedder:
         self.conf = conf
 
         self.data = conf.data.lower()
-        self.model_name = conf.model.replace('.', '').lower()
+        requested_model = conf.model.replace('.', '').lower()
+        self.word2vec_config = None
+        if requested_model.split('/')[0] == 'word2vec':
+            self.word2vec_config = normalize_word2vec_config(getattr(conf, 'word2vec_config', None))
+            self.model_name = word2vec_model_ref(self.word2vec_config)
+            self.model_key = 'word2vec'
+        else:
+            self.model_name = requested_model
+            self.model_key = requested_model
         self.device = conf.device or GPU.auto_choose(torch_format=True)
 
         data_dir = get_data_dir(self.data)
@@ -39,10 +48,13 @@ class Embedder:
 
     def _ensure_caller(self):
         if self.caller is None:
+            caller_config = dict(self.word2vec_config or {})
+            caller_batch_size = caller_config.pop('batch_size', self.conf.batch_size)
             self.caller = load_embedder(
-                self.model_name,
+                self.model_key,
                 device=self.device,
-                batch_size=self.conf.batch_size,
+                batch_size=caller_batch_size,
+                **caller_config,
             ).post_init()
         return self.caller
 
@@ -65,6 +77,10 @@ class Embedder:
             'normalize': bool(self.conf.normalize),
             'status': 'completed',
         }
+        if self.word2vec_config is not None:
+            meta['source'] = 'collaborative-word2vec'
+            meta['word2vec'] = self.word2vec_config
+            meta['word2vec_summary'] = self.caller.summary
         if hasattr(self.caller, 'embed_items'):
             meta['source'] = 'recif-pretrain-parquet'
             meta['data_dir'] = self.data_dir
@@ -178,6 +194,8 @@ class Embedder:
         return True
 
     def try_reuse_larger_scale_embeddings(self):
+        if self.word2vec_config is not None:
+            return False
         target_item_ids = self.processor.items[self.processor.IID_COL].tolist()
         target_keys = [str(item_id) for item_id in target_item_ids]
         for _, source_dataset, source_dir in self._iter_larger_scale_embedding_candidates():
@@ -257,6 +275,20 @@ class Embedder:
         if self.try_reuse_larger_scale_embeddings():
             return
 
+        if hasattr(self.caller, 'fit_collaborative'):
+            self.run_state.update(stage='training-collaborative', message='training word2vec item embeddings')
+            item_ids = self.processor.items[self.processor.IID_COL].tolist()
+            embeddings = self.caller.fit_collaborative(
+                self.processor,
+                item_ids,
+                normalize=self.conf.normalize,
+            )
+            np.save(self.embedding_path, embeddings)
+            self.processor.items[[self.processor.IID_COL]].to_parquet(self.item_ids_path, index=False)
+            self.save_meta(embeddings)
+            pnt(f'collaborative embeddings saved to {self.embedding_path}')
+            return
+
         if hasattr(self.caller, 'embed_items'):
             self.run_state.update(
                 stage='loading-precomputed',
@@ -319,7 +351,34 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for encoding.')
     parser.add_argument('--normalize', action='store_true', help='Apply L2 normalization to embeddings.')
     parser.add_argument('--overwrite', action='store_true', help='Overwrite existing cached embeddings.')
+    parser.add_argument('--vector_size', type=int, default=64)
+    parser.add_argument('--window', type=int, default=5)
+    parser.add_argument('--patience', type=int, default=5)
+    parser.add_argument('--negative', type=int, default=5)
+    parser.add_argument('--min_count', type=int, default=1)
+    parser.add_argument('--workers', type=int, default=4)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--max_epochs', type=int, default=100)
+    parser.add_argument('--learning_rate', type=float, default=0.003)
+    parser.add_argument('--word2vec_batch_size', type=int, default=8192)
+    parser.add_argument('--valid_batch_size', type=int, default=16384)
+    parser.add_argument('--min_delta', type=float, default=0.0001)
     args = parser.parse_args()
+
+    args.word2vec_config = {
+        'vector_size': args.vector_size,
+        'window': args.window,
+        'patience': args.patience,
+        'negative': args.negative,
+        'min_count': args.min_count,
+        'workers': args.workers,
+        'seed': args.seed,
+        'max_epochs': args.max_epochs,
+        'learning_rate': args.learning_rate,
+        'batch_size': args.word2vec_batch_size,
+        'valid_batch_size': args.valid_batch_size,
+        'min_delta': args.min_delta,
+    }
 
     embedder = Embedder(args)
     embedder.embed()

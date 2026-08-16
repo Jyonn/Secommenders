@@ -86,6 +86,12 @@ upstreams:
         negative: ${cluster_negative:5}$
         min_count: ${cluster_min_count:1}$
         workers: ${cluster_workers:4}$
+        seed: ${cluster_seed:42}$
+        max_epochs: ${cluster_max_epochs:100}$
+        learning_rate: ${cluster_learning_rate:0.003}$
+        batch_size: ${cluster_word2vec_batch_size:8192}$
+        valid_batch_size: ${cluster_valid_batch_size:16384}$
+        min_delta: ${cluster_min_delta:0.0001}$
       cluster:
         batch_size: ${cluster_batch_size:4096}$
         max_iter: ${cluster_max_iter:100}$

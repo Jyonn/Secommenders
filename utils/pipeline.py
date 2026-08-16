@@ -26,7 +26,15 @@ def ensure_processed(data: str):
     return processor
 
 
-def ensure_embedded(data: str, model: str, device=None, batch_size=32, normalize=False, overwrite=False):
+def ensure_embedded(
+        data: str,
+        model: str,
+        device=None,
+        batch_size=32,
+        normalize=False,
+        overwrite=False,
+        embedding_spec: dict | None = None,
+):
     setup_logging()
     pnt(f'auto preparing embedded artifacts for {data}/{model}')
     from embedder import Embedder
@@ -38,6 +46,7 @@ def ensure_embedded(data: str, model: str, device=None, batch_size=32, normalize
         batch_size=batch_size,
         normalize=normalize,
         overwrite=overwrite,
+        word2vec_config=embedding_spec,
     )
     embedder = Embedder(conf)
     embedder.embed()
@@ -141,6 +150,12 @@ def ensure_clustered(data: str, uid_cluster_levels: str, clusterer_spec: dict | 
         'cluster_negative': word2vec.get('negative'),
         'cluster_min_count': word2vec.get('min_count'),
         'cluster_workers': word2vec.get('workers'),
+        'cluster_seed': word2vec.get('seed'),
+        'cluster_max_epochs': word2vec.get('max_epochs'),
+        'cluster_learning_rate': word2vec.get('learning_rate'),
+        'cluster_word2vec_batch_size': word2vec.get('batch_size'),
+        'cluster_valid_batch_size': word2vec.get('valid_batch_size'),
+        'cluster_min_delta': word2vec.get('min_delta'),
         'cluster_batch_size': cluster.get('batch_size'),
         'cluster_max_iter': cluster.get('max_iter'),
         'cluster_n_init': cluster.get('n_init'),

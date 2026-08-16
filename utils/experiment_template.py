@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from utils.compile import normalize_model_name
+from utils.word2vec import WORD2VEC_DEFAULTS
 
 
 SID_QUANTIZER_CONFIG_DEFAULTS = {
@@ -49,15 +50,7 @@ QUANTIZER_TRAINER_DEFAULTS = {
     'save_best_by': ['loss', 'coll', 'codes', 'recon'],
 }
 
-CLUSTERER_WORD2VEC_DEFAULTS = {
-    'vector_size': 64,
-    'window': 5,
-    'patience': 5,
-    'sg': 1,
-    'negative': 5,
-    'min_count': 1,
-    'workers': 4,
-}
+CLUSTERER_WORD2VEC_DEFAULTS = dict(WORD2VEC_DEFAULTS)
 
 CLUSTERER_CONFIG_DEFAULTS = {
     'batch_size': 4096,
@@ -154,10 +147,20 @@ def build_default_upstreams(flat: dict):
     uid_cluster_levels = normalize_optional_string(flat.get('uid_cluster_levels')) or 'auto'
     uid_cluster_embedding = merge_defaults(CLUSTERER_EMBEDDING_DEFAULTS, flat.get('uid_cluster_embedding') or {})
     uid_cluster_embedding['content_model'] = normalize_model_name(uid_cluster_embedding.get('content_model'))
+    uid_cluster_word2vec = merge_defaults(
+        CLUSTERER_WORD2VEC_DEFAULTS,
+        flat.get('uid_cluster_word2vec') or {},
+    )
+    # Preserve existing compiled/trained identities when newly exposed trainer knobs
+    # retain the historical hard-coded behavior.
+    uid_cluster_word2vec.pop('seed', None)
+    for key in ('max_epochs', 'learning_rate', 'batch_size', 'valid_batch_size', 'min_delta'):
+        if uid_cluster_word2vec.get(key) == WORD2VEC_DEFAULTS[key]:
+            uid_cluster_word2vec.pop(key, None)
     uid_clusterer = {
         'levels': uid_cluster_levels,
         'embedding': uid_cluster_embedding,
-        'word2vec': merge_defaults(CLUSTERER_WORD2VEC_DEFAULTS, flat.get('uid_cluster_word2vec') or {}),
+        'word2vec': uid_cluster_word2vec,
         'cluster': merge_defaults(CLUSTERER_CONFIG_DEFAULTS, flat.get('uid_cluster_config') or {}),
     }
     return {

@@ -21,7 +21,7 @@ from utils.experiment_template import (
 
 
 TRAINED_SPEC_VERSION = 'trained.v3'
-CLUSTERED_SPEC_VERSION = 'clustered.v2'
+CLUSTERED_SPEC_VERSION = 'clustered.v3'
 COMPILED_SPEC_VERSION = 'compiled.v2'
 QUANTIZED_SPEC_VERSION = 'quantized.v2'
 GENERIC_SPEC_VERSIONS = {
@@ -526,6 +526,17 @@ def clustered_spec_from_config(config: Any, resolved_levels: list[int] | None = 
             'sg': int(_config_get(config, 'sg')),
             'negative': int(_config_get(config, 'negative')),
             'min_count': int(_config_get(config, 'min_count')),
+            'max_epochs': int(_config_get(config, 'max_epochs', CLUSTERER_WORD2VEC_DEFAULTS['max_epochs'])),
+            'learning_rate': float(
+                _config_get(config, 'learning_rate', CLUSTERER_WORD2VEC_DEFAULTS['learning_rate'])
+            ),
+            'batch_size': int(
+                _config_get(config, 'word2vec_batch_size', CLUSTERER_WORD2VEC_DEFAULTS['batch_size'])
+            ),
+            'valid_batch_size': int(
+                _config_get(config, 'valid_batch_size', CLUSTERER_WORD2VEC_DEFAULTS['valid_batch_size'])
+            ),
+            'min_delta': float(_config_get(config, 'min_delta', CLUSTERER_WORD2VEC_DEFAULTS['min_delta'])),
         },
         'cluster': {
             'batch_size': int(_config_get(config, 'cluster_batch_size')),
@@ -649,6 +660,15 @@ def clustered_spec_from_meta(meta: dict):
             'sg': _int_with_default(word2vec.get('sg'), CLUSTERER_WORD2VEC_DEFAULTS['sg']),
             'negative': _int_with_default(word2vec.get('negative'), CLUSTERER_WORD2VEC_DEFAULTS['negative']),
             'min_count': _int_with_default(word2vec.get('min_count'), CLUSTERER_WORD2VEC_DEFAULTS['min_count']),
+            'max_epochs': _int_with_default(word2vec.get('max_epochs'), CLUSTERER_WORD2VEC_DEFAULTS['max_epochs']),
+            'learning_rate': _float_with_default(
+                word2vec.get('learning_rate'), CLUSTERER_WORD2VEC_DEFAULTS['learning_rate'],
+            ),
+            'batch_size': _int_with_default(word2vec.get('batch_size'), CLUSTERER_WORD2VEC_DEFAULTS['batch_size']),
+            'valid_batch_size': _int_with_default(
+                word2vec.get('valid_batch_size'), CLUSTERER_WORD2VEC_DEFAULTS['valid_batch_size'],
+            ),
+            'min_delta': _float_with_default(word2vec.get('min_delta'), CLUSTERER_WORD2VEC_DEFAULTS['min_delta']),
         },
         'cluster': {
             'batch_size': _int_with_default(cluster.get('batch_size'), CLUSTERER_CONFIG_DEFAULTS['batch_size']),
