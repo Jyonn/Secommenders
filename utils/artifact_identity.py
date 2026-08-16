@@ -42,6 +42,7 @@ LEGACY_CLUSTERED_FOLDER_RE = re.compile(
 
 TRAIN_CONFIG_DEFAULTS = {
     'repr_source_model': None,
+    'repr_embedding': None,
     'sid_export': 'coll',
     'sid_coder': None,
     'hash_coder': None,
@@ -759,6 +760,7 @@ def compiled_spec_from_meta(meta: dict):
         item_text_max_tokens=int(config.get('item_text_max_tokens', 20)),
         repr_combine=config.get('repr_combine', 'concat'),
         upstreams=config.get('upstreams'),
+        embedding=config.get('embedding'),
     )
     return {
         'stage': 'compiled',
@@ -1151,6 +1153,7 @@ def _compile_config_from_config(config: Any):
         item_text_max_tokens=int(_config_get(config, 'item_text_max_tokens', defaults['item_text_max_tokens'])),
         repr_combine=_config_get(config, 'repr_combine', defaults['repr_combine']),
         upstreams=upstreams,
+        embedding=_config_get(config, 'repr_embedding', defaults['repr_embedding']),
     )
 
 
@@ -1201,6 +1204,8 @@ def _config_sign_payload(config: Any):
     }
     if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
         payload.pop('repr_source_model', None)
+    if 'embedding' not in used_views or not payload.get('repr_embedding'):
+        payload.pop('repr_embedding', None)
     if 'sid' not in used_views:
         payload.pop('sid_export', None)
         payload.pop('sid_coder', None)

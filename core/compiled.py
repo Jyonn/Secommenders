@@ -63,6 +63,12 @@ class CompiledArtifacts:
     def _load_embedding_matrix(self):
         if 'embedding' not in self.item_views:
             return None
+        compiled_embedding_path = self.compile_dir / 'embeddings.npy'
+        if self.config.compile_config.embedding:
+            if not compiled_embedding_path.exists():
+                raise FileNotFoundError(f'Compiled fused embedding matrix not found: {compiled_embedding_path}')
+            matrix = np.load(compiled_embedding_path).astype(np.float32)
+            return torch.tensor(matrix, dtype=torch.float32)
         if not self.config.repr_source_model:
             raise ValueError('data.repr_source_model is required when compiled data uses embedding views')
         embedding_dir = self.store.embedded_dir(self.config.repr_source_model)
@@ -102,6 +108,8 @@ class CompiledArtifacts:
             self.compile_dir / 'prompts' / 'main.json',
             self.compile_dir / 'item_views' / 'uid.parquet',
         ]
+        if 'embedding' in self.config.compile_config.used_views and self.config.compile_config.embedding:
+            required_paths.append(self.compile_dir / 'embeddings.npy')
         self._ensure_required_paths(required_paths)
 
         self.meta = self._read_json(self.compile_dir / 'meta.json')

@@ -27,7 +27,7 @@ from utils.experiment_template import (
     used_upstreams_for_config,
 )
 from utils.frequency_breakdown import normalize_frequency_boundaries
-from utils.embedding_fusion import embedding_fusion_from_flat
+from utils.embedding_fusion import embedding_fusion_from_flat, normalize_embedding_fusion
 from utils.word2vec import WORD2VEC_DEFAULTS
 
 
@@ -53,6 +53,7 @@ class TrainConfig:
     model: str
     repr_type: str
     repr_source_model: Optional[str]
+    repr_embedding: Optional[dict]
     sid_export: Optional[str]
     sid_coder: Optional[str]
     hash_coder: Optional[str]
@@ -161,6 +162,7 @@ class TrainConfig:
         uid_decoding = str(_get(decoder_uid, 'mode', getattr(trainer, 'uid_decoding', 'flat'))).strip().lower()
         uid_cluster_topk = normalize_optional_string(_get(decoder_uid, 'topk', getattr(trainer, 'uid_cluster_topk', None)))
         repr_source_model = normalize_model_name(_get(representation, 'source_model', _get(data_config, 'repr_source_model', None)))
+        repr_embedding_section = _get(representation, 'embedding')
         sid_section = _get(upstreams_section, 'sid')
         sid_quantizer = _get(sid_section, 'quantizer')
         sid_encoder = _get(sid_section, 'encoder')
@@ -224,6 +226,17 @@ class TrainConfig:
             normalize_output=_get(sid_embedding, 'normalize_output', False),
             word2vec_config=_plain_section(_get(sid_embedding, 'word2vec'), WORD2VEC_DEFAULTS),
         )
+        repr_embedding_config = embedding_fusion_from_flat(
+            _get(repr_embedding_section, 'models'),
+            normalize=_get(repr_embedding_section, 'normalize'),
+            reduce_dims=_get(repr_embedding_section, 'reduce_dims'),
+            weights=_get(repr_embedding_section, 'weights'),
+            fusion=_get(repr_embedding_section, 'fusion', 'concat'),
+            normalize_output=_get(repr_embedding_section, 'normalize_output', False),
+            word2vec_config=_plain_section(_get(repr_embedding_section, 'word2vec'), WORD2VEC_DEFAULTS),
+        )
+        if repr_embedding_config:
+            repr_embedding_config = normalize_embedding_fusion(repr_embedding_config)
         hash_embedding_config = embedding_fusion_from_flat(
             _get(hash_embedding, 'models'),
             normalize=_get(hash_embedding, 'normalize'),
@@ -350,6 +363,7 @@ class TrainConfig:
             model=model.name.lower(),
             repr_type=normalized_repr_type,
             repr_source_model=repr_source_model,
+            repr_embedding=repr_embedding_config,
             sid_export=sid_export,
             sid_coder=sid_coder,
             hash_coder=hash_coder,
@@ -426,6 +440,7 @@ class TrainConfig:
             model=self.model,
             repr_type=self.repr_type,
             repr_source_model=self.repr_source_model,
+            embedding=self.repr_embedding,
             sid_export=self.sid_export,
             sid_coder=self.sid_coder,
             hash_coder=self.hash_coder,
@@ -518,6 +533,8 @@ class TrainConfig:
         }
         if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
             payload.pop('repr_source_model', None)
+        if 'embedding' not in used_views or not payload.get('repr_embedding'):
+            payload.pop('repr_embedding', None)
         if 'sid' not in used_views:
             payload.pop('sid_export', None)
             payload.pop('sid_coder', None)

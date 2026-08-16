@@ -8,6 +8,26 @@ representation:
   target: ${task_repr:null}$
   legacy_target: ${task_type:null}$
   source_model: ${repr_source_model:null}$
+  embedding:
+    models: ${repr_embedding_models:null}$
+    normalize: ${repr_embedding_normalize:null}$
+    reduce_dims: ${repr_embedding_reduce_dims:null}$
+    weights: ${repr_embedding_weights:null}$
+    fusion: ${repr_embedding_fusion:concat}$
+    normalize_output: ${repr_embedding_normalize_output:false}$
+    seed: 42
+    word2vec:
+      vector_size: ${repr_word2vec_vector_size:64}$
+      window: ${repr_word2vec_window:5}$
+      patience: ${repr_word2vec_patience:5}$
+      sg: ${repr_word2vec_sg:1}$
+      negative: ${repr_word2vec_negative:5}$
+      min_count: ${repr_word2vec_min_count:1}$
+      max_epochs: ${repr_word2vec_max_epochs:100}$
+      learning_rate: ${repr_word2vec_learning_rate:0.003}$
+      batch_size: ${repr_word2vec_batch_size:8192}$
+      valid_batch_size: ${repr_word2vec_valid_batch_size:16384}$
+      min_delta: ${repr_word2vec_min_delta:0.0001}$
   combine: ${repr_combine:concat}$
   max_items: ${maxitems:50}$
   model_max_length: ${model_max_length:0}$

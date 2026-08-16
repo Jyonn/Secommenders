@@ -472,3 +472,23 @@ python trainer.py \
 The fusion pipeline is `strict item alignment -> per-source L2 -> optional PCA -> sqrt-normalized weight -> concat`.
 Legacy `--repr_source_model llama3` and `--sid_embedding_model llama3` remain single-source inputs with unchanged
 quantized signatures.
+
+### Multi-source Embedding Representation
+
+The same fusion pipeline can feed the recommendation model directly without quantization:
+
+```bash
+python trainer.py \
+  --data mindf \
+  --model scratch \
+  --repr_type uid+embedding \
+  --task_type uid \
+  --repr_embedding_models llama3,qwen,word2vec \
+  --repr_embedding_normalize true,true,true \
+  --repr_embedding_reduce_dims 256,256,64 \
+  --repr_embedding_weights 1,1,1 \
+  --repr_word2vec_vector_size 64
+```
+
+The fused matrix is stored in the signed compiled artifact. Its sources, order, transforms, and weights therefore
+participate in both compiled and trained SIGNs. `--repr_source_model llama3` remains the single-source shorthand.

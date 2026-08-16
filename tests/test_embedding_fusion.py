@@ -13,8 +13,14 @@ from utils.embedding_fusion import (
     normalize_embedding_fusion,
     load_fused_embeddings,
 )
-from utils.artifact_identity import quantized_spec_from_config, quantized_spec_from_upstream
+from utils.artifact_identity import (
+    compiled_signature_from_config,
+    quantized_spec_from_config,
+    quantized_spec_from_upstream,
+    trained_signature_from_config,
+)
 from utils.artifact import ArtifactStore
+from utils.compile import CompileConfig
 
 
 class EmbeddingFusionTest(unittest.TestCase):
@@ -139,6 +145,41 @@ class EmbeddingFusionTest(unittest.TestCase):
         self.assertEqual(
             quantized_spec_from_upstream('mindf', upstream),
             quantized_spec_from_config('mindf', fusion_model_ref(embedding), runtime),
+        )
+
+    def test_direct_embedding_fusion_changes_compiled_and_trained_signatures(self):
+        base = dict(
+            data='mindf',
+            model='scratch',
+            repr_type='uid+embedding',
+            repr_source_model=None,
+            sid_export=None,
+            sid_coder=None,
+            hash_coder=None,
+            task_type='uid',
+            maxitems=50,
+            repr_combine='concat',
+        )
+        first_embedding = normalize_embedding_fusion({'sources': [
+            {'model': 'llama3', 'reduce_dim': 128},
+            {'model': 'word2vec', 'reduce_dim': 64},
+        ]})
+        second_embedding = normalize_embedding_fusion({'sources': [
+            {'model': 'llama3', 'reduce_dim': 256},
+            {'model': 'word2vec', 'reduce_dim': 64},
+        ]})
+        first = CompileConfig(**base, embedding=first_embedding)
+        second = CompileConfig(**base, embedding=second_embedding)
+        self.assertNotEqual(compiled_signature_from_config(first), compiled_signature_from_config(second))
+
+        train_base = {
+            **base,
+            'effective_batch_size': 64,
+            'upstreams': {},
+        }
+        self.assertNotEqual(
+            trained_signature_from_config({**train_base, 'repr_embedding': first_embedding}),
+            trained_signature_from_config({**train_base, 'repr_embedding': second_embedding}),
         )
 
 

@@ -61,6 +61,7 @@ class CompileConfig:
     item_text_max_tokens: int = 50
     repr_combine: str = 'concat'
     upstreams: Optional[dict] = None
+    embedding: Optional[dict] = None
 
     def __post_init__(self):
         self.data = str(self.data).lower()
@@ -73,6 +74,7 @@ class CompileConfig:
         self.sid_coder = str(self.sid_coder).strip().lower() if self.sid_coder else None
         self.hash_coder = str(self.hash_coder).strip().lower() if self.hash_coder else None
         self.upstreams = deepcopy(self.upstreams or {})
+        self.embedding = deepcopy(self.embedding or {})
 
     @property
     def repr_types(self):
@@ -116,6 +118,8 @@ class CompileConfig:
             parts.append(f'ml{self.model_max_length}')
         if self.repr_source_model and (uses_sid or uses_hash or uses_embedding):
             parts.append(f'rsm-{self.repr_source_model}')
+        if uses_embedding and self.embedding:
+            parts.append(f'emb{short_config_hash(self.embedding)}')
         if self.sid_export and uses_sid:
             parts.append(f'se-{self.sid_export}')
         if self.sid_coder and uses_sid:
@@ -137,6 +141,8 @@ class CompileConfig:
         payload['upstreams'] = self.compile_upstreams
         if not any(view in {'sid', 'hash', 'embedding'} for view in self.used_views):
             payload.pop('repr_source_model', None)
+        if 'embedding' not in self.used_views or not payload.get('embedding'):
+            payload.pop('embedding', None)
         if 'sid' not in self.used_views:
             payload.pop('sid_export', None)
             payload.pop('sid_coder', None)

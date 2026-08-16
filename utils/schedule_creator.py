@@ -12,7 +12,9 @@ except ModuleNotFoundError:
     yaml = None
 
 from utils.compile import CompileConfig, normalize_model_name
+from utils.embedding_fusion import embedding_fusion_from_flat, normalize_embedding_fusion
 from utils.experiment_template import build_default_upstreams
+from utils.word2vec import WORD2VEC_DEFAULTS
 from utils import model as model_utils
 
 def _validate_compile_config(config: CompileConfig):
@@ -60,8 +62,8 @@ def _validate_compile_config(config: CompileConfig):
     hash_upstream = config.upstreams.get('hash') or {}
     sid_has_source = bool((sid_upstream.get('embedding') or {}).get('sources') or sid_upstream.get('embedding_model'))
     hash_has_source = bool((hash_upstream.get('embedding') or {}).get('sources') or hash_upstream.get('embedding_model'))
-    if 'embedding' in used_views and not config.repr_source_model:
-        raise ValueError('data.repr_source_model is required when repr.type uses embedding')
+    if 'embedding' in used_views and not (config.embedding or config.repr_source_model):
+        raise ValueError('embedding requires repr_source_model or repr_embedding_models')
     if 'sid' in used_views and not (sid_has_source or config.repr_source_model):
         raise ValueError('SID requires repr_source_model or sid_embedding_models')
     if 'hash' in used_views and not (hash_has_source or config.repr_source_model):
@@ -310,6 +312,37 @@ class Job:
     def repr_source_model(self, value: str):
         return self._set_arg('repr_source_model', normalize_model_name(value))
 
+    def repr_embedding_models(self, *values: str):
+        values = values[0] if len(values) == 1 and isinstance(values[0], (list, tuple)) else values
+        return self._set_arg('repr_embedding_models', ','.join(str(value) for value in values))
+
+    def repr_embedding_normalize(self, *values: bool):
+        values = values[0] if len(values) == 1 and isinstance(values[0], (list, tuple)) else values
+        return self._set_arg('repr_embedding_normalize', ','.join(str(bool(value)).lower() for value in values))
+
+    def repr_embedding_reduce_dims(self, *values: int):
+        values = values[0] if len(values) == 1 and isinstance(values[0], (list, tuple)) else values
+        return self._set_arg('repr_embedding_reduce_dims', ','.join(str(int(value)) for value in values))
+
+    def repr_embedding_weights(self, *values: float):
+        values = values[0] if len(values) == 1 and isinstance(values[0], (list, tuple)) else values
+        return self._set_arg('repr_embedding_weights', ','.join(str(float(value)) for value in values))
+
+    def repr_embedding_fusion(self, value: str):
+        return self._set_string_arg('repr_embedding_fusion', value, lower=True)
+
+    def repr_embedding_normalize_output(self, value: bool):
+        return self._set_arg('repr_embedding_normalize_output', bool(value))
+
+    def repr_word2vec_vector_size(self, value: int):
+        return self._set_int_arg('repr_word2vec_vector_size', value)
+
+    def repr_word2vec_window(self, value: int):
+        return self._set_int_arg('repr_word2vec_window', value)
+
+    def repr_word2vec_patience(self, value: int):
+        return self._set_int_arg('repr_word2vec_patience', value)
+
     def sid_coder(self, value: str):
         return self._set_string_arg('sid_coder', value, lower=True)
 
@@ -541,6 +574,21 @@ class Job:
         if missing:
             raise ValueError(f'Job "{self.name}" is missing required args: {missing}')
 
+        word2vec_config = {
+            key: self._args.get(f'repr_word2vec_{key}', default)
+            for key, default in WORD2VEC_DEFAULTS.items()
+        }
+        embedding = embedding_fusion_from_flat(
+            self._args.get('repr_embedding_models'),
+            normalize=self._args.get('repr_embedding_normalize'),
+            reduce_dims=self._args.get('repr_embedding_reduce_dims'),
+            weights=self._args.get('repr_embedding_weights'),
+            fusion=self._args.get('repr_embedding_fusion', 'concat'),
+            normalize_output=self._args.get('repr_embedding_normalize_output', False),
+            word2vec_config=word2vec_config,
+        )
+        if embedding:
+            embedding = normalize_embedding_fusion(embedding)
         compile_config = CompileConfig(
             data=self._args['data'],
             model=self._args['model'],
@@ -555,6 +603,7 @@ class Job:
             item_text_max_tokens=int(self._args.get('item_text_max_tokens', 20)),
             repr_combine=self._args.get('repr_combine', 'concat'),
             upstreams=build_default_upstreams(self._args),
+            embedding=embedding,
         )
         _validate_compile_config(compile_config)
         _validate_job_runtime_args(self._args, compile_config)

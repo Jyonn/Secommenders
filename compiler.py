@@ -23,7 +23,7 @@ from utils.experiment_template import build_default_upstreams
 from utils import function
 from utils.logging import setup_logging
 from utils.pipeline import ensure_embedded, ensure_quantized
-from utils.embedding_fusion import fusion_model_ref, normalize_embedding_fusion
+from utils.embedding_fusion import load_fused_embeddings, fusion_model_ref, normalize_embedding_fusion
 from utils import model as model_utils
 
 class VocabularyRegistry:
@@ -256,6 +256,8 @@ class Compiler:
             required_item_view_paths.append(self.item_views_dir / 'hash.parquet')
         if self.requires_view('embedding'):
             required_item_view_paths.append(self.item_views_dir / 'embedding.parquet')
+            if self.config.embedding:
+                required_item_view_paths.append(self.output_dir / 'embeddings.npy')
         required_paths = [
             self.output_dir / 'stats.json',
             self.vocab_dir / 'special.json',
@@ -308,8 +310,10 @@ class Compiler:
         hash_upstream = self.config.upstreams.get('hash') or {}
         sid_has_source = bool((sid_upstream.get('embedding') or {}).get('sources') or sid_upstream.get('embedding_model'))
         hash_has_source = bool((hash_upstream.get('embedding') or {}).get('sources') or hash_upstream.get('embedding_model'))
-        if 'embedding' in used_views and not self.config.repr_source_model:
-            raise ValueError('data.repr_source_model is required when repr.type uses embedding')
+        if 'embedding' in used_views and not (self.config.embedding or self.config.repr_source_model):
+            raise ValueError(
+                'embedding representation requires repr_source_model or representation.embedding.models'
+            )
         if 'sid' in used_views and not (sid_has_source or self.config.repr_source_model):
             raise ValueError('SID requires repr_source_model or upstreams.sid.embedding.sources')
         if 'hash' in used_views and not (hash_has_source or self.config.repr_source_model):
@@ -607,7 +611,8 @@ class Compiler:
             )
 
         if self.requires_view('embedding'):
-            pnt(f'loading embedding view from model={self.config.repr_source_model}')
+            source = fusion_model_ref(self.config.embedding) if self.config.embedding else self.config.repr_source_model
+            pnt(f'loading embedding view from model={source}')
             embedding_values = self.load_embedding_view()
             self._write_view('embedding', embedding_values)
             pnt(
@@ -918,6 +923,28 @@ class Compiler:
         return ordered_values
 
     def load_embedding_view(self):
+        if self.config.embedding:
+            matrix, item_ids, summaries = load_fused_embeddings(
+                self.config.data,
+                self.processor,
+                self.config.embedding,
+                ensure_embedded,
+            )
+            expected_ids = [str(item) for item in self.uid_raw_items]
+            if item_ids != expected_ids:
+                raise ValueError('fused embedding item order does not match compiler uid vocabulary')
+            np.save(self.output_dir / 'embeddings.npy', matrix)
+            self._save_json(
+                self.output_dir / 'embedding_meta.json',
+                {
+                    'model': fusion_model_ref(self.config.embedding),
+                    'shape': list(matrix.shape),
+                    'sources': summaries,
+                    'normalize_output': self.config.embedding['normalize_output'],
+                },
+            )
+            return list(range(len(item_ids)))
+
         model_name = normalize_model_name(self.config.repr_source_model)
         embedding_dir = self.store.embedded_dir(model_name)
         item_ids_path = embedding_dir / 'item_ids.parquet'
