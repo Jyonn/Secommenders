@@ -28,7 +28,12 @@ from utils.function import load_processor
 from utils.gpu import GPU
 from utils.logging import setup_logging
 from utils.pipeline import ensure_embedded
-from utils.embedding_fusion import fusion_model_ref, load_fused_embeddings, normalize_embedding_fusion
+from utils.embedding_fusion import (
+    embedding_fusion_from_flat,
+    fusion_model_ref,
+    load_fused_embeddings,
+    normalize_embedding_fusion,
+)
 
 
 def _format_spec(spec):
@@ -83,7 +88,16 @@ class Quantizer:
         legacy_embedding_model = model.replace('.', '').lower()
         embedding_section = getattr(self.config, 'embedding', None)
         embedding_config = embedding_section() if callable(embedding_section) else {}
-        self.embedding_spec = normalize_embedding_fusion(embedding_config, legacy_model=legacy_embedding_model)
+        flat_embedding = embedding_fusion_from_flat(
+            embedding_config.get('models'),
+            normalize=embedding_config.get('normalize'),
+            reduce_dims=embedding_config.get('reduce_dims'),
+            weights=embedding_config.get('weights'),
+            fusion=embedding_config.get('fusion', 'concat'),
+            normalize_output=embedding_config.get('normalize_output', False),
+            word2vec_config=embedding_config.get('word2vec'),
+        )
+        self.embedding_spec = normalize_embedding_fusion(flat_embedding or {}, legacy_model=legacy_embedding_model)
         self.embedding_model = fusion_model_ref(self.embedding_spec)
         self.quantizer_name = self.config.quantizer.name
         self.quantizer_scheme = self._infer_quantizer_scheme(self.quantizer_name)

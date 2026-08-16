@@ -458,7 +458,13 @@ python trainer.py \
   --model scratch \
   --repr_type sid \
   --task_type sid \
-  --sid_embedding_sources '[{"model":"llama3","normalize":true,"reduce_dim":256,"weight":1},{"model":"word2vec","config":{"vector_size":64,"window":5,"patience":5},"normalize":true,"reduce_dim":64,"weight":1}]' \
+  --sid_embedding_models llama3,word2vec \
+  --sid_embedding_normalize true,true \
+  --sid_embedding_reduce_dims 256,64 \
+  --sid_embedding_weights 1,1 \
+  --sid_word2vec_vector_size 64 \
+  --sid_word2vec_window 5 \
+  --sid_word2vec_patience 5 \
   --sid_coder rqvae \
   --sid_export coll
 ```

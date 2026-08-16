@@ -1,8 +1,23 @@
 embedding:
-  sources: ${embedding_sources:null}$
+  models: ${embedding_models:null}$
+  normalize: ${embedding_normalize:null}$
+  reduce_dims: ${embedding_reduce_dims:null}$
+  weights: ${embedding_weights:null}$
   fusion: ${embedding_fusion:concat}$
   normalize_output: ${embedding_normalize_output:false}$
   seed: 42
+  word2vec:
+    vector_size: ${embedding_word2vec_vector_size:64}$
+    window: ${embedding_word2vec_window:5}$
+    patience: ${embedding_word2vec_patience:5}$
+    sg: ${embedding_word2vec_sg:1}$
+    negative: ${embedding_word2vec_negative:5}$
+    min_count: ${embedding_word2vec_min_count:1}$
+    max_epochs: ${embedding_word2vec_max_epochs:100}$
+    learning_rate: ${embedding_word2vec_learning_rate:0.003}$
+    batch_size: ${embedding_word2vec_batch_size:8192}$
+    valid_batch_size: ${embedding_word2vec_valid_batch_size:16384}$
+    min_delta: ${embedding_word2vec_min_delta:0.0001}$
 
 quantizer:
   name: ${quantizer_name:rqvae}

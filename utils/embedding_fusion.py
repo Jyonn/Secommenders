@@ -30,6 +30,63 @@ def parse_embedding_sources(value):
     return list(value)
 
 
+def _csv(value, cast=str):
+    if value is None or value == 'null':
+        return []
+    if isinstance(value, str):
+        values = [part.strip() for part in value.split(',') if part.strip()]
+    else:
+        values = list(value)
+    return [cast(item) for item in values]
+
+
+def embedding_fusion_from_flat(
+        models,
+        *,
+        normalize=None,
+        reduce_dims=None,
+        weights=None,
+        fusion='concat',
+        normalize_output=False,
+        word2vec_config=None,
+):
+    model_values = _csv(models, str)
+    if not model_values:
+        return None
+
+    def expand(value, cast, default, name):
+        values = _csv(value, cast)
+        if not values:
+            return [default] * len(model_values)
+        if len(values) == 1:
+            return values * len(model_values)
+        if len(values) != len(model_values):
+            raise ValueError(f'{name} expects one value or {len(model_values)} values, got {len(values)}')
+        return values
+
+    normalizes = expand(normalize, lambda item: _as_bool(item, True), True, 'embedding_normalize')
+    dimensions = expand(reduce_dims, int, 0, 'embedding_reduce_dims')
+    source_weights = expand(weights, float, 1.0, 'embedding_weights')
+    sources = []
+    for model, should_normalize, reduce_dim, weight in zip(
+            model_values, normalizes, dimensions, source_weights,
+    ):
+        source = {
+            'model': model,
+            'normalize': should_normalize,
+            'reduce_dim': reduce_dim,
+            'weight': weight,
+        }
+        if normalize_model_name(model).startswith('word2vec') and word2vec_config:
+            source['config'] = word2vec_config
+        sources.append(source)
+    return {
+        'sources': sources,
+        'fusion': fusion,
+        'normalize_output': normalize_output,
+    }
+
+
 def _get(value, key, default=None):
     return value.get(key, default) if isinstance(value, dict) else getattr(value, key, default)
 
@@ -38,6 +95,16 @@ def normalize_embedding_fusion(value=None, legacy_model=None):
     if value is not None and not isinstance(value, dict) and callable(value):
         value = value()
     raw = deepcopy(value or {})
+    if raw.get('models') is not None and not raw.get('sources'):
+        raw = embedding_fusion_from_flat(
+            raw.get('models'),
+            normalize=raw.get('normalize'),
+            reduce_dims=raw.get('reduce_dims'),
+            weights=raw.get('weights'),
+            fusion=raw.get('fusion', 'concat'),
+            normalize_output=raw.get('normalize_output', False),
+            word2vec_config=raw.get('word2vec'),
+        ) or {}
     sources = parse_embedding_sources(raw.get('sources'))
     if not sources and legacy_model:
         sources = [{'model': legacy_model, 'normalize': False}]

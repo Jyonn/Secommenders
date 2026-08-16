@@ -18,10 +18,25 @@ upstreams:
     kind: quantized
     embedding_model: ${sid_embedding_model:null}$
     embedding:
-      sources: ${sid_embedding_sources:null}$
+      models: ${sid_embedding_models:null}$
+      normalize: ${sid_embedding_normalize:null}$
+      reduce_dims: ${sid_embedding_reduce_dims:null}$
+      weights: ${sid_embedding_weights:null}$
       fusion: ${sid_embedding_fusion:concat}$
       normalize_output: ${sid_embedding_normalize_output:false}$
       seed: 42
+      word2vec:
+        vector_size: ${sid_word2vec_vector_size:64}$
+        window: ${sid_word2vec_window:5}$
+        patience: ${sid_word2vec_patience:5}$
+        sg: ${sid_word2vec_sg:1}$
+        negative: ${sid_word2vec_negative:5}$
+        min_count: ${sid_word2vec_min_count:1}$
+        max_epochs: ${sid_word2vec_max_epochs:100}$
+        learning_rate: ${sid_word2vec_learning_rate:0.003}$
+        batch_size: ${sid_word2vec_batch_size:8192}$
+        valid_batch_size: ${sid_word2vec_valid_batch_size:16384}$
+        min_delta: ${sid_word2vec_min_delta:0.0001}$
     export: ${sid_export:coll}$
     quantizer:
       name: ${sid_coder:rqvae}$
@@ -63,7 +78,10 @@ upstreams:
     kind: quantized
     embedding_model: ${hash_embedding_model:null}$
     embedding:
-      sources: ${hash_embedding_sources:null}$
+      models: ${hash_embedding_models:null}$
+      normalize: ${hash_embedding_normalize:null}$
+      reduce_dims: ${hash_embedding_reduce_dims:null}$
+      weights: ${hash_embedding_weights:null}$
       fusion: ${hash_embedding_fusion:concat}$
       normalize_output: ${hash_embedding_normalize_output:false}$
       seed: 42

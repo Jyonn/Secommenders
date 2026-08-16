@@ -27,6 +27,8 @@ from utils.experiment_template import (
     used_upstreams_for_config,
 )
 from utils.frequency_breakdown import normalize_frequency_boundaries
+from utils.embedding_fusion import embedding_fusion_from_flat
+from utils.word2vec import WORD2VEC_DEFAULTS
 
 
 def _get(obj, name, default=None):
@@ -213,29 +215,36 @@ class TrainConfig:
             _get(hash_quantizer, 'name', getattr(data_config, 'hash_coder', '')) or ''
         ).strip().lower() or None
         sid_export = str(_get(sid_section, 'export', getattr(data_config, 'sid_export', None)) or '').strip().lower() or None
+        sid_embedding_config = embedding_fusion_from_flat(
+            _get(sid_embedding, 'models'),
+            normalize=_get(sid_embedding, 'normalize'),
+            reduce_dims=_get(sid_embedding, 'reduce_dims'),
+            weights=_get(sid_embedding, 'weights'),
+            fusion=_get(sid_embedding, 'fusion', 'concat'),
+            normalize_output=_get(sid_embedding, 'normalize_output', False),
+            word2vec_config=_plain_section(_get(sid_embedding, 'word2vec'), WORD2VEC_DEFAULTS),
+        )
+        hash_embedding_config = embedding_fusion_from_flat(
+            _get(hash_embedding, 'models'),
+            normalize=_get(hash_embedding, 'normalize'),
+            reduce_dims=_get(hash_embedding, 'reduce_dims'),
+            weights=_get(hash_embedding, 'weights'),
+            fusion=_get(hash_embedding, 'fusion', 'concat'),
+            normalize_output=_get(hash_embedding, 'normalize_output', False),
+        )
         flat_for_upstreams = {
             'repr_source_model': repr_source_model,
             'sid_coder': sid_coder,
             'sid_export': sid_export,
             'sid_embedding_model': _get(sid_section, 'embedding_model', None),
-            'sid_embedding': {
-                'sources': _get(sid_embedding, 'sources'),
-                'fusion': _get(sid_embedding, 'fusion', 'concat'),
-                'normalize_output': _get(sid_embedding, 'normalize_output', False),
-                'seed': _get(sid_embedding, 'seed', 42),
-            } if _get(sid_embedding, 'sources') is not None and _get(sid_embedding, 'sources') != 'null' else None,
+            'sid_embedding': sid_embedding_config,
             'sid_quantizer_config': sid_quantizer_config,
             'sid_encoder_name': _get(sid_encoder, 'name', 'mlp'),
             'sid_encoder_config': sid_encoder_config,
             'sid_quantizer_trainer': sid_quantizer_trainer,
             'hash_coder': hash_coder,
             'hash_embedding_model': _get(hash_section, 'embedding_model', None),
-            'hash_embedding': {
-                'sources': _get(hash_embedding, 'sources'),
-                'fusion': _get(hash_embedding, 'fusion', 'concat'),
-                'normalize_output': _get(hash_embedding, 'normalize_output', False),
-                'seed': _get(hash_embedding, 'seed', 42),
-            } if _get(hash_embedding, 'sources') is not None and _get(hash_embedding, 'sources') != 'null' else None,
+            'hash_embedding': hash_embedding_config,
             'hash_quantizer_config': hash_quantizer_config,
             'uid_cluster_levels': uid_cluster_levels,
             'uid_cluster_embedding': uid_cluster_embedding,

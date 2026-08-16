@@ -2,7 +2,7 @@ from copy import deepcopy
 
 from utils.compile import normalize_model_name
 from utils.word2vec import WORD2VEC_DEFAULTS
-from utils.embedding_fusion import normalize_embedding_fusion
+from utils.embedding_fusion import embedding_fusion_from_flat, normalize_embedding_fusion
 
 
 SID_QUANTIZER_CONFIG_DEFAULTS = {
@@ -147,19 +147,30 @@ def build_default_upstreams(flat: dict):
     hash_quantizer_name = str(flat.get('hash_quantizer_name') or flat.get('hash_coder') or 'simhash').strip().lower()
     uid_cluster_levels = normalize_optional_string(flat.get('uid_cluster_levels')) or 'auto'
     sid_embedding = flat.get('sid_embedding')
-    if not sid_embedding and flat.get('sid_embedding_sources') is not None:
-        sid_embedding = {
-            'sources': flat.get('sid_embedding_sources'),
-            'fusion': flat.get('sid_embedding_fusion', 'concat'),
-            'normalize_output': flat.get('sid_embedding_normalize_output', False),
-        }
+    if not sid_embedding and flat.get('sid_embedding_models') is not None:
+        sid_embedding = embedding_fusion_from_flat(
+            flat.get('sid_embedding_models'),
+            normalize=flat.get('sid_embedding_normalize'),
+            reduce_dims=flat.get('sid_embedding_reduce_dims'),
+            weights=flat.get('sid_embedding_weights'),
+            fusion=flat.get('sid_embedding_fusion', 'concat'),
+            normalize_output=flat.get('sid_embedding_normalize_output', False),
+            word2vec_config={
+                key: flat.get(f'sid_word2vec_{key}')
+                for key in WORD2VEC_DEFAULTS
+                if flat.get(f'sid_word2vec_{key}') is not None
+            },
+        )
     hash_embedding = flat.get('hash_embedding')
-    if not hash_embedding and flat.get('hash_embedding_sources') is not None:
-        hash_embedding = {
-            'sources': flat.get('hash_embedding_sources'),
-            'fusion': flat.get('hash_embedding_fusion', 'concat'),
-            'normalize_output': flat.get('hash_embedding_normalize_output', False),
-        }
+    if not hash_embedding and flat.get('hash_embedding_models') is not None:
+        hash_embedding = embedding_fusion_from_flat(
+            flat.get('hash_embedding_models'),
+            normalize=flat.get('hash_embedding_normalize'),
+            reduce_dims=flat.get('hash_embedding_reduce_dims'),
+            weights=flat.get('hash_embedding_weights'),
+            fusion=flat.get('hash_embedding_fusion', 'concat'),
+            normalize_output=flat.get('hash_embedding_normalize_output', False),
+        )
     uid_cluster_embedding = merge_defaults(CLUSTERER_EMBEDDING_DEFAULTS, flat.get('uid_cluster_embedding') or {})
     uid_cluster_embedding['content_model'] = normalize_model_name(uid_cluster_embedding.get('content_model'))
     uid_cluster_word2vec = merge_defaults(

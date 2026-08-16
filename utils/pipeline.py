@@ -1,4 +1,3 @@
-import json
 from types import SimpleNamespace
 
 from pigmento import pnt
@@ -65,6 +64,12 @@ def ensure_quantized(data: str, model: str, quantizer_name: str | None = None, q
     encoder = quantizer_spec.get('encoder') or {}
     trainer = quantizer_spec.get('trainer') or {}
     embedding = quantizer_spec.get('embedding') or {}
+    embedding_sources = embedding.get('sources') or []
+    word2vec_source = next(
+        (source for source in embedding_sources if str(source.get('model', '')).startswith('word2vec')),
+        {},
+    )
+    word2vec_config = word2vec_source.get('config') or {}
     hash_config = quantizer.get('config') or {}
     quantizer_config = quantizer.get('config') or {}
     if (quantizer.get('name') or quantizer_name) in {'lsh', 'simhash', 'pcahash', 'itq'}:
@@ -106,9 +111,13 @@ def ensure_quantized(data: str, model: str, quantizer_name: str | None = None, q
         'lr': trainer.get('learning_rate'),
         'patience': trainer.get('patience'),
         'save_best_by': trainer.get('save_best_by'),
-        'embedding_sources': json.dumps(embedding.get('sources')) if embedding.get('sources') else None,
+        'embedding_models': ','.join(str(source['model']) for source in embedding_sources) or None,
+        'embedding_normalize': ','.join(str(bool(source.get('normalize', True))).lower() for source in embedding_sources) or None,
+        'embedding_reduce_dims': ','.join(str(source.get('reduce_dim', 0)) for source in embedding_sources) or None,
+        'embedding_weights': ','.join(str(source.get('weight', 1.0)) for source in embedding_sources) or None,
         'embedding_fusion': embedding.get('fusion'),
         'embedding_normalize_output': embedding.get('normalize_output'),
+        **{f'embedding_word2vec_{key}': value for key, value in word2vec_config.items()},
     }
     kwargs = {key: value for key, value in kwargs.items() if value is not None}
 

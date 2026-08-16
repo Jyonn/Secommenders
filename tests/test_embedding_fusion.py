@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from utils.embedding_fusion import (
+    embedding_fusion_from_flat,
     fusion_model_ref,
     is_legacy_single_source,
     normalize_embedding_fusion,
@@ -17,6 +18,23 @@ from utils.artifact import ArtifactStore
 
 
 class EmbeddingFusionTest(unittest.TestCase):
+    def test_flat_parameters_expand_into_sources(self):
+        value = embedding_fusion_from_flat(
+            'llama3,word2vec',
+            normalize='true,true',
+            reduce_dims='256,64',
+            weights='1,0.5',
+            word2vec_config={'vector_size': 32, 'window': 10},
+        )
+        spec = normalize_embedding_fusion(value)
+        self.assertEqual([source['reduce_dim'] for source in spec['sources']], [256, 64])
+        self.assertEqual([source['weight'] for source in spec['sources']], [1.0, 0.5])
+        self.assertTrue(spec['sources'][1]['model'].startswith('word2vec/'))
+
+    def test_flat_parameters_reject_mismatched_lengths(self):
+        with self.assertRaisesRegex(ValueError, 'embedding_reduce_dims'):
+            embedding_fusion_from_flat('a,b,c', reduce_dims='64,32')
+
     def test_legacy_single_source_keeps_model_identity(self):
         spec = normalize_embedding_fusion({}, legacy_model='llama3')
         self.assertTrue(is_legacy_single_source(spec))
@@ -96,7 +114,7 @@ class EmbeddingFusionTest(unittest.TestCase):
     def test_upstream_and_runtime_config_produce_same_quantized_spec(self):
         embedding = normalize_embedding_fusion({'sources': [
             {'model': 'llama3', 'reduce_dim': 128, 'weight': 1},
-            {'model': 'word2vec', 'weight': 1},
+            {'model': 'word2vec', 'weight': 1, 'config': {'vector_size': 32, 'window': 10}},
         ]})
         upstream = {
             'embedding_model': None,
@@ -106,7 +124,14 @@ class EmbeddingFusionTest(unittest.TestCase):
             'trainer': {},
         }
         runtime = {
-            'embedding': embedding,
+            'embedding': {
+                'models': ','.join(source['model'] for source in embedding['sources']),
+                'normalize': ','.join(str(source['normalize']).lower() for source in embedding['sources']),
+                'reduce_dims': ','.join(str(source['reduce_dim']) for source in embedding['sources']),
+                'weights': ','.join(str(source['weight']) for source in embedding['sources']),
+                'fusion': embedding['fusion'],
+                'word2vec': embedding['sources'][1]['config'],
+            },
             'quantizer': upstream['quantizer'],
             'encoder': upstream['encoder'],
             'trainer': upstream['trainer'],
