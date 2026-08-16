@@ -429,7 +429,8 @@ The benchmark is still evolving. The most actively developed paths right now are
 - semantic-augmented history representations
 - hierarchical UID decoding
 - batch experiment automation
-# Collaborative embedding artifacts
+
+## Collaborative Embedding Artifacts
 
 Word2Vec collaborative embeddings are standard embedded artifacts and can be prepared independently:
 
@@ -445,3 +446,23 @@ python scripts/migrate_word2vec_embeddings.py --data mindf
 python scripts/migrate_word2vec_embeddings.py --data mindf --apply
 python scripts/init_artifact_registry.py --stage clustered --apply
 ```
+
+### Multi-source SID Quantization
+
+Quantizers can align, normalize, PCA-reduce, weight, and concatenate multiple embedding sources. Source order and all
+transforms participate in the quantized SIGN.
+
+```bash
+python trainer.py \
+  --data mindf \
+  --model scratch \
+  --repr_type sid \
+  --task_type sid \
+  --sid_embedding_sources '[{"model":"llama3","normalize":true,"reduce_dim":256,"weight":1},{"model":"word2vec","config":{"vector_size":64,"window":5,"patience":5},"normalize":true,"reduce_dim":64,"weight":1}]' \
+  --sid_coder rqvae \
+  --sid_export coll
+```
+
+The fusion pipeline is `strict item alignment -> per-source L2 -> optional PCA -> sqrt-normalized weight -> concat`.
+Legacy `--repr_source_model llama3` and `--sid_embedding_model llama3` remain single-source inputs with unchanged
+quantized signatures.

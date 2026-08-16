@@ -1,3 +1,9 @@
+embedding:
+  sources: ${embedding_sources:null}$
+  fusion: ${embedding_fusion:concat}$
+  normalize_output: ${embedding_normalize_output:false}$
+  seed: 42
+
 quantizer:
   name: ${quantizer_name:rqvae}
   config:

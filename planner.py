@@ -62,6 +62,9 @@ GROUPS = {
     },
     'sid': {
         'sid_embedding_model': None,
+        'sid_embedding_sources': None,
+        'sid_embedding_fusion': 'concat',
+        'sid_embedding_normalize_output': False,
         'sid_codebook_size': 256,
         'sid_latent_dim': 64,
         'sid_hidden_dims': '2048,1024,512,256,128',
@@ -79,6 +82,9 @@ GROUPS = {
     },
     'hash': {
         'hash_embedding_model': None,
+        'hash_embedding_sources': None,
+        'hash_embedding_fusion': 'concat',
+        'hash_embedding_normalize_output': False,
         'hash_num_bits': 24,
         'hash_num_tables': 1,
         'hash_projection_distribution': 'gaussian',

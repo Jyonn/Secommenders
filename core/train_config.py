@@ -163,8 +163,10 @@ class TrainConfig:
         sid_quantizer = _get(sid_section, 'quantizer')
         sid_encoder = _get(sid_section, 'encoder')
         sid_upstream_trainer = _get(sid_section, 'trainer')
+        sid_embedding = _get(sid_section, 'embedding')
         hash_section = _get(upstreams_section, 'hash')
         hash_quantizer = _get(hash_section, 'quantizer')
+        hash_embedding = _get(hash_section, 'embedding')
         uid_section = _get(upstreams_section, 'uid')
         uid_clusterer = _get(uid_section, 'clusterer')
         uid_cluster_levels = normalize_optional_string(
@@ -216,12 +218,24 @@ class TrainConfig:
             'sid_coder': sid_coder,
             'sid_export': sid_export,
             'sid_embedding_model': _get(sid_section, 'embedding_model', None),
+            'sid_embedding': {
+                'sources': _get(sid_embedding, 'sources'),
+                'fusion': _get(sid_embedding, 'fusion', 'concat'),
+                'normalize_output': _get(sid_embedding, 'normalize_output', False),
+                'seed': _get(sid_embedding, 'seed', 42),
+            } if _get(sid_embedding, 'sources') is not None and _get(sid_embedding, 'sources') != 'null' else None,
             'sid_quantizer_config': sid_quantizer_config,
             'sid_encoder_name': _get(sid_encoder, 'name', 'mlp'),
             'sid_encoder_config': sid_encoder_config,
             'sid_quantizer_trainer': sid_quantizer_trainer,
             'hash_coder': hash_coder,
             'hash_embedding_model': _get(hash_section, 'embedding_model', None),
+            'hash_embedding': {
+                'sources': _get(hash_embedding, 'sources'),
+                'fusion': _get(hash_embedding, 'fusion', 'concat'),
+                'normalize_output': _get(hash_embedding, 'normalize_output', False),
+                'seed': _get(hash_embedding, 'seed', 42),
+            } if _get(hash_embedding, 'sources') is not None and _get(hash_embedding, 'sources') != 'null' else None,
             'hash_quantizer_config': hash_quantizer_config,
             'uid_cluster_levels': uid_cluster_levels,
             'uid_cluster_embedding': uid_cluster_embedding,

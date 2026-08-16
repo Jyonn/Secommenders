@@ -55,9 +55,17 @@ def _validate_compile_config(config: CompileConfig):
     if is_scratch_model and 'text' in repr_types:
         raise ValueError('scratch backbone currently does not support repr.type containing text')
 
-    external_view_required = any(view in {'sid', 'hash', 'embedding'} for view in repr_types + config.task_types)
-    if external_view_required and not config.repr_source_model:
-        raise ValueError('data.repr_source_model is required when repr.type or task.type uses sid/hash/embedding')
+    used_views = set(repr_types + config.task_types)
+    sid_upstream = config.upstreams.get('sid') or {}
+    hash_upstream = config.upstreams.get('hash') or {}
+    sid_has_source = bool((sid_upstream.get('embedding') or {}).get('sources') or sid_upstream.get('embedding_model'))
+    hash_has_source = bool((hash_upstream.get('embedding') or {}).get('sources') or hash_upstream.get('embedding_model'))
+    if 'embedding' in used_views and not config.repr_source_model:
+        raise ValueError('data.repr_source_model is required when repr.type uses embedding')
+    if 'sid' in used_views and not (sid_has_source or config.repr_source_model):
+        raise ValueError('SID requires repr_source_model or sid_embedding_sources')
+    if 'hash' in used_views and not (hash_has_source or config.repr_source_model):
+        raise ValueError('hash requires repr_source_model or hash_embedding_sources')
     if 'sid' in set(repr_types + config.task_types) and not config.sid_export:
         raise ValueError('data.sid_export is required when repr.type or task.type uses sid')
     if 'sid' in set(repr_types + config.task_types) and not config.sid_coder:
@@ -405,6 +413,17 @@ class Job:
 
     def code_decoding(self, value: str):
         return self._set_string_arg('code_decoding', value, lower=True)
+
+    def sid_embedding_sources(self, value):
+        if not isinstance(value, str):
+            value = json.dumps(value, separators=(',', ':'))
+        return self._set_arg('sid_embedding_sources', value)
+
+    def sid_embedding_fusion(self, value: str):
+        return self._set_string_arg('sid_embedding_fusion', value, lower=True)
+
+    def sid_embedding_normalize_output(self, value: bool):
+        return self._set_arg('sid_embedding_normalize_output', bool(value))
 
     def main_metric(self, value: str):
         return self._set_string_arg('main_metric', value, lower=True)
@@ -803,7 +822,12 @@ class Schedule:
                             if view != target:
                                 repr_types.append(view)
                         used_views = set(repr_types)
-                        requires_source = any(view in {'sid', 'hash', 'embedding'} for view in used_views)
+                        available_args = {**self._default_args, **spec.args}
+                        requires_source = (
+                            'embedding' in used_views
+                            or ('sid' in used_views and not available_args.get('sid_embedding_sources'))
+                            or ('hash' in used_views and not available_args.get('hash_embedding_sources'))
+                        )
                         source_options = self._semantic_source_options(spec, requires_source=requires_source)
                         sid_options = self._sid_options(spec, uses_sid='sid' in used_views)
                         hash_options = self._hash_options(spec, uses_hash='hash' in used_views)

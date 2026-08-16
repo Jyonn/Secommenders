@@ -2,6 +2,7 @@ from copy import deepcopy
 
 from utils.compile import normalize_model_name
 from utils.word2vec import WORD2VEC_DEFAULTS
+from utils.embedding_fusion import normalize_embedding_fusion
 
 
 SID_QUANTIZER_CONFIG_DEFAULTS = {
@@ -145,6 +146,20 @@ def build_default_upstreams(flat: dict):
     sid_quantizer_name = str(flat.get('sid_quantizer_name') or flat.get('sid_coder') or 'rqvae').strip().lower()
     hash_quantizer_name = str(flat.get('hash_quantizer_name') or flat.get('hash_coder') or 'simhash').strip().lower()
     uid_cluster_levels = normalize_optional_string(flat.get('uid_cluster_levels')) or 'auto'
+    sid_embedding = flat.get('sid_embedding')
+    if not sid_embedding and flat.get('sid_embedding_sources') is not None:
+        sid_embedding = {
+            'sources': flat.get('sid_embedding_sources'),
+            'fusion': flat.get('sid_embedding_fusion', 'concat'),
+            'normalize_output': flat.get('sid_embedding_normalize_output', False),
+        }
+    hash_embedding = flat.get('hash_embedding')
+    if not hash_embedding and flat.get('hash_embedding_sources') is not None:
+        hash_embedding = {
+            'sources': flat.get('hash_embedding_sources'),
+            'fusion': flat.get('hash_embedding_fusion', 'concat'),
+            'normalize_output': flat.get('hash_embedding_normalize_output', False),
+        }
     uid_cluster_embedding = merge_defaults(CLUSTERER_EMBEDDING_DEFAULTS, flat.get('uid_cluster_embedding') or {})
     uid_cluster_embedding['content_model'] = normalize_model_name(uid_cluster_embedding.get('content_model'))
     uid_cluster_word2vec = merge_defaults(
@@ -163,8 +178,7 @@ def build_default_upstreams(flat: dict):
         'word2vec': uid_cluster_word2vec,
         'cluster': merge_defaults(CLUSTERER_CONFIG_DEFAULTS, flat.get('uid_cluster_config') or {}),
     }
-    return {
-        'sid': {
+    sid = {
             'kind': 'quantized',
             'embedding_model': normalize_model_name(flat.get('sid_embedding_model')) or repr_source_model,
             'export': str(flat.get('sid_export') or 'coll').strip().lower(),
@@ -177,8 +191,13 @@ def build_default_upstreams(flat: dict):
                 'config': merge_defaults(SID_ENCODER_CONFIG_DEFAULTS, flat.get('sid_encoder_config') or {}),
             },
             'trainer': merge_defaults(QUANTIZER_TRAINER_DEFAULTS, flat.get('sid_quantizer_trainer') or {}),
-        },
-        'hash': {
+        }
+    if sid_embedding:
+        sid['embedding'] = normalize_embedding_fusion(
+            sid_embedding,
+            legacy_model=normalize_model_name(flat.get('sid_embedding_model')) or repr_source_model,
+        )
+    hash_upstream = {
             'kind': 'quantized',
             'embedding_model': normalize_model_name(flat.get('hash_embedding_model')) or repr_source_model,
             'export': 'hash',
@@ -186,7 +205,15 @@ def build_default_upstreams(flat: dict):
                 'name': hash_quantizer_name,
                 'config': merge_defaults(HASH_QUANTIZER_CONFIG_DEFAULTS, flat.get('hash_quantizer_config') or {}),
             },
-        },
+        }
+    if hash_embedding:
+        hash_upstream['embedding'] = normalize_embedding_fusion(
+            hash_embedding,
+            legacy_model=normalize_model_name(flat.get('hash_embedding_model')) or repr_source_model,
+        )
+    return {
+        'sid': sid,
+        'hash': hash_upstream,
         'uid': {
             'kind': 'clustered',
             'clusterer': uid_clusterer,

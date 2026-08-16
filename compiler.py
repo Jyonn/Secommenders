@@ -23,6 +23,7 @@ from utils.experiment_template import build_default_upstreams
 from utils import function
 from utils.logging import setup_logging
 from utils.pipeline import ensure_embedded, ensure_quantized
+from utils.embedding_fusion import fusion_model_ref, normalize_embedding_fusion
 from utils import model as model_utils
 
 class VocabularyRegistry:
@@ -302,9 +303,17 @@ class Compiler:
         if is_scratch_model and 'text' in repr_types:
             raise ValueError('scratch backbone currently does not support repr.type containing text')
 
-        external_view_required = any(view in {'sid', 'hash', 'embedding'} for view in repr_types + self.config.task_types)
-        if external_view_required and not self.config.repr_source_model:
-            raise ValueError('data.repr_source_model is required when repr.type or task.type uses sid/hash/embedding')
+        used_views = set(repr_types + self.config.task_types)
+        sid_upstream = self.config.upstreams.get('sid') or {}
+        hash_upstream = self.config.upstreams.get('hash') or {}
+        sid_has_source = bool((sid_upstream.get('embedding') or {}).get('sources') or sid_upstream.get('embedding_model'))
+        hash_has_source = bool((hash_upstream.get('embedding') or {}).get('sources') or hash_upstream.get('embedding_model'))
+        if 'embedding' in used_views and not self.config.repr_source_model:
+            raise ValueError('data.repr_source_model is required when repr.type uses embedding')
+        if 'sid' in used_views and not (sid_has_source or self.config.repr_source_model):
+            raise ValueError('SID requires repr_source_model or upstreams.sid.embedding.sources')
+        if 'hash' in used_views and not (hash_has_source or self.config.repr_source_model):
+            raise ValueError('hash requires repr_source_model or upstreams.hash.embedding.sources')
         if 'sid' in set(repr_types + self.config.task_types) and not self.config.sid_export:
             raise ValueError('data.sid_export is required when repr.type or task.type uses sid')
         if 'sid' in set(repr_types + self.config.task_types) and not self.config.sid_coder:
@@ -618,7 +627,9 @@ class Compiler:
     def _load_quantized_export(self):
         upstream = self._upstream('sid')
         quantizer = upstream.get('quantizer') or {}
-        model_name = normalize_model_name(upstream.get('embedding_model') or self.config.repr_source_model)
+        legacy_model = normalize_model_name(upstream.get('embedding_model') or self.config.repr_source_model)
+        embedding_spec = normalize_embedding_fusion(upstream.get('embedding') or {}, legacy_model=legacy_model)
+        model_name = fusion_model_ref(embedding_spec)
         quantizer_name = (quantizer.get('name') or self.config.sid_coder or '').strip().lower()
         export_name = str(upstream.get('export') or self.config.sid_export or '').strip().lower()
         if not quantizer_name:
@@ -676,7 +687,9 @@ class Compiler:
     def _load_hash_export(self):
         upstream = self._upstream('hash')
         quantizer = upstream.get('quantizer') or {}
-        model_name = normalize_model_name(upstream.get('embedding_model') or self.config.repr_source_model)
+        legacy_model = normalize_model_name(upstream.get('embedding_model') or self.config.repr_source_model)
+        embedding_spec = normalize_embedding_fusion(upstream.get('embedding') or {}, legacy_model=legacy_model)
+        model_name = fusion_model_ref(embedding_spec)
         quantizer_name = (quantizer.get('name') or self.config.hash_coder or '').strip().lower()
         export_name = str(upstream.get('export') or 'hash').strip().lower()
         if not quantizer_name:

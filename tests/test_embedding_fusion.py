@@ -1,0 +1,121 @@
+import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+import pandas as pd
+
+from utils.embedding_fusion import (
+    fusion_model_ref,
+    is_legacy_single_source,
+    normalize_embedding_fusion,
+    load_fused_embeddings,
+)
+from utils.artifact_identity import quantized_spec_from_config, quantized_spec_from_upstream
+from utils.artifact import ArtifactStore
+
+
+class EmbeddingFusionTest(unittest.TestCase):
+    def test_legacy_single_source_keeps_model_identity(self):
+        spec = normalize_embedding_fusion({}, legacy_model='llama3')
+        self.assertTrue(is_legacy_single_source(spec))
+        self.assertEqual(fusion_model_ref(spec), 'llama3')
+
+    def test_source_order_and_transform_change_identity(self):
+        first = normalize_embedding_fusion({'sources': [
+            {'model': 'llama3', 'reduce_dim': 128},
+            {'model': 'word2vec'},
+        ]})
+        reversed_spec = normalize_embedding_fusion({'sources': list(reversed(first['sources']))})
+        weighted = normalize_embedding_fusion({'sources': [
+            {'model': 'llama3', 'reduce_dim': 128, 'weight': 2},
+            {'model': 'word2vec'},
+        ]})
+        self.assertNotEqual(fusion_model_ref(first), fusion_model_ref(reversed_spec))
+        self.assertNotEqual(fusion_model_ref(first), fusion_model_ref(weighted))
+
+    def test_fusion_seed_does_not_change_identity(self):
+        value = {'sources': [{'model': 'llama3'}, {'model': 'word2vec'}]}
+        first = normalize_embedding_fusion({**value, 'seed': 7})
+        second = normalize_embedding_fusion({**value, 'seed': 42})
+        self.assertEqual(fusion_model_ref(first), fusion_model_ref(second))
+
+    def test_word2vec_config_resolves_signed_source(self):
+        spec = normalize_embedding_fusion({'sources': [{
+            'model': 'word2vec',
+            'config': {'vector_size': 32, 'window': 10},
+        }]})
+        self.assertTrue(spec['sources'][0]['model'].startswith('word2vec/'))
+
+    def test_legacy_quantized_payload_is_unchanged(self):
+        base = {
+            'embedding_model': 'llama3',
+            'quantizer': {'name': 'rqvae', 'config': {}},
+            'encoder': {'name': 'mlp', 'config': {}},
+            'trainer': {},
+        }
+        explicit = {
+            **base,
+            'embedding': normalize_embedding_fusion({}, legacy_model='llama3'),
+        }
+        self.assertEqual(
+            quantized_spec_from_upstream('mindf', base),
+            quantized_spec_from_upstream('mindf', explicit),
+        )
+
+    def test_load_aligns_normalizes_weights_and_concatenates(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(ArtifactStore, 'ROOT', Path(directory)):
+            first_dir = ArtifactStore('mindf').embedded_dir('first')
+            second_dir = ArtifactStore('mindf').embedded_dir('second')
+            np.save(first_dir / 'embeddings.npy', np.asarray([[3, 4], [0, 2]], dtype=np.float32))
+            np.save(second_dir / 'embeddings.npy', np.asarray([[0, 5], [12, 0]], dtype=np.float32))
+            frames = {
+                str(first_dir / 'item_ids.parquet'): pd.DataFrame({'item_id': ['a', 'b']}),
+                str(second_dir / 'item_ids.parquet'): pd.DataFrame({'item_id': ['b', 'a']}),
+            }
+
+            class Processor:
+                IID_COL = 'item_id'
+                items = pd.DataFrame({'item_id': ['a', 'b']})
+
+            spec = normalize_embedding_fusion({'sources': [
+                {'model': 'first', 'weight': 1},
+                {'model': 'second', 'weight': 1},
+            ]})
+            with patch('pandas.read_parquet', side_effect=lambda path: frames[str(path)]):
+                fused, item_ids, _ = load_fused_embeddings('mindf', Processor(), spec, lambda *args, **kwargs: None)
+            scale = np.sqrt(0.5)
+            expected = np.asarray([
+                [0.6, 0.8, 1.0, 0.0],
+                [0.0, 1.0, 0.0, 1.0],
+            ], dtype=np.float32) * scale
+            self.assertEqual(item_ids, ['a', 'b'])
+            np.testing.assert_allclose(fused, expected, atol=1e-6)
+
+    def test_upstream_and_runtime_config_produce_same_quantized_spec(self):
+        embedding = normalize_embedding_fusion({'sources': [
+            {'model': 'llama3', 'reduce_dim': 128, 'weight': 1},
+            {'model': 'word2vec', 'weight': 1},
+        ]})
+        upstream = {
+            'embedding_model': None,
+            'embedding': embedding,
+            'quantizer': {'name': 'rqvae', 'config': {}},
+            'encoder': {'name': 'mlp', 'config': {}},
+            'trainer': {},
+        }
+        runtime = {
+            'embedding': embedding,
+            'quantizer': upstream['quantizer'],
+            'encoder': upstream['encoder'],
+            'trainer': upstream['trainer'],
+        }
+        self.assertEqual(
+            quantized_spec_from_upstream('mindf', upstream),
+            quantized_spec_from_config('mindf', fusion_model_ref(embedding), runtime),
+        )
+
+
+if __name__ == '__main__':
+    unittest.main()

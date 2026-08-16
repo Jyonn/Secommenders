@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 from pigmento import pnt
@@ -63,6 +64,7 @@ def ensure_quantized(data: str, model: str, quantizer_name: str | None = None, q
     quantizer = quantizer_spec.get('quantizer') or {}
     encoder = quantizer_spec.get('encoder') or {}
     trainer = quantizer_spec.get('trainer') or {}
+    embedding = quantizer_spec.get('embedding') or {}
     hash_config = quantizer.get('config') or {}
     quantizer_config = quantizer.get('config') or {}
     if (quantizer.get('name') or quantizer_name) in {'lsh', 'simhash', 'pcahash', 'itq'}:
@@ -104,6 +106,9 @@ def ensure_quantized(data: str, model: str, quantizer_name: str | None = None, q
         'lr': trainer.get('learning_rate'),
         'patience': trainer.get('patience'),
         'save_best_by': trainer.get('save_best_by'),
+        'embedding_sources': json.dumps(embedding.get('sources')) if embedding.get('sources') else None,
+        'embedding_fusion': embedding.get('fusion'),
+        'embedding_normalize_output': embedding.get('normalize_output'),
     }
     kwargs = {key: value for key, value in kwargs.items() if value is not None}
 

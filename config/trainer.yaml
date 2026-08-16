@@ -17,6 +17,11 @@ upstreams:
   sid:
     kind: quantized
     embedding_model: ${sid_embedding_model:null}$
+    embedding:
+      sources: ${sid_embedding_sources:null}$
+      fusion: ${sid_embedding_fusion:concat}$
+      normalize_output: ${sid_embedding_normalize_output:false}$
+      seed: 42
     export: ${sid_export:coll}$
     quantizer:
       name: ${sid_coder:rqvae}$
@@ -57,6 +62,11 @@ upstreams:
   hash:
     kind: quantized
     embedding_model: ${hash_embedding_model:null}$
+    embedding:
+      sources: ${hash_embedding_sources:null}$
+      fusion: ${hash_embedding_fusion:concat}$
+      normalize_output: ${hash_embedding_normalize_output:false}$
+      seed: 42
     export: hash
     quantizer:
       name: ${hash_coder:simhash}$

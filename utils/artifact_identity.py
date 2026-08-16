@@ -18,6 +18,7 @@ from utils.experiment_template import (
     normalize_list,
     used_upstreams_for_config,
 )
+from utils.embedding_fusion import fusion_model_ref, is_legacy_single_source, normalize_embedding_fusion
 
 
 TRAINED_SPEC_VERSION = 'trained.v3'
@@ -158,6 +159,8 @@ def _canonical_train_upstreams(config: dict[str, Any]):
     flat = dict(config)
     if sid.get('embedding_model') is not None:
         flat['sid_embedding_model'] = sid.get('embedding_model')
+    if isinstance(sid.get('embedding'), dict):
+        flat['sid_embedding'] = sid.get('embedding')
     if sid.get('export') is not None:
         flat['sid_export'] = sid.get('export')
     if sid_quantizer.get('name') is not None:
@@ -173,6 +176,8 @@ def _canonical_train_upstreams(config: dict[str, Any]):
 
     if hash_section.get('embedding_model') is not None:
         flat['hash_embedding_model'] = hash_section.get('embedding_model')
+    if isinstance(hash_section.get('embedding'), dict):
+        flat['hash_embedding'] = hash_section.get('embedding')
     if hash_quantizer.get('name') is not None:
         flat['hash_coder'] = hash_quantizer.get('name')
     if isinstance(hash_quantizer.get('config'), dict):
@@ -371,23 +376,40 @@ def _quantizer_trainer_payload(value: dict | None):
     return payload
 
 
+def _quantized_embedding_payload(embedding_model, value=None):
+    spec = normalize_embedding_fusion(value or {}, legacy_model=embedding_model)
+    model_ref = fusion_model_ref(spec)
+    if is_legacy_single_source(spec):
+        return model_ref, None
+    payload = deepcopy(spec)
+    payload.pop('seed', None)
+    return model_ref, payload
+
+
 def quantized_spec_from_config(data: str, embedding_model: str, config: Any):
     quantizer_section = _section_get(config, 'quantizer')
     hash_section = _section_get(config, 'hash')
     encoder_section = _section_get(config, 'encoder')
     trainer_section = _section_get(config, 'trainer')
+    embedding_section = _section_get(config, 'embedding')
     quantizer_name = str(_section_get(quantizer_section, 'name', '') or '').strip().lower()
     if not quantizer_name:
         raise ValueError('quantizer.name is required')
 
     trainer_payload = _quantizer_trainer_payload(_section_dict(trainer_section))
+    embedding_model, embedding_payload = _quantized_embedding_payload(
+        normalize_model_name(embedding_model),
+        _section_dict(embedding_section),
+    )
     payload = {
-        'embedding_model': normalize_model_name(embedding_model),
+        'embedding_model': embedding_model,
         'quantizer': {
             'name': quantizer_name,
         },
         'trainer': trainer_payload,
     }
+    if embedding_payload:
+        payload['embedding'] = embedding_payload
     if quantizer_name in HASH_INDEXER_NAMES:
         payload['family'] = 'hash'
         payload['quantizer']['config'] = merge_defaults(
@@ -424,13 +446,19 @@ def quantized_spec_from_upstream(data: str, upstream: dict):
     if not quantizer_name:
         raise ValueError('upstream quantizer.name is required')
     trainer_payload = _quantizer_trainer_payload(upstream.get('trainer') or {})
+    embedding_model, embedding_payload = _quantized_embedding_payload(
+        normalize_model_name(upstream.get('embedding_model')),
+        upstream.get('embedding') or {},
+    )
     payload = {
-        'embedding_model': normalize_model_name(upstream.get('embedding_model')),
+        'embedding_model': embedding_model,
         'quantizer': {
             'name': quantizer_name,
         },
         'trainer': trainer_payload,
     }
+    if embedding_payload:
+        payload['embedding'] = embedding_payload
     if quantizer_name in HASH_INDEXER_NAMES:
         payload['family'] = 'hash'
         payload['quantizer']['config'] = merge_defaults(
@@ -464,13 +492,19 @@ def quantized_spec_from_meta(meta: dict):
     if not quantizer_name:
         raise ValueError('quantized meta missing quantizer_model/hash_model')
     trainer_args = meta.get('trainer_args') or {}
+    embedding_model, embedding_payload = _quantized_embedding_payload(
+        normalize_model_name(meta.get('embedding_model')),
+        meta.get('embedding') or {},
+    )
     payload = {
-        'embedding_model': normalize_model_name(meta.get('embedding_model')),
+        'embedding_model': embedding_model,
         'quantizer': {
             'name': quantizer_name,
         },
         'trainer': _quantizer_trainer_payload(trainer_args),
     }
+    if embedding_payload:
+        payload['embedding'] = embedding_payload
     if quantizer_name in HASH_INDEXER_NAMES or meta.get('representation_family') == 'hash':
         payload['family'] = 'hash'
         payload['quantizer']['config'] = merge_defaults(

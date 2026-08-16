@@ -17,7 +17,6 @@ from autoencoders.models.loading import load_model
 from autoencoders.training.display import style
 from autoencoders.training.trainer import TrainingConfig, VQTrainer
 from utils.config_init import ConfigInit
-from utils.artifact import ArtifactStore
 from utils.artifact_run import ArtifactRunCoordinator
 from utils.artifact_identity import (
     quantized_artifact_identity,
@@ -29,6 +28,7 @@ from utils.function import load_processor
 from utils.gpu import GPU
 from utils.logging import setup_logging
 from utils.pipeline import ensure_embedded
+from utils.embedding_fusion import fusion_model_ref, load_fused_embeddings, normalize_embedding_fusion
 
 
 def _format_spec(spec):
@@ -80,7 +80,11 @@ class Quantizer:
         self.config = config
 
         self.data = data
-        self.embedding_model = model.replace('.', '').lower()
+        legacy_embedding_model = model.replace('.', '').lower()
+        embedding_section = getattr(self.config, 'embedding', None)
+        embedding_config = embedding_section() if callable(embedding_section) else {}
+        self.embedding_spec = normalize_embedding_fusion(embedding_config, legacy_model=legacy_embedding_model)
+        self.embedding_model = fusion_model_ref(self.embedding_spec)
         self.quantizer_name = self.config.quantizer.name
         self.quantizer_scheme = self._infer_quantizer_scheme(self.quantizer_name)
         self.recommended_decoding = self._recommended_decoding(self.quantizer_scheme)
@@ -91,15 +95,6 @@ class Quantizer:
 
         self.processor = load_processor(self.data, data_dir=get_data_dir(self.data))
         self.processor.load()
-
-        artifacts = ArtifactStore(self.data)
-        self.embedding_dir = artifacts.embedded_dir(self.embedding_model)
-        self.embedding_path = self.embedding_dir / 'embeddings.npy'
-        self.embedding_item_ids_path = self.embedding_dir / 'item_ids.parquet'
-        self.embedding_meta_path = self.embedding_dir / 'meta.json'
-        ensure_embedded(self.data, self.embedding_model)
-        if not self.embedding_path.exists():
-            raise FileNotFoundError(f'Embedding file not found after auto preparation: {self.embedding_path}')
 
         self.output_dir = resolve_quantized_dir(self.data, self.embedding_model, self.config)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -236,38 +231,33 @@ class Quantizer:
         hash_config.setdefault('seed', int(self.config.trainer.seed))
         return hash_config
 
-    def _load_item_ids(self, expected_size):
-        if self.embedding_item_ids_path.exists():
-            item_ids = pd.read_parquet(self.embedding_item_ids_path)[self.processor.IID_COL].tolist()
-        else:
-            item_ids = self.processor.items[self.processor.IID_COL].tolist()
-        if len(item_ids) != expected_size:
-            raise ValueError(
-                f'Item id count {len(item_ids)} does not match embedding rows {expected_size} '
-                f'for {self.embedding_path}'
-            )
-        return item_ids
-
     def load_embedding_matrix(self):
-        pnt(f'loading embeddings from {self.embedding_path}')
-        embeddings = np.load(self.embedding_path)
+        pnt(
+            f'loading embedding sources for {self.embedding_model}: '
+            f'{[source["model"] for source in self.embedding_spec["sources"]]}'
+        )
+        embeddings, item_ids, fusion_summary = load_fused_embeddings(
+            self.data,
+            self.processor,
+            self.embedding_spec,
+            ensure_embedded,
+        )
         if embeddings.ndim != 2:
             raise ValueError(f'Expected a 2D embedding matrix, got shape {embeddings.shape}')
-
-        item_ids = self._load_item_ids(len(embeddings))
         self.item_ids = item_ids
         matrix = torch.tensor(embeddings, dtype=torch.float32)
         token_to_index = {str(item_id): index for index, item_id in enumerate(item_ids)}
 
-        metadata = {}
-        if self.embedding_meta_path.exists():
-            metadata = json.loads(self.embedding_meta_path.read_text())
+        metadata = {
+            'embedding_fusion': self.embedding_spec,
+            'embedding_fusion_summary': fusion_summary,
+        }
 
         self.embedding_matrix = EmbeddingMatrix(
             tokens=[str(item_id) for item_id in item_ids],
             matrix=matrix,
             token_to_index=token_to_index,
-            source_path=str(self.embedding_path),
+            source_path=','.join(source['model'] for source in self.embedding_spec['sources']),
             name=f'{self.data}-{self.embedding_model}',
             metadata=metadata,
         )
@@ -486,8 +476,8 @@ class Quantizer:
         meta = {
             'dataset': self.data,
             'embedding_model': self.embedding_model,
-            'embedding_path': str(self.embedding_path),
-            'embedding_meta_path': str(self.embedding_meta_path),
+            'embedding': self.embedding_spec,
+            'embedding_sources': [source['model'] for source in self.embedding_spec['sources']],
             'quantizer_model': self.quantizer_name,
             'quantizer_scheme': self.quantizer_scheme,
             'recommended_decoding': self.recommended_decoding,
@@ -571,8 +561,8 @@ class Quantizer:
         meta = {
             'dataset': self.data,
             'embedding_model': self.embedding_model,
-            'embedding_path': str(self.embedding_path),
-            'embedding_meta_path': str(self.embedding_meta_path),
+            'embedding': self.embedding_spec,
+            'embedding_sources': [source['model'] for source in self.embedding_spec['sources']],
             'representation_family': 'hash',
             'hash_model': self.quantizer_name,
             'quantizer_model': self.quantizer_name,
@@ -605,6 +595,7 @@ class Quantizer:
             'stage': 'quantized',
             'dataset': self.data,
             'embedding_model': self.embedding_model,
+            'embedding': self.embedding_spec,
             'quantizer_model': self.quantizer_name,
             'quantizer_scheme': self.quantizer_scheme,
             'recommended_decoding': self.recommended_decoding,
