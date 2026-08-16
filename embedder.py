@@ -22,9 +22,20 @@ class Embedder:
         self.data = conf.data.lower()
         requested_model = conf.model.replace('.', '').lower()
         self.word2vec_config = None
-        if requested_model.split('/')[0] == 'word2vec':
-            self.word2vec_config = normalize_word2vec_config(getattr(conf, 'word2vec_config', None))
-            self.model_name = word2vec_model_ref(self.word2vec_config)
+        self.is_word2vec = requested_model.split('/')[0] == 'word2vec'
+        if self.is_word2vec:
+            requested_config = getattr(conf, 'word2vec_config', None)
+            self.word2vec_config = normalize_word2vec_config(requested_config) if requested_config else None
+            expected_ref = word2vec_model_ref(self.word2vec_config) if self.word2vec_config else None
+            if '/' in requested_model:
+                self.model_name = requested_model
+                if expected_ref and expected_ref != requested_model:
+                    raise ValueError(
+                        f'word2vec artifact reference {requested_model} does not match explicit config {expected_ref}'
+                    )
+            else:
+                self.word2vec_config = normalize_word2vec_config(requested_config)
+                self.model_name = word2vec_model_ref(self.word2vec_config)
             self.model_key = 'word2vec'
         else:
             self.model_name = requested_model
@@ -48,6 +59,10 @@ class Embedder:
 
     def _ensure_caller(self):
         if self.caller is None:
+            if self.is_word2vec and self.word2vec_config is None:
+                raise ValueError(
+                    f'word2vec artifact {self.model_name} is missing; explicit word2vec config is required to build it'
+                )
             caller_config = dict(self.word2vec_config or {})
             caller_batch_size = caller_config.pop('batch_size', self.conf.batch_size)
             self.caller = load_embedder(
@@ -126,6 +141,9 @@ class Embedder:
         if int(meta.get('item_count', -1)) != int(len(self.processor.items)):
             pnt('embedding cache item_count mismatches current processed items, rebuilding cache')
             return False
+        if self.word2vec_config is not None and meta.get('word2vec') != self.word2vec_config:
+            pnt('word2vec embedding cache config mismatches requested config, rebuilding cache')
+            return False
 
         cached_item_ids = self._load_cached_item_ids()
         current_item_ids = self.processor.items[self.processor.IID_COL].tolist()
@@ -194,7 +212,7 @@ class Embedder:
         return True
 
     def try_reuse_larger_scale_embeddings(self):
-        if self.word2vec_config is not None:
+        if self.is_word2vec:
             return False
         target_item_ids = self.processor.items[self.processor.IID_COL].tolist()
         target_keys = [str(item_id) for item_id in target_item_ids]
