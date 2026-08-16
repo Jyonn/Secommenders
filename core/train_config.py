@@ -1,6 +1,8 @@
 from dataclasses import dataclass, asdict
 from typing import Optional
 
+from oba import NotFound
+
 from utils import function
 from utils import model as model_utils
 from utils.compile import (
@@ -33,9 +35,10 @@ from utils.word2vec import WORD2VEC_DEFAULTS
 
 def _get(obj, name, default=None):
     try:
-        return getattr(obj, name)
+        value = getattr(obj, name)
     except Exception:
         return default
+    return default if isinstance(value, NotFound) else value
 
 
 def _plain_section(section, defaults: dict):
