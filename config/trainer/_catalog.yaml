@@ -39,7 +39,7 @@ representations:
     sources:
       - model: ${content_embedding_model:llama3}$
         normalize: true
-        reduce_dim: ${content_embedding_dim:256}$
+        reduce_dim: 0
         weight: ${content_embedding_weight:1.0}$
     fusion: {method: concat, normalize_output: false}
     codec:
@@ -84,7 +84,7 @@ representations:
     sources:
       - model: word2vec
         normalize: true
-        reduce_dim: ${collaborative_embedding_dim:64}$
+        reduce_dim: 0
         weight: ${collaborative_embedding_weight:1.0}$
         config:
           vector_size: ${word2vec_dim:64}$
@@ -142,11 +142,11 @@ representations:
     sources:
       - model: ${content_embedding_model:llama3}$
         normalize: true
-        reduce_dim: ${content_embedding_dim:256}$
+        reduce_dim: 0
         weight: ${content_embedding_weight:1.0}$
       - model: word2vec
         normalize: true
-        reduce_dim: ${collaborative_embedding_dim:64}$
+        reduce_dim: 0
         weight: ${collaborative_embedding_weight:1.0}$
         config:
           vector_size: ${word2vec_dim:64}$

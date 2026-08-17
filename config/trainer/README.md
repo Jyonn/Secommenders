@@ -45,3 +45,6 @@ its quantizer upstream, compiled vocabulary and item view, model embedding/head,
 and named metrics. Multiple SID decoder targets are trained jointly; their unprefixed evaluation
 metrics are the mean across SID targets. UID, hash, and text currently allow one active instance of
 each type.
+
+SID sources keep their full embedding dimensions because the quantizer autoencoder learns the
+projection. Dense `embedding` representations use their configured PCA reduction independently.
