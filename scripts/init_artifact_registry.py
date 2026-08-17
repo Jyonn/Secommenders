@@ -229,16 +229,22 @@ def iter_generic_meta_paths(root: Path, stage: str, data: str | None = None):
             yield from sorted(dataset_dir.glob('*/meta.json'))
         elif stage == 'quantized':
             seen_roots = set()
-            for root_meta_path in sorted(dataset_dir.glob('*/*/meta.json')):
-                quantized_root = root_meta_path.parent
-                seen_roots.add(quantized_root)
-                yield root_meta_path
-            for meta_path in sorted(dataset_dir.glob('*/*/exports/*/meta.json')):
-                quantized_root = meta_path.parents[2]
-                if quantized_root in seen_roots:
-                    continue
-                seen_roots.add(quantized_root)
-                yield meta_path
+            root_patterns = ('*/meta.json', '*/*/meta.json')
+            for pattern in root_patterns:
+                for root_meta_path in sorted(dataset_dir.glob(pattern)):
+                    quantized_root = root_meta_path.parent
+                    if quantized_root in seen_roots:
+                        continue
+                    seen_roots.add(quantized_root)
+                    yield root_meta_path
+            export_patterns = ('*/exports/*/meta.json', '*/*/exports/*/meta.json')
+            for pattern in export_patterns:
+                for meta_path in sorted(dataset_dir.glob(pattern)):
+                    quantized_root = meta_path.parents[2]
+                    if quantized_root in seen_roots:
+                        continue
+                    seen_roots.add(quantized_root)
+                    yield meta_path
 
 
 def generic_meta_location(root: Path, stage: str, meta_path: Path):
@@ -246,9 +252,13 @@ def generic_meta_location(root: Path, stage: str, meta_path: Path):
     if len(relative.parts) < 3 or relative.parts[-1] != 'meta.json':
         raise ValueError(f'unrecognized {stage} meta path: {meta_path}')
     data = relative.parts[0]
-    if stage == 'quantized' and len(relative.parts) >= 6 and relative.parts[-3] == 'exports':
-        folder = Path(*relative.parts[1:-3]).as_posix()
-        run_dir = meta_path.parents[2]
+    if stage == 'quantized' and 'exports' in relative.parts[1:-1]:
+        exports_index = relative.parts.index('exports', 1)
+        folder_parts = relative.parts[1:exports_index]
+        if not folder_parts:
+            raise ValueError(f'unrecognized {stage} export meta path: {meta_path}')
+        folder = Path(*folder_parts).as_posix()
+        run_dir = root / 'artifacts' / stage / data / Path(*folder_parts)
     else:
         folder = Path(*relative.parts[1:-1]).as_posix()
         run_dir = meta_path.parent
