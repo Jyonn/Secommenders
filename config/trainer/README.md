@@ -4,6 +4,10 @@
 `_catalog.yaml` declares reusable UID, SID, embedding, hash, and text instances; declarations are
 inactive until a profile references them.
 
+Profiles compose shared configuration through RefConfig's native `$$import` directive. Import paths
+are relative to the YAML file containing the directive, and profile values recursively override the
+imported values.
+
 - `uid.yaml`: UID-only baseline.
 - `uid-hierarchical.yaml`: hierarchical UID decoding.
 - `sid-content.yaml`: SID learned from content embeddings.

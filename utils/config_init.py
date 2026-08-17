@@ -1,9 +1,6 @@
 import os
-import tempfile
-from pathlib import Path
 
 import refconfig
-import yaml
 from oba import Obj
 from refconfig import RefConfig
 
@@ -105,22 +102,8 @@ class ConfigInit:
             if arg not in kwargs:
                 kwargs[arg] = self.default_args[arg]
 
-        temporary_config = None
-        config_path = kwargs.get('config')
-        if config_path:
-            merged = self._load_extended_yaml(Path(config_path))
-            if merged is not None:
-                handle = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
-                yaml.safe_dump(merged, handle, sort_keys=False)
-                handle.close()
-                temporary_config = handle.name
-                kwargs['config'] = temporary_config
-        try:
-            config = RefConfig().add(refconfig.CType.SMART, **kwargs)
-            config = config.add(refconfig.CType.RAW).parse()
-        finally:
-            if temporary_config:
-                Path(temporary_config).unlink(missing_ok=True)
+        config = RefConfig().add(refconfig.CType.SMART, **kwargs)
+        config = config.add(refconfig.CType.RAW).parse()
 
         config = Obj(config)
 
@@ -129,30 +112,6 @@ class ConfigInit:
             os.makedirs(dir_name, exist_ok=True)
 
         return config
-
-    @classmethod
-    def _load_extended_yaml(cls, path: Path):
-        payload = yaml.safe_load(path.read_text())
-        if not isinstance(payload, dict) or not payload.get('extends'):
-            return None
-        parent_path = Path(str(payload.pop('extends')))
-        if not parent_path.is_absolute():
-            candidate = path.parent / parent_path
-            parent_path = candidate if candidate.exists() else Path.cwd() / parent_path
-        parent = cls._load_extended_yaml(parent_path)
-        if parent is None:
-            parent = yaml.safe_load(parent_path.read_text()) or {}
-            parent.pop('extends', None)
-        return cls._deep_merge(parent, payload)
-
-    @classmethod
-    def _deep_merge(cls, base, override):
-        if not isinstance(base, dict) or not isinstance(override, dict):
-            return override
-        merged = dict(base)
-        for key, value in override.items():
-            merged[key] = cls._deep_merge(merged[key], value) if key in merged else value
-        return merged
 
     def parse(self):
         kwargs = argparse()

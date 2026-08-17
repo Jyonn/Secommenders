@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import pandas as pd
 import torch
+import yaml
 from oba import Obj
 
 from core.train_config import TrainConfig
@@ -166,6 +167,25 @@ def _load_profile(name, **kwargs):
         'model': 'scratch',
         **kwargs,
     }))
+
+
+def test_profiles_use_refconfig_native_multilevel_imports():
+    profile = yaml.safe_load(Path('config/trainer/multi-decoder.yaml').read_text())
+    assert profile['$$import'] == 'hybrid.yaml'
+    assert 'extends' not in profile
+
+    config = _load_profile('multi-decoder.yaml')
+    assert config.batch_size == 64
+    assert list(config.representation_graph['representations']) == [
+        'embedding_collaborative',
+        'embedding_content',
+        'sid_hybrid',
+        'uid',
+    ]
+    assert [target['representation'] for target in config.representation_graph['decoder']['targets']] == [
+        'sid_hybrid',
+        'uid',
+    ]
 
 
 def test_profiles_prune_catalog_and_inactive_parameters_do_not_change_sign():

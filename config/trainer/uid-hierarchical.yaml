@@ -1,4 +1,4 @@
-extends: _catalog.yaml
+$$import: _catalog.yaml
 
 encoder:
   representations: [uid_hierarchical]

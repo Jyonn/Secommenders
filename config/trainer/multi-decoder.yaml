@@ -1,4 +1,4 @@
-extends: hybrid.yaml
+$$import: hybrid.yaml
 
 encoder:
   representations: [sid_hybrid, uid, embedding_content, embedding_collaborative]

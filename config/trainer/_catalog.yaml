@@ -1,4 +1,4 @@
-extends: _base.yaml
+$$import: _base.yaml
 
 # Declarations are inert until referenced by encoder.representations or
 # decoder.targets. This keeps one catalog reusable without polluting SIGNs.
