@@ -774,6 +774,29 @@ class Trainer:
                     if old_key in adapted and old_key != new_key and new_key not in adapted:
                         adapted[new_key] = adapted.pop(old_key)
 
+        sid_names = self.config.compile_config.names_for_kind('sid')
+        if len(sid_names) == 1:
+            name = sid_names[0]
+            aliases = {
+                'sid_embedding.weight': f'sid_embeddings.{name}.weight',
+                'sid_head.weight': f'sid_heads.{name}.weight',
+                'sid_head.bias': f'sid_heads.{name}.bias',
+            }
+            for old_key, new_key in aliases.items():
+                if old_key in adapted and new_key not in adapted:
+                    adapted[new_key] = adapted.pop(old_key)
+        if saved_original_graph:
+            for current_name in sid_names:
+                saved_name = positional_name_map.get(current_name)
+                if not saved_name:
+                    continue
+                for module_name in ('sid_embeddings', 'sid_heads'):
+                    for suffix in ('weight', 'bias'):
+                        old_key = f'{module_name}.{saved_name}.{suffix}'
+                        new_key = f'{module_name}.{current_name}.{suffix}'
+                        if old_key in adapted and old_key != new_key and new_key not in adapted:
+                            adapted[new_key] = adapted.pop(old_key)
+
         ignored = []
         for key in list(adapted):
             if key in current and adapted[key].shape != current[key].shape:

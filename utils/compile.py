@@ -108,6 +108,20 @@ class CompileConfig:
         names = self.names_for_kind(kind, targets=targets)
         return names[0] if names else None
 
+    def target_spec(self, name):
+        if not self.representation_graph:
+            return {'representation': name}
+        for target in self.representation_graph['decoder']['targets']:
+            if target['representation'] == name:
+                return target
+        return None
+
+    def upstream_for(self, name):
+        if name in self.upstreams:
+            return deepcopy(self.upstreams[name])
+        kind = self.representation_kind(name)
+        return deepcopy(self.upstreams.get(kind) or {})
+
     @property
     def repr_types(self):
         return [part.strip().lower() for part in self.repr_type.split('+') if part.strip()]
@@ -122,6 +136,15 @@ class CompileConfig:
 
     @property
     def compile_upstreams(self):
+        if self.representation_graph:
+            upstreams = {}
+            for name in self.representation_names:
+                kind = self.representation_kind(name)
+                if kind in {'sid', 'hash', 'uid'}:
+                    upstream = self.upstream_for(name)
+                    if upstream:
+                        upstreams[name] = upstream
+            return upstreams
         upstreams = {}
         if 'sid' in self.used_views and self.upstreams.get('sid'):
             upstreams['sid'] = deepcopy(self.upstreams['sid'])

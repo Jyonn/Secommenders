@@ -42,7 +42,7 @@ representations:
         reduce_dim: ${content_embedding_dim:256}$
         weight: ${content_embedding_weight:1.0}$
     fusion: {method: concat, normalize_output: false}
-    codec: &sid_codec
+    codec:
       name: ${sid_coder:rqvae}$
       export: ${sid_export:recon}$
       quantizer:
@@ -86,7 +86,7 @@ representations:
         normalize: true
         reduce_dim: ${collaborative_embedding_dim:64}$
         weight: ${collaborative_embedding_weight:1.0}$
-        config: &word2vec
+        config:
           vector_size: ${word2vec_dim:64}$
           window: ${word2vec_window:5}$
           patience: ${word2vec_patience:5}$
@@ -100,7 +100,42 @@ representations:
           valid_batch_size: ${word2vec_valid_batch_size:16384}$
           min_delta: ${word2vec_min_delta:0.0001}$
     fusion: {method: concat, normalize_output: false}
-    codec: *sid_codec
+    codec:
+      name: ${sid_coder:rqvae}$
+      export: ${sid_export:recon}$
+      quantizer:
+        latent_dim: ${sid_latent_dim:64}$
+        reconstruction_loss: ${sid_reconstruction_loss:mse}$
+        codebook_size: ${sid_codebook_size:128}$
+        commitment_weight: ${sid_commitment_weight:0.25}$
+        codebook_weight: ${sid_codebook_weight:1.0}$
+        use_ema_codebook: ${sid_use_ema_codebook:true}$
+        ema_decay: ${sid_ema_decay:0.99}$
+        ema_epsilon: ${sid_ema_epsilon:0.00001}$
+        dead_code_reset: ${sid_dead_code_reset:false}$
+        dead_code_threshold: ${sid_dead_code_threshold:0}$
+        num_quantizers: ${sid_num_quantizers:3}$
+        num_codebooks: ${sid_num_codebooks:3}$
+        assignment_strategy: ${sid_assignment_strategy:sinkhorn}$
+        sinkhorn_epsilon: ${sid_sinkhorn_epsilon:0.0,0.0,0.003}$
+        sinkhorn_iters: ${sid_sinkhorn_iters:50}$
+        kmeans_init: ${sid_kmeans_init:true}$
+        kmeans_iters: ${sid_kmeans_iters:100}$
+      encoder:
+        name: mlp
+        config:
+          hidden_dims: ${sid_hidden_dims:2048,1024,512,256,128}$
+          activation: ${sid_activation:relu}$
+          use_bias: ${sid_use_bias:true}$
+      trainer:
+        validation_ratio: ${sid_validation_ratio:0.1}$
+        test_ratio: ${sid_test_ratio:0.1}$
+        full_dataset_as_splits: ${sid_full_dataset_as_splits:true}$
+        epochs: ${sid_epochs:0}$
+        batch_size: ${sid_batch_size:1000}$
+        learning_rate: ${sid_learning_rate:0.001}$
+        patience: ${sid_patience:50}$
+        save_best_by: ${sid_save_best_by:loss,coll,codes,recon}$
 
   sid_hybrid:
     type: sid
@@ -113,11 +148,58 @@ representations:
         normalize: true
         reduce_dim: ${collaborative_embedding_dim:64}$
         weight: ${collaborative_embedding_weight:1.0}$
-        config: *word2vec
+        config:
+          vector_size: ${word2vec_dim:64}$
+          window: ${word2vec_window:5}$
+          patience: ${word2vec_patience:5}$
+          sg: ${word2vec_sg:1}$
+          negative: ${word2vec_negative:5}$
+          min_count: ${word2vec_min_count:1}$
+          workers: ${word2vec_workers:4}$
+          max_epochs: ${word2vec_max_epochs:100}$
+          learning_rate: ${word2vec_learning_rate:0.003}$
+          batch_size: ${word2vec_batch_size:8192}$
+          valid_batch_size: ${word2vec_valid_batch_size:16384}$
+          min_delta: ${word2vec_min_delta:0.0001}$
     fusion:
       method: ${sid_embedding_fusion:concat}$
       normalize_output: ${sid_embedding_normalize_output:false}$
-    codec: *sid_codec
+    codec:
+      name: ${sid_coder:rqvae}$
+      export: ${sid_export:recon}$
+      quantizer:
+        latent_dim: ${sid_latent_dim:64}$
+        reconstruction_loss: ${sid_reconstruction_loss:mse}$
+        codebook_size: ${sid_codebook_size:128}$
+        commitment_weight: ${sid_commitment_weight:0.25}$
+        codebook_weight: ${sid_codebook_weight:1.0}$
+        use_ema_codebook: ${sid_use_ema_codebook:true}$
+        ema_decay: ${sid_ema_decay:0.99}$
+        ema_epsilon: ${sid_ema_epsilon:0.00001}$
+        dead_code_reset: ${sid_dead_code_reset:false}$
+        dead_code_threshold: ${sid_dead_code_threshold:0}$
+        num_quantizers: ${sid_num_quantizers:3}$
+        num_codebooks: ${sid_num_codebooks:3}$
+        assignment_strategy: ${sid_assignment_strategy:sinkhorn}$
+        sinkhorn_epsilon: ${sid_sinkhorn_epsilon:0.0,0.0,0.003}$
+        sinkhorn_iters: ${sid_sinkhorn_iters:50}$
+        kmeans_init: ${sid_kmeans_init:true}$
+        kmeans_iters: ${sid_kmeans_iters:100}$
+      encoder:
+        name: mlp
+        config:
+          hidden_dims: ${sid_hidden_dims:2048,1024,512,256,128}$
+          activation: ${sid_activation:relu}$
+          use_bias: ${sid_use_bias:true}$
+      trainer:
+        validation_ratio: ${sid_validation_ratio:0.1}$
+        test_ratio: ${sid_test_ratio:0.1}$
+        full_dataset_as_splits: ${sid_full_dataset_as_splits:true}$
+        epochs: ${sid_epochs:0}$
+        batch_size: ${sid_batch_size:1000}$
+        learning_rate: ${sid_learning_rate:0.001}$
+        patience: ${sid_patience:50}$
+        save_best_by: ${sid_save_best_by:loss,coll,codes,recon}$
 
   embedding_content:
     type: embedding
@@ -134,7 +216,19 @@ representations:
         normalize: true
         reduce_dim: ${collaborative_embedding_dim:64}$
         weight: ${collaborative_embedding_weight:1.0}$
-        config: *word2vec
+        config:
+          vector_size: ${word2vec_dim:64}$
+          window: ${word2vec_window:5}$
+          patience: ${word2vec_patience:5}$
+          sg: ${word2vec_sg:1}$
+          negative: ${word2vec_negative:5}$
+          min_count: ${word2vec_min_count:1}$
+          workers: ${word2vec_workers:4}$
+          max_epochs: ${word2vec_max_epochs:100}$
+          learning_rate: ${word2vec_learning_rate:0.003}$
+          batch_size: ${word2vec_batch_size:8192}$
+          valid_batch_size: ${word2vec_valid_batch_size:16384}$
+          min_delta: ${word2vec_min_delta:0.0001}$
 
   hash_content:
     type: hash

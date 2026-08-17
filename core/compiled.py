@@ -30,6 +30,9 @@ class CompiledArtifacts:
         self.embedding_matrix = None
         self.embedding_matrices = {}
         self.representation_types = {}
+        self.sid_metadata = {}
+        self.sid_prefix_to_next_by_name = {}
+        self.sid_sequence_to_items_by_name = {}
         self.sid_num_quantizers = None
         self.sid_base_num_quantizers = None
         self.sid_codebook_size = None
@@ -118,6 +121,10 @@ class CompiledArtifacts:
                 self.compile_dir / 'embeddings' / f'{name}.npy'
                 for name in self.config.compile_config.names_for_kind('embedding')
             )
+            required_paths.extend(
+                self.compile_dir / 'vocab' / f'{name}.json'
+                for name in self.config.compile_config.names_for_kind('sid')
+            )
         else:
             required_paths.append(self.compile_dir / 'item_views' / 'uid.parquet')
         if not self.config.compile_config.representation_graph and 'embedding' in self.config.compile_config.used_views and self.config.compile_config.embedding:
@@ -147,18 +154,34 @@ class CompiledArtifacts:
                 if name and name in self.item_views:
                     self.item_views.setdefault(kind, self.item_views[name])
 
-        sid_vocab_path = self.compile_dir / 'vocab' / 'sid.json'
-        if sid_vocab_path.exists():
+        sid_entries = [entry for entry in self.vocab_meta['namespaces'] if entry['kind'] == 'sid']
+        for entry in sid_entries:
+            name = entry['name']
+            sid_vocab_path = self.compile_dir / 'vocab' / f'{name}.json'
+            if not sid_vocab_path.exists() and name == 'sid':
+                sid_vocab_path = self.compile_dir / 'vocab' / 'sid.json'
+            if not sid_vocab_path.exists():
+                raise FileNotFoundError(f'SID vocabulary not found for {name}: {sid_vocab_path}')
             sid_vocab = self._read_json(sid_vocab_path)
-            self.sid_num_quantizers = int(sid_vocab['num_quantizers'])
-            self.sid_base_num_quantizers = int(sid_vocab.get('base_num_quantizers', self.sid_num_quantizers))
-            self.sid_codebook_size = int(sid_vocab['codebook_size'])
-            self.sid_collision_vocab_size = int(sid_vocab.get('collision_vocab_size', 0))
-            self.sid_collision_token_offset = int(sid_vocab.get('collision_token_offset', 0))
-            self.sid_quantizer_name = sid_vocab.get('quantizer_name')
-            self.sid_quantizer_scheme = sid_vocab.get('quantizer_scheme')
-            self.sid_recommended_decoding = sid_vocab.get('recommended_decoding')
-            self._build_sid_indices()
+            self.sid_metadata[name] = {
+                **sid_vocab,
+                'vocab_size': int(entry['size']),
+                'num_quantizers': int(sid_vocab['num_quantizers']),
+                'base_num_quantizers': int(
+                    sid_vocab.get('base_num_quantizers', sid_vocab['num_quantizers'])
+                ),
+                'codebook_size': int(sid_vocab['codebook_size']),
+                'collision_vocab_size': int(sid_vocab.get('collision_vocab_size', 0)),
+                'collision_token_offset': int(sid_vocab.get('collision_token_offset', 0)),
+            }
+            self._build_sid_indices(name)
+        if self.sid_metadata:
+            primary_sid = (
+                self.config.compile_config.primary_name('sid', targets=True)
+                or self.config.compile_config.primary_name('sid')
+                or next(iter(self.sid_metadata))
+            )
+            self._set_primary_sid(primary_sid)
 
         hash_vocab_path = self.compile_dir / 'vocab' / 'hash.json'
         if hash_vocab_path.exists():
@@ -187,11 +210,11 @@ class CompiledArtifacts:
             self.embedding_matrix = self._load_embedding_matrix()
         return self
 
-    def _build_sid_indices(self):
-        sid_view = self.item_views.get('sid')
+    def _build_sid_indices(self, name='sid'):
+        sid_view = self.item_views.get(name)
         if sid_view is None:
-            self.sid_prefix_to_next = {}
-            self.sid_sequence_to_items = {}
+            self.sid_prefix_to_next_by_name[name] = {}
+            self.sid_sequence_to_items_by_name[name] = {}
             return
 
         prefix_to_next = {}
@@ -205,11 +228,35 @@ class CompiledArtifacts:
                 prefix = sequence[:prefix_len]
                 prefix_to_next.setdefault(prefix, set()).add(sequence[prefix_len])
 
-        self.sid_prefix_to_next = {
+        self.sid_prefix_to_next_by_name[name] = {
             prefix: sorted(next_codes)
             for prefix, next_codes in prefix_to_next.items()
         }
-        self.sid_sequence_to_items = sequence_to_items
+        self.sid_sequence_to_items_by_name[name] = sequence_to_items
+
+    def _set_primary_sid(self, name):
+        meta = self.sid_metadata[name]
+        self.sid_num_quantizers = meta['num_quantizers']
+        self.sid_base_num_quantizers = meta['base_num_quantizers']
+        self.sid_codebook_size = meta['codebook_size']
+        self.sid_collision_vocab_size = meta['collision_vocab_size']
+        self.sid_collision_token_offset = meta['collision_token_offset']
+        self.sid_quantizer_name = meta.get('quantizer_name')
+        self.sid_quantizer_scheme = meta.get('quantizer_scheme')
+        self.sid_recommended_decoding = meta.get('recommended_decoding')
+        self.sid_prefix_to_next = self.sid_prefix_to_next_by_name.get(name, {})
+        self.sid_sequence_to_items = self.sid_sequence_to_items_by_name.get(name, {})
+
+    def sid_metadata_for(self, name=None):
+        if name is None:
+            name = (
+                self.config.compile_config.primary_name('sid', targets=True)
+                or self.config.compile_config.primary_name('sid')
+                or next(iter(self.sid_metadata), None)
+            )
+        if name not in self.sid_metadata:
+            raise KeyError(f'unknown SID representation: {name}')
+        return self.sid_metadata[name]
 
     def _build_hash_indices(self):
         hash_view = self.item_views.get('hash')
@@ -236,8 +283,12 @@ class CompiledArtifacts:
 
     @property
     def sid_vocab_size(self):
-        sid_entries = [entry for entry in self.vocab_meta['namespaces'] if entry['kind'] == 'sid']
-        return int(sid_entries[0]['size']) if sid_entries else 0
+        if not self.sid_metadata:
+            return 0
+        return int(self.sid_metadata_for()['vocab_size'])
+
+    def sid_vocab_size_for(self, name):
+        return int(self.sid_metadata_for(name)['vocab_size'])
 
     @property
     def hash_vocab_size(self):

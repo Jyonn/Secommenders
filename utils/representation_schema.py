@@ -128,9 +128,16 @@ def normalize_representation_graph(representations, encoder, decoder):
         raise ValueError('trainer.v4 named representations currently require encoder.combine=concat')
     active = {name: catalog[name] for name in sorted(referenced)}
     target_types = [active[name]['type'] for name in target_names]
-    if len(target_types) > 1 and target_types != ['sid', 'uid']:
-        raise ValueError('multiple decoder targets currently support one sid followed by one uid')
-    for kind in ('uid', 'sid', 'hash', 'text'):
+    if len(target_types) > 1:
+        invalid = [kind for kind in target_types if kind not in {'sid', 'uid'}]
+        if invalid or target_types.count('uid') > 1 or (
+            'uid' in target_types and target_types[-1] != 'uid'
+        ):
+            raise ValueError(
+                'multiple decoder targets support one or more sid representations, '
+                'optionally followed by one uid representation'
+            )
+    for kind in ('uid', 'hash', 'text'):
         names = [name for name in encoder_names if active[name]['type'] == kind]
         if len(names) > 1:
             raise ValueError(f'trainer.v4 currently supports at most one active {kind} representation')
@@ -263,10 +270,10 @@ def upstreams_from_graph(graph):
     names = graph['encoder']['representations']
     upstreams = {}
     sid_names = [name for name in names if catalog[name]['type'] == 'sid']
-    if sid_names:
-        spec = catalog[sid_names[0]]
+    for name in sid_names:
+        spec = catalog[name]
         codec = spec['codec']
-        upstreams['sid'] = {
+        upstreams[name] = {
             'kind': 'quantized',
             'embedding_model': None,
             'embedding': spec['embedding'],

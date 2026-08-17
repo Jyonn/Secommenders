@@ -137,6 +137,8 @@ class TrainConfig:
 
     @property
     def is_multi_task(self):
+        if self.representation_graph:
+            return len(self.representation_graph['decoder']['targets']) > 1
         return len(self.task_types) > 1
 
     @classmethod
@@ -475,10 +477,10 @@ class TrainConfig:
 
         upstreams = {}
         sid_names = [name for name in encoder_names if catalog[name]['type'] == 'sid']
-        if sid_names:
-            spec = catalog[sid_names[0]]
+        for name in sid_names:
+            spec = catalog[name]
             codec = spec['codec']
-            upstreams['sid'] = {
+            upstreams[name] = {
                 'kind': 'quantized',
                 'embedding_model': None,
                 'embedding': spec['embedding'],
@@ -505,6 +507,20 @@ class TrainConfig:
                 'clusterer': catalog[uid_names[0]]['hierarchy'],
             }
 
+        # The dataclass is still populated through the established flat parser.
+        # Feed its singular SID fields from the primary SID, while preserving all
+        # named upstreams on the final trainer.v4 configuration below.
+        legacy_upstreams = {
+            key: value for key, value in upstreams.items()
+            if key in {'uid', 'hash'}
+        }
+        primary_sid_name = next(
+            (name for name in target_names if catalog[name]['type'] == 'sid'),
+            sid_names[0] if sid_names else None,
+        )
+        if primary_sid_name:
+            legacy_upstreams['sid'] = upstreams[primary_sid_name]
+
         decoder = {
             'uid': {'mode': 'flat', 'topk': None},
             'sid': {'mode': 'auto', 'beam_width': 20, 'beam_chunk_size': 0, 'collision_loss_weight': 0.1},
@@ -525,7 +541,7 @@ class TrainConfig:
             decoding = dict(target.get('decoding') or {})
             if kind == 'uid':
                 decoder['uid'] = decoding
-            elif kind == 'sid':
+            elif kind == 'sid' and target['representation'] == primary_sid_name:
                 decoder['sid'] = decoding
             elif kind == 'hash':
                 decoder['hash'] = decoding
@@ -565,7 +581,7 @@ class TrainConfig:
                 'model_max_length': encoder.get('model_max_length', 0),
                 'item_text_max_tokens': encoder.get('item_text_max_tokens', 20),
             },
-            'upstreams': upstreams,
+            'upstreams': legacy_upstreams,
             'model': raw.get('model') or {},
             'decoder': decoder,
             'trainer': trainer_defaults,

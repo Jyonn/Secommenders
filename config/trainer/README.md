@@ -13,8 +13,10 @@ imported values.
 - `sid-content.yaml`: SID learned from content embeddings.
 - `sid-collaborative.yaml`: SID learned from Word2Vec collaborative embeddings.
 - `sid-hybrid.yaml`: SID generated from content and collaborative embeddings.
+- `sid-multi.yaml`: jointly trains independent content and collaborative SID spaces.
 - `embedding-dual.yaml`: UID target with content and collaborative embeddings as separate inputs.
 - `hybrid.yaml`: UID target with SID, content embedding, and collaborative embedding as separate encoder inputs.
+- `hybrid-multi-sid.yaml`: UID target with two independent SID and two independent embedding inputs.
 - `multi-decoder.yaml`: joint SID and UID decoding.
 - `hash.yaml`: content-derived hash target.
 - `uid-text.yaml`: UID target with raw text context; requires an LLM backbone.
@@ -37,7 +39,8 @@ python trainer.py --config config/trainer/sid-hybrid.yaml \
   --sid_codebook_size 128
 ```
 
-The current runtime supports any number of active `embedding` instances. UID, SID, hash, and text
-currently allow one active instance of each type because their decoder vocabulary/head is shared.
-The catalog may still declare several alternatives, such as `sid_content`, `sid_collaborative`, and
-`sid_hybrid`; a profile activates the one it needs.
+The current runtime supports any number of active `sid` and `embedding` instances. Every SID owns
+its quantizer upstream, compiled vocabulary and item view, model embedding/head, decoding settings,
+and named metrics. Multiple SID decoder targets are trained jointly; their unprefixed evaluation
+metrics are the mean across SID targets. UID, hash, and text currently allow one active instance of
+each type.

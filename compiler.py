@@ -47,7 +47,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v3.0'
+    VER = 'v3.1'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'hash', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'hash', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -260,6 +260,10 @@ class Compiler:
                 self.item_views_dir / f'{name}.parquet'
                 for name in self.config.representation_names
             ]
+            required_item_view_paths.extend(
+                self.vocab_dir / f'{name}.json'
+                for name in self.config.names_for_kind('sid')
+            )
             for name in self.config.names_for_kind('embedding'):
                 required_item_view_paths.append(self.output_dir / 'embeddings' / f'{name}.npy')
         elif self.requires_view('embedding'):
@@ -298,8 +302,16 @@ class Compiler:
         unsupported_task_types = [task for task in task_types if task not in self.SUPPORTED_TASK_TYPES]
         if unsupported_task_types:
             raise ValueError(f'Unsupported task.type entries: {unsupported_task_types}')
-        if len(task_types) > 1 and task_types != ['sid', 'uid']:
-            raise ValueError('multi task decoding currently supports exactly sid+uid')
+        if len(task_types) > 1:
+            if (
+                any(kind not in {'sid', 'uid'} for kind in task_types)
+                or task_types.count('uid') > 1
+                or ('uid' in task_types and task_types[-1] != 'uid')
+            ):
+                raise ValueError(
+                    'multi task decoding supports one or more sid targets, '
+                    'optionally followed by one uid target'
+                )
         if self.config.repr_combine not in self.SUPPORTED_REPR_COMBINES:
             raise ValueError(f'Unsupported repr.combine: {self.config.repr_combine}')
         if not set(self.config.target_names).issubset(self.config.representation_names):
@@ -315,23 +327,31 @@ class Compiler:
             raise ValueError('scratch backbone currently does not support repr.type containing text')
 
         used_views = set(repr_types + task_types)
-        sid_upstream = self.config.upstreams.get('sid') or {}
         hash_upstream = self.config.upstreams.get('hash') or {}
-        sid_has_source = bool((sid_upstream.get('embedding') or {}).get('sources') or sid_upstream.get('embedding_model'))
         hash_has_source = bool((hash_upstream.get('embedding') or {}).get('sources') or hash_upstream.get('embedding_model'))
         named_embeddings = self.config.names_for_kind('embedding') if self.config.representation_graph else []
         if 'embedding' in used_views and not (named_embeddings or self.config.embedding or self.config.repr_source_model):
             raise ValueError(
                 'embedding representation requires repr_source_model or representation.embedding.models'
             )
-        if 'sid' in used_views and not (sid_has_source or self.config.repr_source_model):
-            raise ValueError('SID requires repr_source_model or upstreams.sid.embedding.sources')
+        sid_names = self.config.names_for_kind('sid')
+        for sid_name in sid_names:
+            sid_upstream = self.config.upstream_for(sid_name)
+            sid_has_source = bool(
+                (sid_upstream.get('embedding') or {}).get('sources')
+                or sid_upstream.get('embedding_model')
+            )
+            if not (sid_has_source or self.config.repr_source_model):
+                raise ValueError(
+                    f'SID representation {sid_name} requires embedding sources'
+                )
         if 'hash' in used_views and not (hash_has_source or self.config.repr_source_model):
             raise ValueError('hash requires repr_source_model or upstreams.hash.embedding.sources')
-        if 'sid' in set(repr_types + self.config.task_types) and not self.config.sid_export:
-            raise ValueError('data.sid_export is required when repr.type or task.type uses sid')
-        if 'sid' in set(repr_types + self.config.task_types) and not self.config.sid_coder:
-            raise ValueError('data.sid_coder is required when repr.type or task.type uses sid')
+        if not self.config.representation_graph and 'sid' in set(repr_types + self.config.task_types):
+            if not self.config.sid_export:
+                raise ValueError('data.sid_export is required when repr.type or task.type uses sid')
+            if not self.config.sid_coder:
+                raise ValueError('data.sid_coder is required when repr.type or task.type uses sid')
         if 'hash' in set(repr_types + self.config.task_types) and not self.config.hash_coder:
             raise ValueError('data.hash_coder is required when repr.type or task.type uses hash')
 
@@ -448,9 +468,9 @@ class Compiler:
             path=special_vocab_path,
         )
 
-        if self.requires_view('sid'):
-            sid_meta = self.load_sid_view(build_only_meta=True)
-            sid_vocab_path = self.vocab_dir / 'sid.json'
+        for sid_name in self.config.names_for_kind('sid'):
+            sid_meta = self.load_sid_view(name=sid_name, build_only_meta=True)
+            sid_vocab_path = self.vocab_dir / f'{sid_name}.json'
             tokens = [
                 f'q{quantizer}_c{code}'
                 for quantizer in range(sid_meta['num_quantizers'])
@@ -477,7 +497,6 @@ class Compiler:
                     'quantized_export_dir': sid_meta.get('quantized_export_dir'),
                 },
             )
-            sid_name = self.config.primary_name('sid') or 'sid'
             self.registry.register(
                 sid_name,
                 kind='sid',
@@ -492,7 +511,7 @@ class Compiler:
                 recommended_decoding=sid_meta.get('recommended_decoding'),
             )
             pnt(
-                f"registered sid vocab size={len(tokens)} "
+                f"registered sid vocab name={sid_name} size={len(tokens)} "
                 f"base_num_quantizers={sid_meta['num_quantizers']} "
                 f"final_num_quantizers={sid_meta['final_num_quantizers']} "
                 f"codebook_size={sid_meta['codebook_size']} "
@@ -577,7 +596,7 @@ class Compiler:
         return view_name in views
 
     def _upstream(self, name: str):
-        return (self.config.compile_upstreams or {}).get(name) or {}
+        return self.config.upstream_for(name)
 
     def build_item_views(self):
         if self.config.representation_graph:
@@ -678,7 +697,7 @@ class Compiler:
                         ))
                 values = text_values
             elif kind == 'sid':
-                values = self.load_sid_view()
+                values = self.load_sid_view(name=name)
             elif kind == 'hash':
                 values = self.load_hash_view()
             elif kind == 'embedding':
@@ -693,8 +712,8 @@ class Compiler:
             'types': {name: self.config.representation_kind(name) for name in names},
         })
 
-    def _load_quantized_export(self):
-        upstream = self._upstream('sid')
+    def _load_quantized_export(self, name='sid'):
+        upstream = self._upstream(name)
         quantizer = upstream.get('quantizer') or {}
         legacy_model = normalize_model_name(upstream.get('embedding_model') or self.config.repr_source_model)
         embedding_spec = normalize_embedding_fusion(upstream.get('embedding') or {}, legacy_model=legacy_model)
@@ -803,8 +822,8 @@ class Compiler:
         )
         return export_dir, meta, item_ids, bits
 
-    def load_sid_view(self, build_only_meta=False):
-        export_dir, meta, item_ids, codes = self._load_quantized_export()
+    def load_sid_view(self, name='sid', build_only_meta=False):
+        export_dir, meta, item_ids, codes = self._load_quantized_export(name)
         num_quantizers = int(codes.shape[1]) if codes.ndim > 1 else 1
         codebook_size = int(meta['quantizer_config']['codebook_size'])
         collision_token_offset = num_quantizers * codebook_size
@@ -821,7 +840,7 @@ class Compiler:
         collision_group_count = sum(1 for group in base_sid_groups.values() if len(group) > 1)
         collided_item_count = sum(len(group) for group in base_sid_groups.values() if len(group) > 1)
 
-        self.sid_stats = {
+        self.sid_stats[name] = {
             'base_num_quantizers': num_quantizers,
             'final_num_quantizers': final_num_quantizers,
             'codebook_size': codebook_size,
@@ -1345,6 +1364,8 @@ class Compiler:
 
     def save_meta(self):
         identity = compiled_artifact_identity(self.config, self.output_dir)
+        primary_sid_name = self.config.primary_name('sid', targets=True) or self.config.primary_name('sid')
+        primary_sid_stats = self.sid_stats.get(primary_sid_name, {})
         self._save_json(
             self.meta_path,
             {
@@ -1357,9 +1378,10 @@ class Compiler:
                 'model_kind': self.backbone.kind,
                 'model_max_length': int(self.backbone.max_length),
                 'processed_dir': str(self.store.processed_dir()),
-                'sid_quantizer_name': self.sid_stats.get('quantizer_name'),
-                'sid_quantizer_scheme': self.sid_stats.get('quantizer_scheme'),
-                'sid_recommended_decoding': self.sid_stats.get('recommended_decoding'),
+                'sid_quantizer_name': primary_sid_stats.get('quantizer_name'),
+                'sid_quantizer_scheme': primary_sid_stats.get('quantizer_scheme'),
+                'sid_recommended_decoding': primary_sid_stats.get('recommended_decoding'),
+                'sid_representations': self.sid_stats,
                 'hash_quantizer_name': self.hash_stats.get('quantizer_name'),
                 'hash_quantizer_scheme': self.hash_stats.get('quantizer_scheme'),
                 'hash_recommended_decoding': self.hash_stats.get('recommended_decoding'),
@@ -1369,6 +1391,8 @@ class Compiler:
         pnt(f'meta saved to {self.meta_path}')
 
     def save_stats(self):
+        primary_sid_name = self.config.primary_name('sid', targets=True) or self.config.primary_name('sid')
+        primary_sid_stats = self.sid_stats.get(primary_sid_name, {})
         stats = {
             'item_count': len(self.uid_raw_items),
             'finetune_sample_count': self.samples_stats['finetune']['sample_count'],
@@ -1382,12 +1406,13 @@ class Compiler:
                 self.samples_stats['valid']['resolved_maxitems'],
                 self.samples_stats['test']['resolved_maxitems'],
             ),
-            'sid_base_num_quantizers': self.sid_stats.get('base_num_quantizers', 0),
-            'sid_final_num_quantizers': self.sid_stats.get('final_num_quantizers', 0),
-            'sid_collision_vocab_size': self.sid_stats.get('collision_vocab_size', 0),
-            'sid_collision_group_count': self.sid_stats.get('collision_group_count', 0),
-            'sid_collided_item_count': self.sid_stats.get('collided_item_count', 0),
-            'sid_max_collision_size': self.sid_stats.get('max_collision_size', 0),
+            'sid_base_num_quantizers': primary_sid_stats.get('base_num_quantizers', 0),
+            'sid_final_num_quantizers': primary_sid_stats.get('final_num_quantizers', 0),
+            'sid_collision_vocab_size': primary_sid_stats.get('collision_vocab_size', 0),
+            'sid_collision_group_count': primary_sid_stats.get('collision_group_count', 0),
+            'sid_collided_item_count': primary_sid_stats.get('collided_item_count', 0),
+            'sid_max_collision_size': primary_sid_stats.get('max_collision_size', 0),
+            'sid_representations': self.sid_stats,
             'hash_base_num_tokens': self.hash_stats.get('base_num_tokens', 0),
             'hash_final_num_tokens': self.hash_stats.get('final_num_tokens', 0),
             'hash_collision_vocab_size': self.hash_stats.get('collision_vocab_size', 0),

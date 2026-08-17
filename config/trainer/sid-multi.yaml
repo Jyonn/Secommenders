@@ -1,0 +1,41 @@
+$$import: _catalog.yaml
+
+# Train two independent SID spaces jointly. Each representation owns its
+# quantizer artifacts, vocabulary, embedding table, prediction head, and metrics.
+representations:
+  sid_content:
+    codec:
+      name: ${content_sid_coder:rqvae}$
+      export: ${content_sid_export:recon}$
+      quantizer:
+        latent_dim: ${content_sid_latent_dim:64}$
+        codebook_size: ${content_sid_codebook_size:128}$
+        num_quantizers: ${content_sid_num_quantizers:3}$
+        num_codebooks: ${content_sid_num_codebooks:3}$
+  sid_collaborative:
+    codec:
+      name: ${collaborative_sid_coder:rqvae}$
+      export: ${collaborative_sid_export:recon}$
+      quantizer:
+        latent_dim: ${collaborative_sid_latent_dim:64}$
+        codebook_size: ${collaborative_sid_codebook_size:128}$
+        num_quantizers: ${collaborative_sid_num_quantizers:3}$
+        num_codebooks: ${collaborative_sid_num_codebooks:3}$
+
+encoder:
+  representations: [sid_content, sid_collaborative]
+
+decoder:
+  targets:
+    - representation: sid_content
+      decoding:
+        mode: ${content_sid_decoding:auto}$
+        beam_width: ${content_sid_beam_width:20}$
+        beam_chunk_size: ${content_sid_beam_chunk_size:80}$
+        collision_loss_weight: ${content_sid_collision_loss_weight:0.1}$
+    - representation: sid_collaborative
+      decoding:
+        mode: ${collaborative_sid_decoding:auto}$
+        beam_width: ${collaborative_sid_beam_width:20}$
+        beam_chunk_size: ${collaborative_sid_beam_chunk_size:80}$
+        collision_loss_weight: ${collaborative_sid_collision_loss_weight:0.1}$

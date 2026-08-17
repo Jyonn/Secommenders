@@ -1,0 +1,38 @@
+$$import: _catalog.yaml
+
+# UID recommendation with independent content/collaborative SID streams and
+# independent dense embedding streams in the same history encoder.
+representations:
+  sid_content:
+    codec:
+      name: ${content_sid_coder:rqvae}$
+      export: ${content_sid_export:recon}$
+      quantizer:
+        latent_dim: ${content_sid_latent_dim:64}$
+        codebook_size: ${content_sid_codebook_size:128}$
+        num_quantizers: ${content_sid_num_quantizers:3}$
+        num_codebooks: ${content_sid_num_codebooks:3}$
+  sid_collaborative:
+    codec:
+      name: ${collaborative_sid_coder:rqvae}$
+      export: ${collaborative_sid_export:recon}$
+      quantizer:
+        latent_dim: ${collaborative_sid_latent_dim:64}$
+        codebook_size: ${collaborative_sid_codebook_size:128}$
+        num_quantizers: ${collaborative_sid_num_quantizers:3}$
+        num_codebooks: ${collaborative_sid_num_codebooks:3}$
+
+encoder:
+  representations:
+    - uid
+    - sid_content
+    - sid_collaborative
+    - embedding_content
+    - embedding_collaborative
+
+decoder:
+  targets:
+    - representation: uid
+      decoding:
+        mode: ${uid_decoding:flat}$
+        topk: ${uid_cluster_topk:null}$

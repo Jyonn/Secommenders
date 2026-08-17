@@ -9,7 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from models import build_backbone
 from utils import function
-from utils.multi_decoding import fuse_candidate_scores, uid_frequency_gate
+from utils.multi_decoding import fuse_candidate_scores, normalize_candidate_scores, uid_frequency_gate
 
 from .encoders import LLMSequenceEncoder, ScratchLlamaSequenceEncoder, ScratchSequenceEncoder
 from .uid_hierarchy import UIDHierarchyArtifacts
@@ -73,7 +73,13 @@ class SequentialRecModel(nn.Module):
         self.uses_hash_path = 'hash' in history_repr_types or 'hash' in task_types
         self.type_marker_embedding = nn.Embedding(len(self.compiled.special_vocab['tokens']), input_embed_dim)
         self.uid_embedding = nn.Embedding(compiled.num_items, input_embed_dim) if self.uses_uid_path else None
-        self.sid_embedding = nn.Embedding(max(compiled.sid_vocab_size, 1), input_embed_dim) if self.uses_sid_path else None
+        self.sid_embeddings = nn.ModuleDict()
+        self.sid_heads = nn.ModuleDict()
+        for name in config.compile_config.names_for_kind('sid'):
+            vocab_size = compiled.sid_vocab_size_for(name)
+            if vocab_size <= 0:
+                raise ValueError(f'sid representation {name} requires compiled vocabulary metadata')
+            self.sid_embeddings[name] = nn.Embedding(vocab_size, input_embed_dim)
         self.hash_embedding = nn.Embedding(max(compiled.hash_vocab_size, 1), input_embed_dim) if self.uses_hash_path else None
         self.embedding_projection = None
         self.embedding_head = None
@@ -83,7 +89,6 @@ class SequentialRecModel(nn.Module):
         self.uid_head = None
         self.uid_hierarchy = None
         self.uid_node_heads = None
-        self.sid_head = None
         self.hash_head = None
         self.model_token_head = None
 
@@ -112,9 +117,11 @@ class SequentialRecModel(nn.Module):
         elif 'uid' in supervised_repr_types or 'uid' in task_types:
             self.uid_head = nn.Linear(hidden_size, compiled.num_items)
         if 'sid' in supervised_repr_types or 'sid' in task_types:
-            if not compiled.sid_vocab_size or not compiled.sid_num_quantizers:
-                raise ValueError('sid task requires sid vocab metadata in compiled artifacts')
-            self.sid_head = nn.Linear(hidden_size, compiled.sid_vocab_size)
+            for name in config.compile_config.names_for_kind('sid'):
+                meta = compiled.sid_metadata_for(name)
+                if not meta['vocab_size'] or not meta['num_quantizers']:
+                    raise ValueError(f'sid representation {name} requires vocabulary metadata')
+                self.sid_heads[name] = nn.Linear(hidden_size, meta['vocab_size'])
         if 'hash' in supervised_repr_types or 'hash' in task_types:
             if not compiled.hash_vocab_size or not compiled.hash_num_tokens:
                 raise ValueError('hash task requires hash vocab metadata in compiled artifacts')
@@ -132,15 +139,19 @@ class SequentialRecModel(nn.Module):
         self.code_collision_loss_weight = float(getattr(config, 'code_collision_loss_weight', 0.1))
         self._ranking_trace_enabled = False
         self._ranking_trace_records = []
-        sid_item_codes = compiled.item_views.get('sid') or []
-        if sid_item_codes:
-            sid_item_codes_tensor = torch.tensor(
-                [[int(code) for code in function.to_list(codes)] for codes in sid_item_codes],
-                dtype=torch.long,
-            )
-        else:
-            sid_item_codes_tensor = torch.empty((0, 0), dtype=torch.long)
-        self.register_buffer('sid_item_codes', sid_item_codes_tensor, persistent=False)
+        self._sid_item_code_buffer_names = {}
+        for index, name in enumerate(config.compile_config.names_for_kind('sid')):
+            sid_item_codes = compiled.item_views.get(name) or []
+            if sid_item_codes:
+                sid_item_codes_tensor = torch.tensor(
+                    [[int(code) for code in function.to_list(codes)] for codes in sid_item_codes],
+                    dtype=torch.long,
+                )
+            else:
+                sid_item_codes_tensor = torch.empty((0, 0), dtype=torch.long)
+            buffer_name = f'_sid_item_codes_{index}'
+            self.register_buffer(buffer_name, sid_item_codes_tensor, persistent=False)
+            self._sid_item_code_buffer_names[name] = buffer_name
         hash_item_codes = compiled.item_views.get('hash') or []
         if hash_item_codes:
             hash_item_codes_tensor = torch.tensor(
@@ -158,8 +169,7 @@ class SequentialRecModel(nn.Module):
         self.type_marker_embedding.to(dtype=self.compute_dtype)
         if self.uid_embedding is not None:
             self.uid_embedding.to(dtype=self.compute_dtype)
-        if self.sid_embedding is not None:
-            self.sid_embedding.to(dtype=self.compute_dtype)
+        self.sid_embeddings.to(dtype=self.compute_dtype)
         if self.hash_embedding is not None:
             self.hash_embedding.to(dtype=self.compute_dtype)
         if self.embedding_projection is not None:
@@ -173,8 +183,7 @@ class SequentialRecModel(nn.Module):
         if self.uid_node_heads is not None:
             for head in self.uid_node_heads:
                 head.to(dtype=self.compute_dtype)
-        if self.sid_head is not None:
-            self.sid_head.to(dtype=self.compute_dtype)
+        self.sid_heads.to(dtype=self.compute_dtype)
         if self.hash_head is not None:
             self.hash_head.to(dtype=self.compute_dtype)
         if self.model_token_head is not None:
@@ -183,6 +192,69 @@ class SequentialRecModel(nn.Module):
     @property
     def device(self):
         return next(self.parameters()).device
+
+    def _primary_sid_name(self):
+        if not hasattr(self.config, 'compile_config'):
+            return 'sid'
+        return (
+            self.config.compile_config.primary_name('sid', targets=True)
+            or self.config.compile_config.primary_name('sid')
+        )
+
+    def _resolve_sid_name(self, representation=None):
+        name = representation or self._primary_sid_name()
+        if not hasattr(self, 'sid_embeddings'):
+            return name or 'sid'
+        if not name or name not in self.sid_embeddings:
+            raise ValueError(f'unknown SID representation: {name}')
+        return name
+
+    def _sid_meta(self, representation=None):
+        name = self._resolve_sid_name(representation)
+        if hasattr(self.compiled, 'sid_metadata_for'):
+            return self.compiled.sid_metadata_for(name)
+        return {
+            'num_quantizers': getattr(self.compiled, 'sid_num_quantizers', 0),
+            'base_num_quantizers': getattr(self.compiled, 'sid_base_num_quantizers', 0),
+            'codebook_size': getattr(self.compiled, 'sid_codebook_size', 0),
+            'collision_vocab_size': getattr(self.compiled, 'sid_collision_vocab_size', 0),
+            'collision_token_offset': getattr(self.compiled, 'sid_collision_token_offset', 0),
+            'recommended_decoding': getattr(self.compiled, 'sid_recommended_decoding', None),
+        }
+
+    def _sid_prefix_index(self, representation=None):
+        name = self._resolve_sid_name(representation)
+        indices = getattr(self.compiled, 'sid_prefix_to_next_by_name', None)
+        return indices.get(name, {}) if indices is not None else self.compiled.sid_prefix_to_next
+
+    def _sid_sequence_index(self, representation=None):
+        name = self._resolve_sid_name(representation)
+        indices = getattr(self.compiled, 'sid_sequence_to_items_by_name', None)
+        return indices.get(name, {}) if indices is not None else self.compiled.sid_sequence_to_items
+
+    @property
+    def sid_embedding(self):
+        name = self._primary_sid_name()
+        return self.sid_embeddings[name] if name in self.sid_embeddings else None
+
+    @property
+    def sid_head(self):
+        name = self._primary_sid_name()
+        return self.sid_heads[name] if name in self.sid_heads else None
+
+    def _sid_item_codes(self, representation=None):
+        name = self._resolve_sid_name(representation)
+        buffer_names = getattr(self, '_sid_item_code_buffer_names', {})
+        if name in buffer_names:
+            return getattr(self, buffer_names[name])
+        legacy_codes = self.__dict__.get('sid_item_codes')
+        if isinstance(legacy_codes, torch.Tensor):
+            return legacy_codes
+        raise ValueError(f'SID item-code buffer is unavailable for representation: {name}')
+
+    @property
+    def sid_item_codes(self):
+        return self._sid_item_codes()
 
     def trainable_state_dict(self):
         state = self.state_dict()
@@ -232,7 +304,7 @@ class SequentialRecModel(nn.Module):
             elif repr_type == 'sid':
                 specs.append(('type_marker', repr_name))
                 sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[repr_name][uid])]
-                specs.append(('sid', sid_ids))
+                specs.append(('sid', (repr_name, sid_ids)))
             elif repr_type == 'hash':
                 specs.append(('type_marker', repr_name))
                 hash_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[repr_name][uid])]
@@ -254,7 +326,7 @@ class SequentialRecModel(nn.Module):
             return [('type_marker', view_name), ('model_tokens', token_ids)]
         if kind == 'sid':
             sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[view_name][uid])]
-            return [('type_marker', view_name), ('sid', sid_ids)]
+            return [('type_marker', view_name), ('sid', (view_name, sid_ids))]
         if kind == 'hash':
             hash_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[view_name][uid])]
             return [('type_marker', view_name), ('hash', hash_ids)]
@@ -291,10 +363,13 @@ class SequentialRecModel(nn.Module):
             token_ids = torch.tensor([int(value)], dtype=torch.long, device=self.device)
             return self.uid_embedding(token_ids)
         if kind == 'sid':
-            if self.sid_embedding is None:
-                raise ValueError('sid embedding requested but sid path is not initialized')
-            token_ids = torch.tensor(value, dtype=torch.long, device=self.device)
-            return self.sid_embedding(token_ids)
+            if isinstance(value, tuple):
+                name, token_values = value
+            else:
+                name, token_values = self._primary_sid_name(), value
+            name = self._resolve_sid_name(name)
+            token_ids = torch.tensor(token_values, dtype=torch.long, device=self.device)
+            return self.sid_embeddings[name](token_ids)
         if kind == 'hash':
             if self.hash_embedding is None:
                 raise ValueError('hash embedding requested but hash path is not initialized')
@@ -339,21 +414,23 @@ class SequentialRecModel(nn.Module):
             raise ValueError('hierarchical uid supervision requested but uid hierarchy heads are not initialized')
         return self.uid_node_heads[node_id](hidden_states)
 
-    def _sid_logits(self, hidden_states: torch.Tensor):
-        if self.sid_head is None:
-            raise ValueError('sid supervision requested but sid_head is not initialized')
-        return self.sid_head(hidden_states)
+    def _sid_logits(self, hidden_states: torch.Tensor, representation=None):
+        name = self._resolve_sid_name(representation)
+        if name not in self.sid_heads:
+            raise ValueError(f'sid supervision requested but head {name} is not initialized')
+        return self.sid_heads[name](hidden_states)
 
     def _hash_logits(self, hidden_states: torch.Tensor):
         if self.hash_head is None:
             raise ValueError('hash supervision requested but hash_head is not initialized')
         return self.hash_head(hidden_states)
 
-    def _sid_slot_allowed_codes(self, slot_index: int):
-        base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
-        codebook_size = int(self.compiled.sid_codebook_size or 0)
-        collision_offset = int(self.compiled.sid_collision_token_offset or 0)
-        collision_vocab_size = int(self.compiled.sid_collision_vocab_size or 0)
+    def _sid_slot_allowed_codes(self, slot_index: int, representation=None):
+        meta = self._sid_meta(representation)
+        base_num_quantizers = int(meta['base_num_quantizers'] or 0)
+        codebook_size = int(meta['codebook_size'] or 0)
+        collision_offset = int(meta['collision_token_offset'] or 0)
+        collision_vocab_size = int(meta['collision_vocab_size'] or 0)
 
         if slot_index < 0:
             raise ValueError(f'Invalid sid slot index: {slot_index}')
@@ -364,33 +441,38 @@ class SequentialRecModel(nn.Module):
             return list(range(collision_offset, collision_offset + collision_vocab_size))
         raise ValueError(
             f'SID slot index {slot_index} exceeds configured slots '
-            f'(base={base_num_quantizers}, final={self.compiled.sid_num_quantizers})'
+            f'(base={base_num_quantizers}, final={meta["num_quantizers"]})'
         )
 
-    def _mask_sid_logits_for_slots(self, logits: torch.Tensor, slot_indices: torch.Tensor):
+    def _mask_sid_logits_for_slots(self, logits: torch.Tensor, slot_indices: torch.Tensor, representation=None):
         masked_logits = torch.full_like(logits, fill_value=torch.finfo(logits.dtype).min)
         unique_slots = sorted({int(slot) for slot in slot_indices.tolist()})
         for slot_index in unique_slots:
             row_indices = (slot_indices == slot_index).nonzero(as_tuple=False).view(-1)
             if row_indices.numel() == 0:
                 continue
-            allowed_codes = self._sid_slot_allowed_codes(slot_index)
+            allowed_codes = self._sid_slot_allowed_codes(slot_index, representation)
             allowed_tensor = torch.tensor(allowed_codes, dtype=torch.long, device=logits.device)
             masked_logits[row_indices[:, None], allowed_tensor[None, :]] = logits[row_indices[:, None], allowed_tensor[None, :]]
         return masked_logits
 
-    def _sid_allowed_logits_for_slot(self, logits: torch.Tensor, slot_index: int):
-        allowed_codes = self._sid_slot_allowed_codes(slot_index)
+    def _sid_allowed_logits_for_slot(self, logits: torch.Tensor, slot_index: int, representation=None):
+        allowed_codes = self._sid_slot_allowed_codes(slot_index, representation)
         allowed_tensor = torch.tensor(allowed_codes, dtype=torch.long, device=logits.device)
         allowed_start = int(allowed_codes[0])
         return logits.index_select(dim=1, index=allowed_tensor), allowed_start
 
-    def _sid_loss_weights(self, slot_indices: torch.Tensor):
-        base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
+    def _sid_loss_weights(self, slot_indices: torch.Tensor, representation=None):
+        meta = self._sid_meta(representation)
+        base_num_quantizers = int(meta['base_num_quantizers'] or 0)
         weights = torch.ones(slot_indices.shape[0], dtype=torch.float32, device=slot_indices.device)
         collision_mask = slot_indices >= base_num_quantizers
         if collision_mask.any():
-            weights[collision_mask] = self.code_collision_loss_weight
+            weights[collision_mask] = float(self._sid_decoding_value(
+                representation,
+                'collision_loss_weight',
+                self.code_collision_loss_weight,
+            ))
         return weights
 
     def _hash_slot_allowed_codes(self, slot_index: int):
@@ -435,13 +517,35 @@ class SequentialRecModel(nn.Module):
             weights[collision_mask] = self.code_collision_loss_weight
         return weights
 
-    def _sid_decoding_mode(self):
-        mode = str(getattr(self.config, 'code_decoding', 'auto')).strip().lower()
+    def _sid_decoding_mode(self, representation=None):
+        name = self._resolve_sid_name(representation)
+        target = self.config.compile_config.target_spec(name) or {}
+        decoding = target.get('decoding') or {}
+        mode = str(decoding.get('mode', getattr(self.config, 'code_decoding', 'auto'))).strip().lower()
         if mode == 'auto':
-            mode = str(getattr(self.compiled, 'sid_recommended_decoding', '') or 'sequential').strip().lower()
+            meta = self._sid_meta(name)
+            mode = str(meta.get('recommended_decoding') or 'sequential').strip().lower()
         if mode not in {'sequential', 'parallel'}:
             raise ValueError(f'Unsupported code_decoding: {mode}')
         return mode
+
+    def _sid_decoding_value(self, representation, key, fallback):
+        name = self._resolve_sid_name(representation)
+        if not hasattr(self.config, 'compile_config'):
+            return fallback
+        target = self.config.compile_config.target_spec(name) or {}
+        return (target.get('decoding') or {}).get(key, fallback)
+
+    def _sid_beam_width(self, representation=None):
+        return max(1, int(self._sid_decoding_value(
+            representation, 'beam_width', self.config.code_beam_width
+        )))
+
+    def _sid_beam_chunk_size(self, representation=None):
+        return max(1, int(self._sid_decoding_value(
+            representation, 'beam_chunk_size',
+            getattr(self.config, 'code_beam_chunk_size', getattr(self.config, 'batch_size', 1)),
+        )))
 
     def _build_batch_inputs(self, batch):
         sample_embeddings = []
@@ -470,12 +574,13 @@ class SequentialRecModel(nn.Module):
     def sid_ranking_ks(self):
         return self.ranking_ks()
 
-    def _build_sid_generation_batch_inputs(self, sample, sid_prefixes: list[list[int]]):
+    def _build_sid_generation_batch_inputs(self, sample, sid_prefixes: list[list[int]], representation=None):
+        name = self._resolve_sid_name(representation)
         sample_embeddings = []
         for sid_prefix in sid_prefixes:
             specs = self._build_sample_specs(sample)
             if sid_prefix:
-                specs.append(('sid', [int(code) for code in sid_prefix]))
+                specs.append(('sid', (name, [int(code) for code in sid_prefix])))
             pieces = [self._embed_spec(kind, value) for kind, value in specs]
             sample_embeddings.append(torch.cat(pieces, dim=0))
 
@@ -485,12 +590,13 @@ class SequentialRecModel(nn.Module):
         attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
         return padded, attention_mask.long(), lengths
 
-    def _build_sid_generation_mixed_batch_inputs(self, work_items):
+    def _build_sid_generation_mixed_batch_inputs(self, work_items, representation=None):
+        name = self._resolve_sid_name(representation)
         sample_embeddings = []
         for sample, sid_prefix in work_items:
             specs = self._build_sample_specs(sample)
             if sid_prefix:
-                specs.append(('sid', [int(code) for code in sid_prefix]))
+                specs.append(('sid', (name, [int(code) for code in sid_prefix])))
             pieces = [self._embed_spec(kind, value) for kind, value in specs]
             sample_embeddings.append(torch.cat(pieces, dim=0))
 
@@ -500,15 +606,18 @@ class SequentialRecModel(nn.Module):
         attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
         return padded, attention_mask.long(), lengths
 
-    def _predict_sid_step_logits(self, sample, sid_prefixes: list[list[int]], slot_index: int):
+    def _predict_sid_step_logits(self, sample, sid_prefixes: list[list[int]], slot_index: int, representation=None):
+        name = self._resolve_sid_name(representation)
         chunk_size = max(1, int(getattr(self.config, 'code_beam_chunk_size', self.config.batch_size)))
         logits_chunks = []
         for start in range(0, len(sid_prefixes), chunk_size):
             chunk_prefixes = sid_prefixes[start:start + chunk_size]
-            inputs_embeds, attention_mask, lengths = self._build_sid_generation_batch_inputs(sample, chunk_prefixes)
+            inputs_embeds, attention_mask, lengths = self._build_sid_generation_batch_inputs(
+                sample, chunk_prefixes, name
+            )
             hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
             pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
-            logits_chunks.append(self._sid_logits(pooled))
+            logits_chunks.append(self._sid_logits(pooled, name))
         return torch.cat(logits_chunks, dim=0)
 
     def _sid_kv_cache_supported(self):
@@ -518,8 +627,9 @@ class SequentialRecModel(nn.Module):
             and bool(getattr(self.encoder, 'forward_accepts_use_cache', False))
         )
 
-    def _sid_base_logits_and_cache(self, sample):
-        inputs_embeds, attention_mask, lengths = self._build_sid_generation_batch_inputs(sample, [[]])
+    def _sid_base_logits_and_cache(self, sample, representation=None):
+        name = self._resolve_sid_name(representation)
+        inputs_embeds, attention_mask, lengths = self._build_sid_generation_batch_inputs(sample, [[]], name)
         hidden, past_key_values = self.encoder.forward_with_cache(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
@@ -527,7 +637,7 @@ class SequentialRecModel(nn.Module):
         if past_key_values is None:
             return None
         pooled = hidden[0, lengths[0] - 1]
-        return self._sid_logits(pooled).squeeze(0), past_key_values
+        return self._sid_logits(pooled, name).squeeze(0), past_key_values
 
     def _sid_append_cached_tokens(
             self,
@@ -535,14 +645,16 @@ class SequentialRecModel(nn.Module):
             codes: list[int],
             attention_mask: torch.Tensor | None = None,
             position_ids: torch.Tensor | None = None,
+            representation=None,
     ):
+        name = self._resolve_sid_name(representation)
         past_length = self.encoder.cache_seq_length(past_key_values)
         if past_length is None:
             return None
         if not codes:
             return None
         inputs_embeds = torch.stack(
-            [self._embed_spec('sid', [int(code)]) for code in codes],
+            [self._embed_spec('sid', (name, [int(code)])) for code in codes],
             dim=0,
         )
         batch_size = len(codes)
@@ -558,10 +670,12 @@ class SequentialRecModel(nn.Module):
         )
         if next_past is None:
             return None
-        return self._sid_logits(hidden[:, -1, :]), next_past
+        return self._sid_logits(hidden[:, -1, :], name), next_past
 
-    def _sid_append_cached_token(self, past_key_values, code: int):
-        result = self._sid_append_cached_tokens(past_key_values, [int(code)])
+    def _sid_append_cached_token(self, past_key_values, code: int, representation=None):
+        result = self._sid_append_cached_tokens(
+            past_key_values, [int(code)], representation=representation
+        )
         if result is None:
             return None
         logits, next_past = result
@@ -617,10 +731,11 @@ class SequentialRecModel(nn.Module):
         if diagnostic not in diagnostics and len(diagnostics) < 8:
             diagnostics.append(diagnostic)
 
-    def _sid_base_batch_logits_and_cache(self, batch):
+    def _sid_base_batch_logits_and_cache(self, batch, representation=None):
+        name = self._resolve_sid_name(representation)
         build_started = self._sid_timing_now()
         input_items = [(sample, []) for sample in batch]
-        right_padded, _, lengths = self._build_sid_generation_mixed_batch_inputs(input_items)
+        right_padded, _, lengths = self._build_sid_generation_mixed_batch_inputs(input_items, name)
         inputs_embeds = torch.zeros_like(right_padded)
         attention_mask = torch.zeros(
             right_padded.shape[:2],
@@ -643,10 +758,11 @@ class SequentialRecModel(nn.Module):
         if past_key_values is None:
             return None
         pooled = hidden[:, -1, :]
-        return self._sid_logits(pooled), past_key_values, attention_mask, lengths
+        return self._sid_logits(pooled, name), past_key_values, attention_mask, lengths
 
-    def _pick_sid_item(self, sid_sequence: tuple[int, ...]):
-        candidates = self.compiled.sid_sequence_to_items.get(sid_sequence, [])
+    def _pick_sid_item(self, sid_sequence: tuple[int, ...], representation=None):
+        name = self._resolve_sid_name(representation)
+        candidates = self._sid_sequence_index(name).get(sid_sequence, [])
         if not candidates:
             return None
         if len(candidates) == 1:
@@ -656,18 +772,21 @@ class SequentialRecModel(nn.Module):
         ).hexdigest()
         return int(candidates[int(digest[:8], 16) % len(candidates)])
 
-    def _beam_search_sid_items(self, sample):
-        beam_width = max(1, int(self.config.code_beam_width))
+    def _beam_search_sid_items(self, sample, representation=None):
+        name = self._resolve_sid_name(representation)
+        beam_width = self._sid_beam_width(name)
         beams: list[tuple[tuple[int, ...], float]] = [(tuple(), 0.0)]
 
-        for slot_index in range(int(self.compiled.sid_num_quantizers)):
+        meta = self._sid_meta(name)
+        prefix_index = self._sid_prefix_index(name)
+        for slot_index in range(int(meta['num_quantizers'])):
             sid_prefixes = [list(prefix) for prefix, _ in beams]
-            step_logits = self._predict_sid_step_logits(sample, sid_prefixes, slot_index)
+            step_logits = self._predict_sid_step_logits(sample, sid_prefixes, slot_index, name)
             step_log_probs = F.log_softmax(step_logits.float(), dim=-1)
             candidates = []
 
             for beam_index, (prefix, score) in enumerate(beams):
-                allowed_codes = self.compiled.sid_prefix_to_next.get(prefix, [])
+                allowed_codes = prefix_index.get(prefix, [])
                 if not allowed_codes:
                     continue
                 allowed_indices = torch.tensor(allowed_codes, dtype=torch.long, device=self.device)
@@ -685,20 +804,26 @@ class SequentialRecModel(nn.Module):
 
         return beams
 
-    def _beam_search_sid_items_with_kv_cache(self, sample):
+    def _beam_search_sid_items_with_kv_cache(self, sample, representation=None):
+        name = self._resolve_sid_name(representation)
         if not self._sid_kv_cache_supported():
             return None
 
         try:
-            base_result = self._sid_base_logits_and_cache(sample)
+            base_result = (
+                self._sid_base_logits_and_cache(sample)
+                if name == self._primary_sid_name()
+                else self._sid_base_logits_and_cache(sample, name)
+            )
         except TypeError:
             return None
         if base_result is None:
             return None
         base_logits, batched_past = base_result
 
-        beam_width = max(1, int(self.config.code_beam_width))
-        num_quantizers = int(self.compiled.sid_num_quantizers)
+        beam_width = self._sid_beam_width(name)
+        num_quantizers = int(self._sid_meta(name)['num_quantizers'])
+        prefix_index = self._sid_prefix_index(name)
         prefixes = [tuple()]
         scores = [0.0]
         batched_logits = base_logits.unsqueeze(0)
@@ -707,7 +832,7 @@ class SequentialRecModel(nn.Module):
             candidates = []
             batched_log_probs = F.log_softmax(batched_logits.float(), dim=-1)
             for beam_index, (prefix, score) in enumerate(zip(prefixes, scores)):
-                allowed_codes = self.compiled.sid_prefix_to_next.get(prefix, [])
+                allowed_codes = prefix_index.get(prefix, [])
                 if not allowed_codes:
                     continue
                 allowed_indices = torch.tensor(allowed_codes, dtype=torch.long, device=self.device)
@@ -740,9 +865,11 @@ class SequentialRecModel(nn.Module):
             if selected_past is None:
                 return None
             try:
-                next_result = self._sid_append_cached_tokens(
-                    selected_past,
-                    [next_code for _, _, _, next_code in candidates],
+                append_args = (selected_past, [next_code for _, _, _, next_code in candidates])
+                next_result = (
+                    self._sid_append_cached_tokens(*append_args)
+                    if name == self._primary_sid_name()
+                    else self._sid_append_cached_tokens(*append_args, representation=name)
                 )
             except (TypeError, ValueError):
                 return None
@@ -754,12 +881,17 @@ class SequentialRecModel(nn.Module):
 
         return list(zip(prefixes, scores))
 
-    def _beam_search_sid_items_batch_with_kv_cache(self, batch):
+    def _beam_search_sid_items_batch_with_kv_cache(self, batch, representation=None):
+        name = self._resolve_sid_name(representation)
         if not batch or not self._sid_kv_cache_supported():
             self._sid_record_kv_diagnostic('unsupported_or_empty')
             return None
         try:
-            base_result = self._sid_base_batch_logits_and_cache(batch)
+            base_result = (
+                self._sid_base_batch_logits_and_cache(batch)
+                if name == self._primary_sid_name()
+                else self._sid_base_batch_logits_and_cache(batch, name)
+            )
         except TypeError as exc:
             self._sid_record_kv_diagnostic('base_forward_type_error', exception=exc)
             return None
@@ -768,8 +900,9 @@ class SequentialRecModel(nn.Module):
             return None
         batched_logits, batched_past, batched_attention_mask, batched_lengths = base_result
 
-        beam_width = max(1, int(self.config.code_beam_width))
-        num_quantizers = int(self.compiled.sid_num_quantizers)
+        beam_width = self._sid_beam_width(name)
+        num_quantizers = int(self._sid_meta(name)['num_quantizers'])
+        prefix_index = self._sid_prefix_index(name)
         beams_by_sample = [[(tuple(), 0.0, sample_index)] for sample_index in range(len(batch))]
 
         for slot_index in range(num_quantizers):
@@ -779,7 +912,7 @@ class SequentialRecModel(nn.Module):
             for beams in beams_by_sample:
                 candidates = []
                 for prefix, score, cache_row in beams:
-                    allowed_codes = self.compiled.sid_prefix_to_next.get(prefix, [])
+                    allowed_codes = prefix_index.get(prefix, [])
                     if not allowed_codes:
                         continue
                     allowed_indices = torch.tensor(allowed_codes, dtype=torch.long, device=self.device)
@@ -828,11 +961,16 @@ class SequentialRecModel(nn.Module):
             self._sid_timing_add(f'slot_{slot_index}_cache', cache_started)
             forward_started = self._sid_timing_now()
             try:
+                append_kwargs = {
+                    'attention_mask': next_attention_mask,
+                    'position_ids': next_position_ids,
+                }
+                if name != self._primary_sid_name():
+                    append_kwargs['representation'] = name
                 next_result = self._sid_append_cached_tokens(
                     selected_past,
                     [next_code for _, _, _, next_code in selected],
-                    attention_mask=next_attention_mask,
-                    position_ids=next_position_ids,
+                    **append_kwargs,
                 )
             except (TypeError, ValueError) as exc:
                 self._sid_record_kv_diagnostic(
@@ -862,12 +1000,15 @@ class SequentialRecModel(nn.Module):
         self._sid_record_kv_diagnostic('success', batched_past)
         return [[(prefix, score) for prefix, score, _ in beams] for beams in beams_by_sample]
 
-    def _beam_search_sid_items_batch(self, batch):
-        beam_width = max(1, int(self.config.code_beam_width))
-        chunk_size = max(1, int(getattr(self.config, 'code_beam_chunk_size', self.config.batch_size)))
+    def _beam_search_sid_items_batch(self, batch, representation=None):
+        name = self._resolve_sid_name(representation)
+        beam_width = self._sid_beam_width(name)
+        chunk_size = self._sid_beam_chunk_size(name)
         beams_by_sample: list[list[tuple[tuple[int, ...], float]]] = [[(tuple(), 0.0)] for _ in batch]
 
-        for slot_index in range(int(self.compiled.sid_num_quantizers)):
+        meta = self._sid_meta(name)
+        prefix_index = self._sid_prefix_index(name)
+        for slot_index in range(int(meta['num_quantizers'])):
             work_items = []
             for sample_index, beams in enumerate(beams_by_sample):
                 for prefix, score in beams:
@@ -880,13 +1021,15 @@ class SequentialRecModel(nn.Module):
             for start in range(0, len(work_items), chunk_size):
                 chunk = work_items[start:start + chunk_size]
                 input_items = [(batch[sample_index], list(prefix)) for sample_index, prefix, _ in chunk]
-                inputs_embeds, attention_mask, lengths = self._build_sid_generation_mixed_batch_inputs(input_items)
+                inputs_embeds, attention_mask, lengths = self._build_sid_generation_mixed_batch_inputs(
+                    input_items, name
+                )
                 hidden = self.encoder(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
                 pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
-                step_log_probs = F.log_softmax(self._sid_logits(pooled).float(), dim=-1)
+                step_log_probs = F.log_softmax(self._sid_logits(pooled, name).float(), dim=-1)
 
                 for local_index, (sample_index, prefix, score) in enumerate(chunk):
-                    allowed_codes = self.compiled.sid_prefix_to_next.get(prefix, [])
+                    allowed_codes = prefix_index.get(prefix, [])
                     if not allowed_codes:
                         continue
                     allowed_indices = torch.tensor(allowed_codes, dtype=torch.long, device=self.device)
@@ -908,18 +1051,19 @@ class SequentialRecModel(nn.Module):
 
         return beams_by_sample
 
-    def _decode_sid_beams_to_items(self, beams):
+    def _decode_sid_beams_to_items(self, beams, representation=None):
         ranked_items = []
         seen_items = set()
         for sid_sequence, score in beams:
-            item_uid = self._pick_sid_item(sid_sequence)
+            item_uid = self._pick_sid_item(sid_sequence, representation)
             if item_uid is None or item_uid in seen_items:
                 continue
             seen_items.add(item_uid)
             ranked_items.append((item_uid, float(score), sid_sequence))
         return ranked_items
 
-    def _compute_sid_ranking_metrics(self, batch):
+    def _compute_sid_ranking_metrics(self, batch, representation=None):
+        name = self._resolve_sid_name(representation)
         profile_enabled = bool(getattr(self, 'sid_decoding_timing_enabled', False))
         if profile_enabled:
             self._sid_decoding_timings = {}
@@ -931,23 +1075,23 @@ class SequentialRecModel(nn.Module):
         totals['kv_cache_used'] = 0.0
 
         with torch.inference_mode():
-            beam_width = max(1, int(self.config.code_beam_width))
+            beam_width = self._sid_beam_width(name)
             active_beam_limit = max(
                 beam_width,
-                int(getattr(self.config, 'code_beam_chunk_size', self.config.batch_size)),
+                self._sid_beam_chunk_size(name),
             )
             sample_chunk_size = max(1, active_beam_limit // beam_width)
             for start in range(0, len(batch), sample_chunk_size):
                 sample_chunk = batch[start:start + sample_chunk_size]
-                beams_by_sample = self._beam_search_sid_items_batch_with_kv_cache(sample_chunk)
+                beams_by_sample = self._beam_search_sid_items_batch_with_kv_cache(sample_chunk, name)
                 used_kv_cache = beams_by_sample is not None
                 if beams_by_sample is None:
                     fallback_started = self._sid_timing_now()
-                    beams_by_sample = self._beam_search_sid_items_batch(sample_chunk)
+                    beams_by_sample = self._beam_search_sid_items_batch(sample_chunk, name)
                     self._sid_timing_add('fallback_decode', fallback_started)
                 mapping_started = self._sid_timing_now()
                 for sample, beams in zip(sample_chunk, beams_by_sample):
-                    ranked_items = self._decode_sid_beams_to_items(beams)
+                    ranked_items = self._decode_sid_beams_to_items(beams, name)
                     ranked_uids = [uid for uid, _, _ in ranked_items]
                     totals['beam_unique_items'] += float(len(ranked_uids))
                     totals['kv_cache_used'] += float(used_kv_cache)
@@ -991,36 +1135,59 @@ class SequentialRecModel(nn.Module):
             output_topk=self.config.multi_output_topk,
         )
 
-    def _compute_multi_ranking_metrics(self, pooled: torch.Tensor, batch):
+    def _compute_multi_ranking_metrics(self, pooled: torch.Tensor, batch, sid_representations=None):
+        if sid_representations is None or isinstance(sid_representations, str):
+            sid_representations = [self._resolve_sid_name(sid_representations)]
+        else:
+            sid_representations = [self._resolve_sid_name(name) for name in sid_representations]
         candidate_topk = min(int(self.config.multi_candidate_topk), int(self.compiled.num_items))
         uid_logits = self._uid_logits(pooled).float()
         uid_values, uid_indices = torch.topk(uid_logits, k=candidate_topk, dim=-1)
 
-        if self._sid_decoding_mode() == 'parallel':
-            semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled)
-            sid_values, sid_indices = torch.topk(
-                semantic_scores + collision_scores,
-                k=candidate_topk,
-                dim=-1,
-            )
-            sid_scores_by_sample = [
-                {
-                    int(uid): float(score)
-                    for uid, score in zip(indices.tolist(), values.tolist())
-                }
-                for indices, values in zip(sid_indices, sid_values)
+        scores_by_representation = []
+        for sid_name in sid_representations:
+            if self._sid_decoding_mode(sid_name) == 'parallel':
+                semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled, sid_name)
+                sid_values, sid_indices = torch.topk(
+                    semantic_scores + collision_scores,
+                    k=candidate_topk,
+                    dim=-1,
+                )
+                per_sample = [
+                    {
+                        int(uid): float(score)
+                        for uid, score in zip(indices.tolist(), values.tolist())
+                    }
+                    for indices, values in zip(sid_indices, sid_values)
+                ]
+            else:
+                beams_by_sample = self._beam_search_sid_items_batch_with_kv_cache(batch, sid_name)
+                if beams_by_sample is None:
+                    beams_by_sample = self._beam_search_sid_items_batch(batch, sid_name)
+                per_sample = [
+                    {
+                        int(uid): float(score)
+                        for uid, score, _ in self._decode_sid_beams_to_items(beams, sid_name)[:candidate_topk]
+                    }
+                    for beams in beams_by_sample
+                ]
+            scores_by_representation.append(per_sample)
+
+        sid_scores_by_sample = []
+        for sample_index in range(len(batch)):
+            normalized = [
+                normalize_candidate_scores(
+                    per_representation[sample_index],
+                    self.config.multi_score_normalization,
+                )
+                for per_representation in scores_by_representation
             ]
-        else:
-            beams_by_sample = self._beam_search_sid_items_batch_with_kv_cache(batch)
-            if beams_by_sample is None:
-                beams_by_sample = self._beam_search_sid_items_batch(batch)
-            sid_scores_by_sample = [
-                {
-                    int(uid): float(score)
-                    for uid, score, _ in self._decode_sid_beams_to_items(beams)[:candidate_topk]
-                }
-                for beams in beams_by_sample
-            ]
+            candidates = set().union(*(scores.keys() for scores in normalized))
+            floors = [min(scores.values(), default=0.0) - 1.0 for scores in normalized]
+            sid_scores_by_sample.append({
+                uid: sum(scores.get(uid, floor) for scores, floor in zip(normalized, floors)) / len(normalized)
+                for uid in candidates
+            })
 
         ks = self.ranking_ks()
         totals = self._init_ranking_totals(ks)
@@ -1042,7 +1209,8 @@ class SequentialRecModel(nn.Module):
         batch_size = max(len(batch), 1)
         return {key: value / batch_size for key, value in totals.items()}
 
-    def _compute_sid_loss(self, batch):
+    def _compute_sid_loss(self, batch, representation=None):
+        name = self._resolve_sid_name(representation)
         total_loss = torch.tensor(0.0, dtype=torch.float32, device=self.device)
         token_correct = 0.0
         seq_correct = 0.0
@@ -1050,18 +1218,18 @@ class SequentialRecModel(nn.Module):
 
         for sample in batch:
             target_codes = [
-                int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][sample['target_uid']])
+                int(token_id) for token_id in function.to_list(self.compiled.item_views[name][sample['target_uid']])
             ]
             sample_preds = []
             sample_loss = torch.tensor(0.0, dtype=torch.float32, device=self.device)
             for slot_index, label in enumerate(target_codes):
                 prefix = target_codes[:slot_index]
-                logits = self._predict_sid_step_logits(sample, [prefix], slot_index)
+                logits = self._predict_sid_step_logits(sample, [prefix], slot_index, name)
                 slot_tensor = torch.tensor([slot_index], dtype=torch.long, device=self.device)
-                masked_logits = self._mask_sid_logits_for_slots(logits, slot_tensor)
+                masked_logits = self._mask_sid_logits_for_slots(logits, slot_tensor, name)
                 label_tensor = torch.tensor([label], dtype=torch.long, device=self.device)
                 token_loss = F.cross_entropy(masked_logits.float(), label_tensor, reduction='none')
-                token_loss = token_loss * self._sid_loss_weights(slot_tensor)
+                token_loss = token_loss * self._sid_loss_weights(slot_tensor, name)
                 sample_loss = sample_loss + token_loss.squeeze(0)
                 pred = int(masked_logits.argmax(dim=-1).item())
                 sample_preds.append(pred)
@@ -1077,12 +1245,14 @@ class SequentialRecModel(nn.Module):
             'sid_seq_acc': seq_correct / batch_size,
         }
 
-    def _compute_sid_parallel_loss(self, pooled: torch.Tensor, batch):
-        if self.sid_item_codes.numel() == 0:
+    def _compute_sid_parallel_loss(self, pooled: torch.Tensor, batch, representation=None):
+        name = self._resolve_sid_name(representation)
+        sid_item_codes = self._sid_item_codes(name)
+        if sid_item_codes.numel() == 0:
             raise ValueError('sid parallel supervision requires compiled sid item codes')
 
         target_uids = torch.tensor([int(sample['target_uid']) for sample in batch], dtype=torch.long, device=self.device)
-        target_codes = self.sid_item_codes[target_uids]
+        target_codes = sid_item_codes[target_uids]
         batch_size = target_codes.shape[0]
         num_slots = target_codes.shape[1]
 
@@ -1090,15 +1260,15 @@ class SequentialRecModel(nn.Module):
         token_correct = 0.0
         seq_predictions = []
         seq_targets = target_codes.tolist()
-        logits = self._sid_logits(pooled)
+        logits = self._sid_logits(pooled, name)
 
         for slot_index in range(num_slots):
-            allowed_logits, allowed_start = self._sid_allowed_logits_for_slot(logits, slot_index)
+            allowed_logits, allowed_start = self._sid_allowed_logits_for_slot(logits, slot_index, name)
             slot_tensor = torch.full((batch_size,), slot_index, dtype=torch.long, device=self.device)
             labels = target_codes[:, slot_index]
             label_positions = labels - allowed_start
             slot_loss = F.cross_entropy(allowed_logits.float(), label_positions, reduction='none')
-            slot_loss = slot_loss * self._sid_loss_weights(slot_tensor)
+            slot_loss = slot_loss * self._sid_loss_weights(slot_tensor, name)
             total_loss = total_loss + slot_loss.mean()
             predictions = allowed_logits.argmax(dim=-1) + allowed_start
             token_correct += float((predictions == labels).float().sum().item())
@@ -1112,13 +1282,15 @@ class SequentialRecModel(nn.Module):
             'sid_seq_acc': seq_correct / max(batch_size, 1),
         }
 
-    def _compute_sid_parallel_ranking_metrics(self, pooled: torch.Tensor, batch):
-        if self.sid_item_codes.numel() == 0:
+    def _compute_sid_parallel_ranking_metrics(self, pooled: torch.Tensor, batch, representation=None):
+        name = self._resolve_sid_name(representation)
+        sid_item_codes = self._sid_item_codes(name)
+        if sid_item_codes.numel() == 0:
             raise ValueError('sid parallel ranking requires compiled sid item codes')
 
         batch_size = pooled.shape[0]
-        semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled)
-        item_codes = self.sid_item_codes.to(device=self.device)
+        semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled, name)
+        item_codes = sid_item_codes.to(device=self.device)
 
         ks = self.ranking_ks()
         totals = self._init_ranking_totals(ks)
@@ -1136,18 +1308,20 @@ class SequentialRecModel(nn.Module):
 
         return {key: value / max(batch_size, 1) for key, value in totals.items()}
 
-    def _sid_parallel_item_scores(self, pooled: torch.Tensor):
-        if self.sid_item_codes.numel() == 0:
+    def _sid_parallel_item_scores(self, pooled: torch.Tensor, representation=None):
+        name = self._resolve_sid_name(representation)
+        sid_item_codes = self._sid_item_codes(name)
+        if sid_item_codes.numel() == 0:
             raise ValueError('sid parallel item scoring requires compiled sid item codes')
         batch_size = pooled.shape[0]
-        item_codes = self.sid_item_codes.to(device=self.device)
+        item_codes = sid_item_codes.to(device=self.device)
         semantic_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
         collision_scores = torch.zeros((batch_size, item_codes.shape[0]), dtype=torch.float32, device=self.device)
-        base_num_quantizers = int(self.compiled.sid_base_num_quantizers or 0)
-        logits = self._sid_logits(pooled)
+        base_num_quantizers = int(self._sid_meta(name)['base_num_quantizers'] or 0)
+        logits = self._sid_logits(pooled, name)
 
         for slot_index in range(int(item_codes.shape[1])):
-            allowed_logits, allowed_start = self._sid_allowed_logits_for_slot(logits, slot_index)
+            allowed_logits, allowed_start = self._sid_allowed_logits_for_slot(logits, slot_index, name)
             log_probs = F.log_softmax(allowed_logits.float(), dim=-1)
             slot_codes = item_codes[:, slot_index]
             slot_positions = slot_codes - allowed_start
@@ -1301,8 +1475,9 @@ class SequentialRecModel(nn.Module):
             return [int(self.compiled.item_views['uid'][target_uid])]
         if self.config.task_type == 'hash':
             return [int(token_id) for token_id in function.to_list(self.compiled.item_views['hash'][target_uid])]
-        sid_values = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][target_uid])]
-        expected = int(self.compiled.sid_num_quantizers)
+        sid_name = self._primary_sid_name()
+        sid_values = [int(token_id) for token_id in function.to_list(self.compiled.item_views[sid_name][target_uid])]
+        expected = int(self._sid_meta(sid_name)['num_quantizers'])
         if expected and len(sid_values) != expected:
             raise ValueError(
                 f'sid target length mismatch for uid={target_uid}: '
@@ -1331,7 +1506,7 @@ class SequentialRecModel(nn.Module):
         if repr_kind == 'embedding':
             return [{'kind': repr_kind, 'representation': repr_type, 'position': int(marker_position), 'label': int(labels[0]), 'group': group, 'slot': -1}]
         if repr_kind == 'sid':
-            if self._sid_decoding_mode() == 'parallel':
+            if self._sid_decoding_mode(repr_type) == 'parallel':
                 return [
                     {'kind': repr_kind, 'representation': repr_type, 'position': int(marker_position), 'label': int(label), 'group': group, 'slot': slot_index}
                     for slot_index, label in enumerate(labels)
@@ -1800,13 +1975,15 @@ class SequentialRecModel(nn.Module):
                     accuracy = (predictions == kind_labels).float().mean().item()
                     metrics['uid_acc'] = accuracy
             elif kind == 'sid':
-                logits = self._sid_logits(kind_hidden)
-                masked_logits = self._mask_sid_logits_for_slots(logits, kind_slots)
+                logits = self._sid_logits(kind_hidden, representation)
+                masked_logits = self._mask_sid_logits_for_slots(logits, kind_slots, representation)
                 losses = F.cross_entropy(masked_logits.float(), kind_labels, reduction='none')
-                losses = losses * self._sid_loss_weights(kind_slots)
+                losses = losses * self._sid_loss_weights(kind_slots, representation)
                 predictions = masked_logits.argmax(dim=-1)
                 accuracy = (predictions == kind_labels).float().mean().item()
-                metrics['sid_token_acc'] = accuracy
+                sid_names = self.config.compile_config.names_for_kind('sid')
+                metric_name = 'sid_token_acc' if len(sid_names) == 1 else f'{representation}_token_acc'
+                metrics[metric_name] = accuracy
             elif kind == 'hash':
                 logits = self._hash_logits(kind_hidden)
                 masked_logits = self._mask_hash_logits_for_slots(logits, kind_slots)
@@ -1849,19 +2026,41 @@ class SequentialRecModel(nn.Module):
         if not any(primary_losses.values()):
             raise RuntimeError('no primary supervision entries were constructed for finetune batch')
 
+        named_sid_accuracy = [
+            value for key, value in metrics.items()
+            if key.endswith('_token_acc') and key != 'sid_token_acc'
+        ]
+        if named_sid_accuracy:
+            metrics['sid_token_acc'] = sum(named_sid_accuracy) / len(named_sid_accuracy)
+
         task_loss_weights = {
             'uid': float(getattr(self.config, 'multi_uid_loss_weight', 1.0)),
             'sid': float(getattr(self.config, 'multi_sid_loss_weight', 1.0)),
         }
         primary_parts = []
+        primary_parts_by_kind = {}
+        target_kinds = [
+            self.config.compile_config.representation_kind(name)
+            for name in self.config.compile_config.target_names
+        ]
         for representation, losses_for_kind in primary_losses.items():
             kind = self.config.compile_config.representation_kind(representation)
             kind_loss = torch.stack(losses_for_kind).mean()
             weight = task_loss_weights.get(kind, 1.0) if self.config.is_multi_task else 1.0
-            primary_parts.append(kind_loss * weight)
+            weighted_loss = kind_loss * weight
+            primary_parts.append(weighted_loss)
+            primary_parts_by_kind.setdefault(kind, []).append(weighted_loss)
             if self.config.is_multi_task:
-                metrics[f'{kind}_loss'] = float(kind_loss.item())
-        primary_loss = torch.stack(primary_parts).sum() if self.config.is_multi_task else primary_parts[0]
+                metric_prefix = representation if target_kinds.count(kind) > 1 else kind
+                metrics[f'{metric_prefix}_loss'] = float(kind_loss.item())
+        primary_loss = (
+            torch.stack([
+                torch.stack(parts).mean()
+                for parts in primary_parts_by_kind.values()
+            ]).sum()
+            if self.config.is_multi_task
+            else primary_parts[0]
+        )
         if alignment_losses:
             alignment_loss = torch.stack(alignment_losses).mean()
             total_loss = primary_loss + self.config.alignment_weight * alignment_loss
@@ -1878,18 +2077,54 @@ class SequentialRecModel(nn.Module):
         pooled = hidden[torch.arange(hidden.shape[0], device=self.device), lengths - 1]
 
         if self.config.is_multi_task:
+            target_names = self.config.compile_config.target_names
+            target_kinds = [
+                self.config.compile_config.representation_kind(name)
+                for name in target_names
+            ]
+            if all(kind == 'sid' for kind in target_kinds):
+                losses = []
+                per_target_metrics = []
+                metrics = {}
+                for name in target_names:
+                    if self._sid_decoding_mode(name) == 'parallel':
+                        sid_loss, sid_metrics = self._compute_sid_parallel_loss(pooled, batch, name)
+                        sid_metrics.update(self._compute_sid_parallel_ranking_metrics(pooled, batch, name))
+                    else:
+                        sid_loss, sid_metrics = self._compute_sid_loss(batch, name)
+                        sid_metrics.update(self._compute_sid_ranking_metrics(batch, name))
+                    losses.append(sid_loss)
+                    per_target_metrics.append(sid_metrics)
+                    metrics.update({f'{name}_{key}': value for key, value in sid_metrics.items()})
+                common_numeric_keys = set.intersection(*[
+                    {key for key, value in values.items() if isinstance(value, (int, float))}
+                    for values in per_target_metrics
+                ])
+                for key in common_numeric_keys:
+                    metrics[key] = sum(float(values[key]) for values in per_target_metrics) / len(per_target_metrics)
+                return torch.stack(losses).mean(), metrics
+
+            sid_targets = [name for name, kind in zip(target_names, target_kinds) if kind == 'sid']
+            if target_kinds.count('uid') != 1 or not sid_targets:
+                raise ValueError(f'unsupported multi-target decoder kinds: {target_kinds}')
             uid_loss, uid_metrics = self._compute_uid_loss(pooled, batch)
-            if self._sid_decoding_mode() == 'parallel':
-                sid_loss, sid_metrics = self._compute_sid_parallel_loss(pooled, batch)
-            else:
-                sid_loss, sid_metrics = self._compute_sid_loss(batch)
+            sid_losses = []
+            sid_metrics = {}
+            for name in sid_targets:
+                if self._sid_decoding_mode(name) == 'parallel':
+                    per_loss, per_metrics = self._compute_sid_parallel_loss(pooled, batch, name)
+                else:
+                    per_loss, per_metrics = self._compute_sid_loss(batch, name)
+                sid_losses.append(per_loss)
+                sid_metrics.update({f'{name}_{key}': value for key, value in per_metrics.items()})
+            sid_loss = torch.stack(sid_losses).mean()
             loss = (
                 float(self.config.multi_uid_loss_weight) * uid_loss
                 + float(self.config.multi_sid_loss_weight) * sid_loss
             )
             metrics = dict(uid_metrics)
             metrics.update(sid_metrics)
-            metrics.update(self._compute_multi_ranking_metrics(pooled, batch))
+            metrics.update(self._compute_multi_ranking_metrics(pooled, batch, sid_targets))
             return loss, metrics
 
         if self.config.task_type == 'uid':
@@ -1903,12 +2138,13 @@ class SequentialRecModel(nn.Module):
                 metrics.update(self._compute_ranking_metrics_from_logits(logits, labels, batch=batch))
             return loss, metrics
         if self.config.task_type == 'sid':
-            if self._sid_decoding_mode() == 'parallel':
-                loss, metrics = self._compute_sid_parallel_loss(pooled, batch)
-                metrics.update(self._compute_sid_parallel_ranking_metrics(pooled, batch))
+            sid_name = self._primary_sid_name()
+            if self._sid_decoding_mode(sid_name) == 'parallel':
+                loss, metrics = self._compute_sid_parallel_loss(pooled, batch, sid_name)
+                metrics.update(self._compute_sid_parallel_ranking_metrics(pooled, batch, sid_name))
             else:
-                loss, metrics = self._compute_sid_loss(batch)
-                metrics.update(self._compute_sid_ranking_metrics(batch))
+                loss, metrics = self._compute_sid_loss(batch, sid_name)
+                metrics.update(self._compute_sid_ranking_metrics(batch, sid_name))
             return loss, metrics
         if self.config.task_type == 'hash':
             loss, metrics = self._compute_hash_parallel_loss(pooled, batch)
