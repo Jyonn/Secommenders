@@ -47,7 +47,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v2.8'
+    VER = 'v3.0'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'hash', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'hash', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -104,10 +104,10 @@ class Compiler:
     def _history_repr_label(self):
         if self.config.repr_combine == 'add':
             return '<uid+emb>'
-        return '<' + '+'.join(self.config.repr_types) + '>'
+        return '<' + '+'.join(self.config.representation_names) + '>'
 
     def _task_repr_label(self):
-        return f'<{self.config.task_type}>'
+        return '<' + '+'.join(self.config.target_names) + '>'
 
     @staticmethod
     def _truncate_text(text: str, max_chars: int = 48):
@@ -129,26 +129,27 @@ class Compiler:
         return raw_id[:4] + '...' + raw_id[-3:]
 
     def _summarize_view_value(self, view_name: str, uid: int):
-        if view_name == 'uid':
+        kind = self.config.representation_kind(view_name)
+        if kind == 'uid':
             return f'uid={uid}'
-        if view_name == 'text':
-            token_ids = self.item_views['text'][uid]
+        if kind == 'text':
+            token_ids = self.item_views[view_name][uid]
             preview = self._truncate_text(self.item_texts[uid], max_chars=36)
             return f'text[{len(token_ids)}]="{preview}"'
-        if view_name == 'sid':
-            codes = self._as_token_list(self.item_views['sid'][uid])
+        if kind == 'sid':
+            codes = self._as_token_list(self.item_views[view_name][uid])
             preview = ','.join(str(code) for code in codes[:6])
             if len(codes) > 6:
                 preview += ',...'
             return f'sid[{len(codes)}]=[{preview}]'
-        if view_name == 'hash':
-            codes = self._as_token_list(self.item_views['hash'][uid])
+        if kind == 'hash':
+            codes = self._as_token_list(self.item_views[view_name][uid])
             preview = ','.join(str(code) for code in codes[:6])
             if len(codes) > 6:
                 preview += ',...'
             return f'hash[{len(codes)}]=[{preview}]'
-        if view_name == 'embedding':
-            return f'emb#{self.item_views["embedding"][uid]}'
+        if kind == 'embedding':
+            return f'{view_name}#{self.item_views[view_name][uid]}'
         return str(self.item_views[view_name][uid])
 
     def _history_repr_summary(self, uid: int):
@@ -157,11 +158,11 @@ class Compiler:
             emb_part = self._summarize_view_value('embedding', uid)
             return f'add({uid_part} + linear({emb_part})) -> 1 slot'
 
-        parts = [self._summarize_view_value(repr_type, uid) for repr_type in self.config.repr_types]
+        parts = [self._summarize_view_value(name, uid) for name in self.config.representation_names]
         return ' + '.join(parts)
 
     def _task_repr_summary(self, uid: int):
-        return ' + '.join(self._summarize_view_value(task_type, uid) for task_type in self.config.task_types)
+        return ' + '.join(self._summarize_view_value(name, uid) for name in self.config.target_names)
 
     @staticmethod
     def _role_name(index: int, history_start: int, target_pos: int):
@@ -254,7 +255,14 @@ class Compiler:
             required_item_view_paths.append(self.item_views_dir / 'sid.parquet')
         if self.requires_view('hash'):
             required_item_view_paths.append(self.item_views_dir / 'hash.parquet')
-        if self.requires_view('embedding'):
+        if self.config.representation_graph:
+            required_item_view_paths = [
+                self.item_views_dir / f'{name}.parquet'
+                for name in self.config.representation_names
+            ]
+            for name in self.config.names_for_kind('embedding'):
+                required_item_view_paths.append(self.output_dir / 'embeddings' / f'{name}.npy')
+        elif self.requires_view('embedding'):
             required_item_view_paths.append(self.item_views_dir / 'embedding.parquet')
             if self.config.embedding:
                 required_item_view_paths.append(self.output_dir / 'embeddings.npy')
@@ -271,7 +279,7 @@ class Compiler:
         return all(path.exists() for path in required_paths)
 
     def validate(self):
-        repr_types = self.config.repr_types
+        repr_types = [self.config.representation_kind(name) for name in self.config.representation_names]
         model_name = str(self.config.model).strip().lower()
         is_scratch_model = model_name == 'scratch'
         if not is_scratch_model and model_utils.match(model_name) is None:
@@ -281,21 +289,22 @@ class Compiler:
             )
         if not repr_types:
             raise ValueError('repr.type must contain at least one representation')
-        if len(set(repr_types)) != len(repr_types):
+        if not self.config.representation_graph and len(set(repr_types)) != len(repr_types):
             raise ValueError(f'repr.type contains duplicates: {self.config.repr_type}')
         unsupported_repr_types = [repr_type for repr_type in repr_types if repr_type not in self.SUPPORTED_REPR_TYPES]
         if unsupported_repr_types:
             raise ValueError(f'Unsupported repr.type entries: {unsupported_repr_types}')
-        unsupported_task_types = [task for task in self.config.task_types if task not in self.SUPPORTED_TASK_TYPES]
+        task_types = [self.config.representation_kind(name) for name in self.config.target_names]
+        unsupported_task_types = [task for task in task_types if task not in self.SUPPORTED_TASK_TYPES]
         if unsupported_task_types:
             raise ValueError(f'Unsupported task.type entries: {unsupported_task_types}')
-        if len(self.config.task_types) > 1 and self.config.task_types != ['sid', 'uid']:
+        if len(task_types) > 1 and task_types != ['sid', 'uid']:
             raise ValueError('multi task decoding currently supports exactly sid+uid')
         if self.config.repr_combine not in self.SUPPORTED_REPR_COMBINES:
             raise ValueError(f'Unsupported repr.combine: {self.config.repr_combine}')
-        if not set(self.config.task_types).issubset(repr_types):
+        if not set(self.config.target_names).issubset(self.config.representation_names):
             raise ValueError('repr.type must contain every task.type representation')
-        if repr_types[:len(self.config.task_types)] != self.config.task_types:
+        if self.config.representation_names[:len(self.config.target_names)] != self.config.target_names:
             raise ValueError('task.type entries must lead repr.type for causal mixed-view training')
         if self.config.repr_combine == 'add':
             if not (self.config.task_type == 'uid' and repr_types == ['uid', 'embedding']):
@@ -305,12 +314,13 @@ class Compiler:
         if is_scratch_model and 'text' in repr_types:
             raise ValueError('scratch backbone currently does not support repr.type containing text')
 
-        used_views = set(repr_types + self.config.task_types)
+        used_views = set(repr_types + task_types)
         sid_upstream = self.config.upstreams.get('sid') or {}
         hash_upstream = self.config.upstreams.get('hash') or {}
         sid_has_source = bool((sid_upstream.get('embedding') or {}).get('sources') or sid_upstream.get('embedding_model'))
         hash_has_source = bool((hash_upstream.get('embedding') or {}).get('sources') or hash_upstream.get('embedding_model'))
-        if 'embedding' in used_views and not (self.config.embedding or self.config.repr_source_model):
+        named_embeddings = self.config.names_for_kind('embedding') if self.config.representation_graph else []
+        if 'embedding' in used_views and not (named_embeddings or self.config.embedding or self.config.repr_source_model):
             raise ValueError(
                 'embedding representation requires repr_source_model or representation.embedding.models'
             )
@@ -412,18 +422,29 @@ class Compiler:
             path=uid_vocab_path,
         )
         special_vocab_path = self.vocab_dir / 'special.json'
+        marker_names = (
+            list(dict.fromkeys(self.config.representation_names + self.config.target_names))
+            if self.config.representation_graph
+            else TYPE_MARKER_ORDER
+        )
+        if self.config.representation_graph and len(self.config.target_names) > 1:
+            marker_names.append('decoder_' + '_'.join(self.config.target_names))
+        marker_tokens = {
+            name: f'<repr:{name}>' if self.config.representation_graph else TYPE_MARKER_TOKENS[name]
+            for name in marker_names
+        }
         self._save_json(
             special_vocab_path,
             {
-                'tokens': [TYPE_MARKER_TOKENS[name] for name in TYPE_MARKER_ORDER],
-                'marker_to_index': {name: index for index, name in enumerate(TYPE_MARKER_ORDER)},
-                'external_ids': {name: -1 for name in TYPE_MARKER_ORDER},
+                'tokens': [marker_tokens[name] for name in marker_names],
+                'marker_to_index': {name: index for index, name in enumerate(marker_names)},
+                'external_ids': {name: -1 for name in marker_names},
             },
         )
         self.registry.register(
             'special',
             kind='special',
-            size=len(TYPE_MARKER_ORDER),
+            size=len(marker_names),
             path=special_vocab_path,
         )
 
@@ -456,8 +477,9 @@ class Compiler:
                     'quantized_export_dir': sid_meta.get('quantized_export_dir'),
                 },
             )
+            sid_name = self.config.primary_name('sid') or 'sid'
             self.registry.register(
-                'sid',
+                sid_name,
                 kind='sid',
                 size=len(tokens),
                 path=sid_vocab_path,
@@ -510,8 +532,9 @@ class Compiler:
                     'quantized_export_dir': hash_meta.get('quantized_export_dir'),
                 },
             )
+            hash_name = self.config.primary_name('hash') or 'hash'
             self.registry.register(
-                'hash',
+                hash_name,
                 kind='hash',
                 size=len(tokens),
                 path=hash_vocab_path,
@@ -545,6 +568,11 @@ class Compiler:
         )
 
     def requires_view(self, view_name: str):
+        if self.config.representation_graph:
+            return view_name in self.config.representation_names or any(
+                self.config.representation_kind(name) == view_name
+                for name in self.config.representation_names
+            )
         views = {'uid', *self.config.repr_types, *self.config.task_types}
         return view_name in views
 
@@ -552,6 +580,8 @@ class Compiler:
         return (self.config.compile_upstreams or {}).get(name) or {}
 
     def build_item_views(self):
+        if self.config.representation_graph:
+            return self._build_named_item_views()
         required_views = [view for view in ['uid', 'text', 'sid', 'hash', 'embedding'] if self.requires_view(view)]
         pnt(f'building item views {required_views} for {len(self.uid_raw_items)} items')
         self._write_view('uid', list(range(len(self.uid_raw_items))))
@@ -628,6 +658,40 @@ class Compiler:
             },
         )
         pnt(f'item view manifest saved: {sorted(self.item_views)}')
+
+    def _build_named_item_views(self):
+        names = self.config.representation_names
+        pnt(f'building named item views {names} for {len(self.uid_raw_items)} items')
+        text_values = None
+        for name in names:
+            spec = self.config.representation_spec(name)
+            kind = spec['type']
+            if kind == 'uid':
+                values = list(range(len(self.uid_raw_items)))
+            elif kind == 'text':
+                if text_values is None:
+                    text_values = []
+                    for start in tqdm(range(0, len(self.item_texts), 256), desc=f'{name} view', leave=False):
+                        text_values.extend(self.backbone.tokenize_texts(
+                            self.item_texts[start:start + 256],
+                            max_tokens=self.config.item_text_max_tokens,
+                        ))
+                values = text_values
+            elif kind == 'sid':
+                values = self.load_sid_view()
+            elif kind == 'hash':
+                values = self.load_hash_view()
+            elif kind == 'embedding':
+                values = self.load_embedding_view(name=name, spec=spec['embedding'])
+            else:
+                raise ValueError(f'unsupported named representation type: {kind}')
+            self._write_view(name, values)
+            pnt(f'named view ready name={name} type={kind} rows={len(values)}')
+        self._save_json(self.item_views_dir / 'meta.json', {
+            'row_order': 'uid_vocab',
+            'views': names,
+            'types': {name: self.config.representation_kind(name) for name in names},
+        })
 
     def _load_quantized_export(self):
         upstream = self._upstream('sid')
@@ -922,7 +986,28 @@ class Compiler:
 
         return ordered_values
 
-    def load_embedding_view(self):
+    def load_embedding_view(self, name=None, spec=None):
+        if spec:
+            matrix, item_ids, summaries = load_fused_embeddings(
+                self.config.data,
+                self.processor,
+                spec,
+                ensure_embedded,
+            )
+            expected_ids = [str(item) for item in self.uid_raw_items]
+            if item_ids != expected_ids:
+                raise ValueError('fused embedding item order does not match compiler uid vocabulary')
+            embedding_dir = self.output_dir / 'embeddings'
+            embedding_dir.mkdir(parents=True, exist_ok=True)
+            np.save(embedding_dir / f'{name}.npy', matrix)
+            self._save_json(embedding_dir / f'{name}.json', {
+                'representation': name,
+                'model': fusion_model_ref(spec),
+                'shape': list(matrix.shape),
+                'sources': summaries,
+                'normalize_output': spec['normalize_output'],
+            })
+            return list(range(len(item_ids)))
         if self.config.embedding:
             matrix, item_ids, summaries = load_fused_embeddings(
                 self.config.data,
@@ -986,7 +1071,7 @@ class Compiler:
             return 2
 
         total = 0
-        for repr_type in self.config.repr_types:
+        for repr_type in self.config.representation_names:
             total += 1
             value = self._get_repr_view_value(repr_type, uid)
             total += len(value) if isinstance(value, list) else 1
@@ -997,7 +1082,7 @@ class Compiler:
             return self.item_views['uid'][uid]
 
         tokens = []
-        for repr_type in self.config.repr_types:
+        for repr_type in self.config.representation_names:
             tokens.extend(self._as_token_list(self._get_repr_view_value(repr_type, uid)))
         return tokens
 
@@ -1005,15 +1090,16 @@ class Compiler:
         return [self._compose_history_item(uid) for uid in history_uids]
 
     def _target_value(self, target_uid: int):
-        if len(self.config.task_types) > 1:
+        if len(self.config.target_names) > 1:
             return [
                 token
-                for task_type in self.config.task_types
+                for task_type in self.config.target_names
                 for token in self._as_token_list(self.item_views[task_type][target_uid])
             ]
-        if self.config.task_type == 'uid':
-            return self.item_views['uid'][target_uid]
-        return self.item_views[self.config.task_type][target_uid]
+        target_name = self.config.target_names[0]
+        if self.config.representation_kind(target_name) == 'uid':
+            return self.item_views[target_name][target_uid]
+        return self.item_views[target_name][target_uid]
 
     def _repr_segment_length(self, repr_type: str, uid: int):
         value = self._get_repr_view_value(repr_type, uid)
@@ -1021,9 +1107,9 @@ class Compiler:
         return 1 + payload_length
 
     def _finetune_item_length(self, uid: int, include_non_task: bool):
-        total = sum(self._repr_segment_length(task_type, uid) for task_type in self.config.task_types)
+        total = sum(self._repr_segment_length(name, uid) for name in self.config.target_names)
         if include_non_task:
-            for repr_type in self.config.repr_types[len(self.config.task_types):]:
+            for repr_type in self.config.representation_names[len(self.config.target_names):]:
                 total += self._repr_segment_length(repr_type, uid)
         return total
 

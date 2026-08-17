@@ -244,7 +244,20 @@ overwriting another result.
 
 ### Trained Artifact Registry
 
-`config/trainer.yaml` is the canonical experiment template. It keeps the user-facing schedule arguments small while expanding them into explicit `representation`, `upstreams`, `decoder`, `model`, and `trainer` sections. Signatures are computed from this canonical template, not from user-provided artifact signs.
+New experiments use the `trainer.v4` profiles under `config/trainer/`. A profile declares a reusable
+representation catalog, then selects concrete named instances through `encoder.representations` and
+`decoder.targets`. Each active instance receives its own `<repr:NAME>` marker; inactive catalog entries
+are removed before validation and do not participate in SIGNs. See
+`config/trainer/README.md` for the available UID, SID, embedding, hash, text, and multi-decoder profiles.
+
+```bash
+python trainer.py --config config/trainer/hybrid.yaml --data mindf --model scratch
+python trainer.py --config config/trainer/multi-decoder.yaml --data mindf --model qwen35th08b
+```
+
+Artifact signatures are computed from the fully expanded active graph, never from a user-provided
+artifact SIGN or from the profile filename. Equivalent legacy metadata is normalized into the same
+graph by the registry initializer.
 
 Trained artifacts are stored by evaluation setting, seed, and execution phase:
 
@@ -279,6 +292,19 @@ The dry run reports unresolved folders and delete candidates. A folder is only m
 `clustered`, `compiled`, and `quantized` use the same dataset-level `.index.json` alias registry as `trained`, but they do not create seed or phase subdirectories. Their registry maps the latest signature back to the existing artifact folder. For `quantized`, the artifact folder is the quantizer root, e.g. `artifacts/quantized/<dataset>/<embedding_model>/<quantizer_variant>/`; checkpoint folders such as `best`, `best-recon`, `best-usage`, `final`, and `exports` remain internal subdirectories.
 
 The same script is also the migration path from older trained layouts. It upgrades both legacy flat folders and the previous `<trained_signature>/<seed>/` layout into the current `<trained_signature>/<seed>/<phase>/` layout, so it is safe to rerun after an earlier registry initialization.
+
+`trainer.v4` increments trained and compiled identity schemas. Before reusing existing artifacts after
+this upgrade, run both migrations:
+
+```bash
+python scripts/init_artifact_registry.py --stage compiled --apply
+python scripts/init_artifact_registry.py --stage trained --apply
+```
+
+Old checkpoints remain loadable when their model-facing representation contract is equivalent. The
+loader remaps legacy type-marker rows and single-embedding projection/head keys to named instances.
+It rejects a checkpoint when an embedding source, fusion transform, SID codec, or active representation
+order is structurally different.
 
 For trained artifacts, the registry initializer also backfills missing canonical upstream defaults from the current template before recomputing signatures. This lets older commands and meta files collide with the new signature when they describe the same experiment under today's explicit defaults.
 
@@ -341,15 +367,13 @@ Each experiment can be written in either of two forms:
 1. Structured args
 
 ```yaml
-- name: mind_qwen_sid2sid
+- name: mind_hybrid
   args:
-    data: mind
-    model: qwen35th4b
-    task_type: sid
-    repr_type: sid
-    repr_source_model: llama3
-    sid_coder: rqvae
-    sid_export: recon
+    config: config/trainer/hybrid.yaml
+    data: mindf
+    model: qwen35th08b
+    content_embedding_model: llama3
+    sid_codebook_size: 128
 ```
 
 2. Raw trainer command
@@ -357,9 +381,8 @@ Each experiment can be written in either of two forms:
 ```yaml
 - name: mind_qwen_sid2sid
   command: >
-    python trainer.py --data mind --model qwen35th4b --task_type sid
-    --repr_type sid --repr_source_model llama3 --sid_coder rqvae
-    --sid_export recon
+    python trainer.py --config config/trainer/sid-content.yaml
+    --data mindf --model qwen35th08b --content_embedding_model llama3
 ```
 
 ### Scheduler Rules

@@ -1,0 +1,46 @@
+schema_version: trainer.v4
+
+data:
+  name: ${data}$
+
+model:
+  name: ${model}$
+  dtype: ${model_dtype:auto}$
+  freeze_backbone: ${freeze_backbone:auto}$
+  max_length: ${model_max_length:0}$
+  lora:
+    use: ${use_lora:auto}$
+    rank: ${lora_rank:8}$
+    alpha: ${lora_alpha:32}$
+    dropout: ${lora_dropout:0.05}$
+    layers: ${lora_layers:null}$
+    target_modules: ${lora_target_modules:all-linear}$
+  scratch:
+    hidden_size: ${hidden_size:256}$
+    num_layers: ${num_layers:4}$
+    num_heads: ${num_heads:8}$
+    dropout: ${dropout:0.1}$
+
+trainer:
+  batch_size: ${batch_size:64}$
+  accumulate_batch: ${accumulate_batch:1}$
+  valid_only: ${valid_only:false}$
+  test_only: ${test_only:false}$
+  load_ckpt: ${load_ckpt:null}$
+  overwrite: ${overwrite:auto}$
+  epochs: ${epochs:0}$
+  learning_rate: ${learning_rate:0.0001}$
+  weight_decay: ${weight_decay:0.01}$
+  lr_scheduler: ${lr_scheduler:constant}$
+  warmup_ratio: ${warmup_ratio:0.0}$
+  seed: ${seed:42}$
+  device: ${device:null}$
+  num_gpus: ${num_gpus:1}$
+  alignment: ${alignment:0}$
+
+evaluator:
+  main_metric: ${main_metric:ndcg@10}$
+  patience: ${patience:3}$
+  metrics: ${metrics:ndcg@5,ndcg@10,ndcg@20,hr@5,hr@10,hr@20,mrr}$
+  frequency_breakdown: ${frequency_breakdown:false}$
+  frequency_buckets: ${frequency_buckets:0,5,20,100}$

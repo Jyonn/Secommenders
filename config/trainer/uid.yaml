@@ -1,0 +1,8 @@
+extends: _catalog.yaml
+
+decoder:
+  targets:
+    - representation: uid
+      decoding:
+        mode: ${uid_decoding:flat}$
+        topk: ${uid_cluster_topk:null}$

@@ -1,0 +1,11 @@
+extends: _catalog.yaml
+
+encoder:
+  representations: [uid, sid_hybrid, embedding_content, embedding_collaborative]
+
+decoder:
+  targets:
+    - representation: uid
+      decoding:
+        mode: ${uid_decoding:flat}$
+        topk: ${uid_cluster_topk:null}$

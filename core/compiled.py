@@ -28,6 +28,8 @@ class CompiledArtifacts:
         self.valid = None
         self.test = None
         self.embedding_matrix = None
+        self.embedding_matrices = {}
+        self.representation_types = {}
         self.sid_num_quantizers = None
         self.sid_base_num_quantizers = None
         self.sid_codebook_size = None
@@ -106,9 +108,19 @@ class CompiledArtifacts:
             self.compile_dir / 'vocab' / 'special.json',
             self.compile_dir / 'vocab' / 'meta.json',
             self.compile_dir / 'prompts' / 'main.json',
-            self.compile_dir / 'item_views' / 'uid.parquet',
         ]
-        if 'embedding' in self.config.compile_config.used_views and self.config.compile_config.embedding:
+        if self.config.compile_config.representation_graph:
+            required_paths.extend(
+                self.compile_dir / 'item_views' / f'{name}.parquet'
+                for name in self.config.compile_config.representation_names
+            )
+            required_paths.extend(
+                self.compile_dir / 'embeddings' / f'{name}.npy'
+                for name in self.config.compile_config.names_for_kind('embedding')
+            )
+        else:
+            required_paths.append(self.compile_dir / 'item_views' / 'uid.parquet')
+        if not self.config.compile_config.representation_graph and 'embedding' in self.config.compile_config.used_views and self.config.compile_config.embedding:
             required_paths.append(self.compile_dir / 'embeddings.npy')
         self._ensure_required_paths(required_paths)
 
@@ -121,10 +133,19 @@ class CompiledArtifacts:
         self.valid = pd.read_parquet(self.compile_dir / 'samples' / 'valid.parquet')
         self.test = pd.read_parquet(self.compile_dir / 'samples' / 'test.parquet')
 
-        for view_name in ['uid', 'text', 'sid', 'hash', 'embedding']:
+        item_view_meta = self._read_json(self.compile_dir / 'item_views' / 'meta.json')
+        view_names = item_view_meta.get('views') or ['uid', 'text', 'sid', 'hash', 'embedding']
+        self.representation_types = item_view_meta.get('types') or {name: name for name in view_names}
+        for view_name in view_names:
             values = self._load_view(view_name)
             if values is not None:
                 self.item_views[view_name] = values
+
+        if self.config.compile_config.representation_graph:
+            for kind in ('uid', 'sid', 'hash', 'text', 'embedding'):
+                name = self.config.compile_config.primary_name(kind)
+                if name and name in self.item_views:
+                    self.item_views.setdefault(kind, self.item_views[name])
 
         sid_vocab_path = self.compile_dir / 'vocab' / 'sid.json'
         if sid_vocab_path.exists():
@@ -154,7 +175,16 @@ class CompiledArtifacts:
             self.hash_recommended_decoding = hash_vocab.get('recommended_decoding')
             self._build_hash_indices()
 
-        self.embedding_matrix = self._load_embedding_matrix()
+        if self.config.compile_config.representation_graph:
+            for name in self.config.compile_config.names_for_kind('embedding'):
+                matrix = np.load(self.compile_dir / 'embeddings' / f'{name}.npy').astype(np.float32)
+                self.embedding_matrices[name] = torch.tensor(matrix, dtype=torch.float32)
+            target_embedding = self.config.compile_config.primary_name('embedding', targets=True)
+            fallback_embedding = self.config.compile_config.primary_name('embedding')
+            primary_embedding = target_embedding or fallback_embedding
+            self.embedding_matrix = self.embedding_matrices.get(primary_embedding)
+        else:
+            self.embedding_matrix = self._load_embedding_matrix()
         return self
 
     def _build_sid_indices(self):

@@ -22,6 +22,7 @@ from core import CompiledArtifacts, SequentialRecModel, TrainConfig
 from core.dataset import CompiledFinetuneTrajectoryDataset, CompiledTestSampleDataset, CompiledValidSampleDataset
 from utils import function
 from utils.artifact_identity import (
+    migrate_train_config_dict,
     register_trained_artifact,
     resolve_compiled_dir,
     resolve_trained_run_dir,
@@ -32,6 +33,7 @@ from utils.frequency_breakdown import FrequencyBreakdownAccumulator, count_finet
 from utils.gpu import GPU
 from utils.logging import attach_run_log, setup_logging
 from utils.pipeline import ensure_clustered
+from utils.representation_schema import semantic_graph_contract
 from utils.server import Server
 
 
@@ -672,17 +674,114 @@ class Trainer:
             'code_decoding', 'model_dtype', 'use_lora', 'lora_rank', 'lora_alpha', 'lora_dropout',
             'lora_layers', 'hidden_size', 'num_layers', 'num_heads', 'dropout',
         ]
+        if self.config.representation_graph:
+            for key in (
+                'repr_source_model', 'sid_export', 'sid_coder', 'hash_coder',
+                'uid_decoding', 'uid_cluster_levels', 'uid_cluster_topk', 'code_decoding',
+            ):
+                required_keys.remove(key)
         current_config = asdict(self.config)
         mismatches = []
         for key in required_keys:
             if normalized_saved_config.get(key) != current_config.get(key):
                 mismatches.append((key, normalized_saved_config.get(key), current_config.get(key)))
+        if self.config.representation_graph:
+            migrated_saved = migrate_train_config_dict(normalized_saved_config)
+            saved_contract = semantic_graph_contract(migrated_saved['representation_graph'])
+            current_contract = semantic_graph_contract(self.config.representation_graph)
+            if saved_contract != current_contract:
+                mismatches.append(('representation_graph', saved_contract, current_contract))
         if mismatches:
             preview = ', '.join(
                 f'{key}: ckpt={saved!r} current={current!r}'
                 for key, saved, current in mismatches[:5]
             )
             raise ValueError(f'Checkpoint config is incompatible with current config ({preview})')
+
+    @staticmethod
+    def _graph_marker_names(graph):
+        names = list(dict.fromkeys(graph['encoder']['representations']))
+        targets = [target['representation'] for target in graph['decoder']['targets']]
+        if len(targets) > 1:
+            names.append('decoder_' + '_'.join(targets))
+        return names
+
+    def _adapt_checkpoint_state_dict(self, state_dict: dict, saved_config: dict | None = None):
+        if not self.config.representation_graph:
+            return state_dict
+        adapted = dict(state_dict)
+        current = self.model_core.state_dict()
+        saved_config = dict(saved_config or {})
+        saved_original_graph = saved_config.get('representation_graph')
+        migrated_saved = migrate_train_config_dict(saved_config)
+        saved_graph = migrated_saved['representation_graph']
+        current_graph = self.config.representation_graph
+        saved_names = saved_graph['encoder']['representations']
+        current_names = current_graph['encoder']['representations']
+        positional_name_map = dict(zip(current_names, saved_names))
+        marker_key = 'type_marker_embedding.weight'
+        if marker_key in adapted and marker_key in current:
+            from models.base import TYPE_MARKER_ORDER
+
+            old = adapted[marker_key]
+            rebuilt = current[marker_key].clone()
+            current_marker_map = self.compiled.special_vocab['marker_to_index']
+            if saved_original_graph:
+                saved_marker_map = {
+                    name: index for index, name in enumerate(self._graph_marker_names(saved_graph))
+                }
+                for current_name, current_index in current_marker_map.items():
+                    saved_name = positional_name_map.get(current_name)
+                    if current_name.startswith('decoder_'):
+                        saved_targets = [target['representation'] for target in saved_graph['decoder']['targets']]
+                        saved_name = 'decoder_' + '_'.join(saved_targets)
+                    saved_index = saved_marker_map.get(saved_name)
+                    if saved_index is not None and saved_index < old.shape[0]:
+                        rebuilt[current_index] = old[saved_index]
+            else:
+                for name, current_index in current_marker_map.items():
+                    if name.startswith('decoder_'):
+                        legacy_name = '+'.join(
+                            self.config.compile_config.representation_kind(target)
+                            for target in self.config.compile_config.target_names
+                        )
+                    else:
+                        legacy_name = self.config.compile_config.representation_kind(name)
+                    if legacy_name in TYPE_MARKER_ORDER:
+                        old_index = TYPE_MARKER_ORDER.index(legacy_name)
+                        if old_index < old.shape[0]:
+                            rebuilt[current_index] = old[old_index]
+            adapted[marker_key] = rebuilt
+
+        embedding_names = self.config.compile_config.names_for_kind('embedding')
+        if not saved_original_graph and len(embedding_names) == 1:
+            name = embedding_names[0]
+            aliases = {
+                'embedding_projection.weight': f'embedding_projections.{name}.weight',
+                'embedding_head.weight': f'embedding_heads.{name}.weight',
+            }
+            for old_key, new_key in aliases.items():
+                if old_key in adapted and new_key not in adapted:
+                    adapted[new_key] = adapted.pop(old_key)
+        elif saved_original_graph:
+            for current_name in embedding_names:
+                saved_name = positional_name_map.get(current_name)
+                if not saved_name:
+                    continue
+                for module_name in ('embedding_projections', 'embedding_heads'):
+                    old_key = f'{module_name}.{saved_name}.weight'
+                    new_key = f'{module_name}.{current_name}.weight'
+                    if old_key in adapted and old_key != new_key and new_key not in adapted:
+                        adapted[new_key] = adapted.pop(old_key)
+
+        ignored = []
+        for key in list(adapted):
+            if key in current and adapted[key].shape != current[key].shape:
+                ignored.append(key)
+                adapted.pop(key)
+        if ignored:
+            self._pnt(f'checkpoint migration ignored {len(ignored)} shape-incompatible keys: {ignored[:5]}')
+        return adapted
 
     def _load_checkpoint_for_eval(self, checkpoint_path: str | Path):
         checkpoint_path = Path(checkpoint_path)
@@ -691,7 +790,11 @@ class Trainer:
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self._assert_checkpoint_compatible(checkpoint)
         if self.is_main_process:
-            load_info = self.model_core.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            state_dict = self._adapt_checkpoint_state_dict(
+                checkpoint['model_state_dict'],
+                checkpoint.get('config'),
+            )
+            load_info = self.model_core.load_state_dict(state_dict, strict=False)
             missing = getattr(load_info, 'missing_keys', [])
             unexpected = getattr(load_info, 'unexpected_keys', [])
             if unexpected:

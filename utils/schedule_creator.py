@@ -287,6 +287,9 @@ class Job:
     def data(self, value: str):
         return self._set_string_arg('data', value, lower=True)
 
+    def trainer_config(self, value: str):
+        return self._set_string_arg('config', value)
+
     def model(self, value: str):
         return self._set_string_arg('model', value, lower=True)
 
@@ -569,10 +572,25 @@ class Job:
         return self
 
     def _validated_args(self):
-        required = ['data', 'model', 'task_type']
+        required = ['data', 'model'] if self._args.get('config') else ['data', 'model', 'task_type']
         missing = [key for key in required if not self._args.get(key)]
         if missing:
             raise ValueError(f'Job "{self.name}" is missing required args: {missing}')
+
+        if self._args.get('config'):
+            from core.train_config import TrainConfig
+            from utils.config_init import ConfigInit
+
+            configurations = ConfigInit(
+                required_args=[],
+                default_args={'config': self._args['config']},
+                makedirs=[],
+            ).parse_kwargs(self._args)
+            config = TrainConfig.from_refconfig(configurations)
+            payload = {key: value for key, value in self._args.items() if value is not None}
+            payload['data'] = config.data
+            payload['model'] = config.model
+            return payload
 
         word2vec_config = {
             key: self._args.get(f'repr_word2vec_{key}', default)

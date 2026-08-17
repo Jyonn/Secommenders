@@ -66,7 +66,8 @@ class SequentialRecModel(nn.Module):
 
         hidden_size = self.encoder.hidden_size
         input_embed_dim = getattr(self.encoder, 'input_embed_dim', hidden_size)
-        history_repr_types = set(config.compile_config.repr_types)
+        history_repr_names = list(config.compile_config.representation_names)
+        history_repr_types = {config.compile_config.representation_kind(name) for name in history_repr_names}
         self.uses_uid_path = 'uid' in history_repr_types or 'uid' in task_types or config.repr_combine == 'add'
         self.uses_sid_path = 'sid' in history_repr_types or 'sid' in task_types
         self.uses_hash_path = 'hash' in history_repr_types or 'hash' in task_types
@@ -76,6 +77,9 @@ class SequentialRecModel(nn.Module):
         self.hash_embedding = nn.Embedding(max(compiled.hash_vocab_size, 1), input_embed_dim) if self.uses_hash_path else None
         self.embedding_projection = None
         self.embedding_head = None
+        self.embedding_tables = nn.ModuleDict()
+        self.embedding_projections = nn.ModuleDict()
+        self.embedding_heads = nn.ModuleDict()
         self.uid_head = None
         self.uid_hierarchy = None
         self.uid_node_heads = None
@@ -83,7 +87,14 @@ class SequentialRecModel(nn.Module):
         self.hash_head = None
         self.model_token_head = None
 
-        if compiled.embedding_matrix is not None:
+        if config.compile_config.representation_graph:
+            for name, matrix in compiled.embedding_matrices.items():
+                self.embedding_tables[name] = nn.Embedding.from_pretrained(matrix, freeze=True)
+                self.embedding_projections[name] = nn.Linear(matrix.shape[1], input_embed_dim, bias=False)
+                if name in history_repr_names or name in config.compile_config.target_names:
+                    self.embedding_heads[name] = nn.Linear(hidden_size, matrix.shape[1], bias=False)
+            self.register_buffer('embedding_matrix', torch.empty(0))
+        elif compiled.embedding_matrix is not None:
             self.register_buffer('embedding_matrix', compiled.embedding_matrix)
             self.embedding_projection = nn.Linear(compiled.embedding_matrix.shape[1], input_embed_dim, bias=False)
         else:
@@ -110,7 +121,7 @@ class SequentialRecModel(nn.Module):
             self.hash_head = nn.Linear(hidden_size, compiled.hash_vocab_size)
         if 'text' in supervised_repr_types:
             self.model_token_head = nn.Linear(hidden_size, input_embed_dim, bias=False)
-        if 'embedding' in supervised_repr_types or 'embedding' in task_types:
+        if not config.compile_config.representation_graph and ('embedding' in supervised_repr_types or 'embedding' in task_types):
             if compiled.embedding_matrix is None:
                 raise ValueError('embedding supervision requires compiled embedding view and source matrix')
             self.embedding_head = nn.Linear(hidden_size, compiled.embedding_matrix.shape[1], bias=False)
@@ -155,6 +166,8 @@ class SequentialRecModel(nn.Module):
             self.embedding_projection.to(dtype=self.compute_dtype)
         if self.embedding_head is not None:
             self.embedding_head.to(dtype=self.compute_dtype)
+        self.embedding_projections.to(dtype=self.compute_dtype)
+        self.embedding_heads.to(dtype=self.compute_dtype)
         if self.uid_head is not None:
             self.uid_head.to(dtype=self.compute_dtype)
         if self.uid_node_heads is not None:
@@ -207,45 +220,47 @@ class SequentialRecModel(nn.Module):
             ]
 
         specs = []
-        for repr_type in self.config.compile_config.repr_types:
+        for repr_name in self.config.compile_config.representation_names:
+            repr_type = self.config.compile_config.representation_kind(repr_name)
             if repr_type == 'uid':
-                specs.append(('type_marker', 'uid'))
+                specs.append(('type_marker', repr_name))
                 specs.append(('uid', uid))
             elif repr_type == 'text':
-                specs.append(('type_marker', 'text'))
-                token_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['text'][uid])]
+                specs.append(('type_marker', repr_name))
+                token_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[repr_name][uid])]
                 specs.append(('model_tokens', token_ids))
             elif repr_type == 'sid':
-                specs.append(('type_marker', 'sid'))
-                sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
+                specs.append(('type_marker', repr_name))
+                sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[repr_name][uid])]
                 specs.append(('sid', sid_ids))
             elif repr_type == 'hash':
-                specs.append(('type_marker', 'hash'))
-                hash_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['hash'][uid])]
+                specs.append(('type_marker', repr_name))
+                hash_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[repr_name][uid])]
                 specs.append(('hash', hash_ids))
             elif repr_type == 'embedding':
-                specs.append(('type_marker', 'embedding'))
-                emb_index = int(self.compiled.item_views['embedding'][uid])
-                specs.append(('embedding', emb_index))
+                specs.append(('type_marker', repr_name))
+                emb_index = int(self.compiled.item_views[repr_name][uid])
+                specs.append(('embedding', (repr_name, emb_index)))
             else:
                 raise ValueError(f'Unsupported repr type: {repr_type}')
         return specs
 
     def _render_single_view_item(self, uid: int, view_name: str):
-        if view_name == 'uid':
-            return [('type_marker', 'uid'), ('uid', uid)]
-        if view_name == 'text':
-            token_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['text'][uid])]
-            return [('type_marker', 'text'), ('model_tokens', token_ids)]
-        if view_name == 'sid':
-            sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
-            return [('type_marker', 'sid'), ('sid', sid_ids)]
-        if view_name == 'hash':
-            hash_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views['hash'][uid])]
-            return [('type_marker', 'hash'), ('hash', hash_ids)]
-        if view_name == 'embedding':
-            emb_index = int(self.compiled.item_views['embedding'][uid])
-            return [('type_marker', 'embedding'), ('embedding', emb_index)]
+        kind = self.config.compile_config.representation_kind(view_name)
+        if kind == 'uid':
+            return [('type_marker', view_name), ('uid', uid)]
+        if kind == 'text':
+            token_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[view_name][uid])]
+            return [('type_marker', view_name), ('model_tokens', token_ids)]
+        if kind == 'sid':
+            sid_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[view_name][uid])]
+            return [('type_marker', view_name), ('sid', sid_ids)]
+        if kind == 'hash':
+            hash_ids = [int(token_id) for token_id in function.to_list(self.compiled.item_views[view_name][uid])]
+            return [('type_marker', view_name), ('hash', hash_ids)]
+        if kind == 'embedding':
+            emb_index = int(self.compiled.item_views[view_name][uid])
+            return [('type_marker', view_name), ('embedding', (view_name, emb_index))]
         raise ValueError(f'Unsupported alignment source view: {view_name}')
 
     def _build_sample_specs(self, sample):
@@ -256,8 +271,12 @@ class SequentialRecModel(nn.Module):
             if index != len(history_uids) - 1:
                 specs.append(('model_tokens', [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]))
         specs.append(('model_tokens', [int(token_id) for token_id in self.compiled.prompt_main['query_prefix_ids']]))
-        specs.append(('type_marker', self.config.task_type))
+        specs.append(('type_marker', self._target_marker_name()))
         return specs
+
+    def _target_marker_name(self):
+        names = self.config.compile_config.target_names
+        return names[0] if len(names) == 1 else 'decoder_' + '_'.join(names)
 
     def _embed_spec(self, kind: str, value):
         if kind == 'model_tokens':
@@ -282,6 +301,11 @@ class SequentialRecModel(nn.Module):
             token_ids = torch.tensor(value, dtype=torch.long, device=self.device)
             return self.hash_embedding(token_ids)
         if kind == 'embedding':
+            if isinstance(value, tuple):
+                name, index = value
+                emb_index = torch.tensor([int(index)], dtype=torch.long, device=self.device)
+                projected = self.embedding_projections[name](self.embedding_tables[name](emb_index).to(dtype=self.compute_dtype))
+                return projected
             emb_index = torch.tensor([int(value)], dtype=torch.long, device=self.device)
             projected = self.embedding_projection(self.embedding_matrix[emb_index].to(dtype=self.compute_dtype))
             return projected
@@ -1286,47 +1310,45 @@ class SequentialRecModel(nn.Module):
             )
         return sid_values
 
-    def _target_embedding_index(self, target_uid: int):
-        return int(self.compiled.item_views['embedding'][target_uid])
+    def _target_embedding_index(self, target_uid: int, representation='embedding'):
+        return int(self.compiled.item_views[representation][target_uid])
 
     def _repr_payload_labels(self, repr_type: str, uid: int):
-        if repr_type == 'uid':
-            return [int(self.compiled.item_views['uid'][uid])]
-        if repr_type == 'sid':
-            return [int(token_id) for token_id in function.to_list(self.compiled.item_views['sid'][uid])]
-        if repr_type == 'hash':
-            return [int(token_id) for token_id in function.to_list(self.compiled.item_views['hash'][uid])]
-        if repr_type == 'text':
-            return [int(token_id) for token_id in function.to_list(self.compiled.item_views['text'][uid])]
-        if repr_type == 'embedding':
-            return [self._target_embedding_index(uid)]
+        kind = self.config.compile_config.representation_kind(repr_type)
+        if kind == 'uid':
+            return [int(self.compiled.item_views[repr_type][uid])]
+        if kind in {'sid', 'hash', 'text'}:
+            return [int(token_id) for token_id in function.to_list(self.compiled.item_views[repr_type][uid])]
+        if kind == 'embedding':
+            return [self._target_embedding_index(uid, repr_type)]
         raise ValueError(f'Unsupported repr type for supervision: {repr_type}')
 
     def _build_repr_supervision(self, repr_type: str, uid: int, marker_position: int, payload_positions: list[int], group: str):
+        repr_kind = self.config.compile_config.representation_kind(repr_type)
         labels = self._repr_payload_labels(repr_type, uid)
         if not labels:
             return []
-        if repr_type == 'embedding':
-            return [{'kind': 'embedding', 'position': int(marker_position), 'label': int(labels[0]), 'group': group, 'slot': -1}]
-        if repr_type == 'sid':
+        if repr_kind == 'embedding':
+            return [{'kind': repr_kind, 'representation': repr_type, 'position': int(marker_position), 'label': int(labels[0]), 'group': group, 'slot': -1}]
+        if repr_kind == 'sid':
             if self._sid_decoding_mode() == 'parallel':
                 return [
-                    {'kind': repr_type, 'position': int(marker_position), 'label': int(label), 'group': group, 'slot': slot_index}
+                    {'kind': repr_kind, 'representation': repr_type, 'position': int(marker_position), 'label': int(label), 'group': group, 'slot': slot_index}
                     for slot_index, label in enumerate(labels)
                 ]
             anchor_positions = [int(marker_position)] + [int(position) for position in payload_positions[:-1]]
             return [
-                {'kind': repr_type, 'position': anchor_position, 'label': int(label), 'group': group, 'slot': slot_index}
+                {'kind': repr_kind, 'representation': repr_type, 'position': anchor_position, 'label': int(label), 'group': group, 'slot': slot_index}
                 for slot_index, (anchor_position, label) in enumerate(zip(anchor_positions, labels))
             ]
-        if repr_type == 'hash':
+        if repr_kind == 'hash':
             return [
-                {'kind': repr_type, 'position': int(marker_position), 'label': int(label), 'group': group, 'slot': slot_index}
+                {'kind': repr_kind, 'representation': repr_type, 'position': int(marker_position), 'label': int(label), 'group': group, 'slot': slot_index}
                 for slot_index, label in enumerate(labels)
             ]
         anchor_positions = [int(marker_position)] + [int(position) for position in payload_positions[:-1]]
         return [
-            {'kind': repr_type, 'position': anchor_position, 'label': int(label), 'group': group, 'slot': -1}
+            {'kind': repr_kind, 'representation': repr_type, 'position': anchor_position, 'label': int(label), 'group': group, 'slot': -1}
             for anchor_position, label in zip(anchor_positions, labels)
         ]
 
@@ -1400,11 +1422,11 @@ class SequentialRecModel(nn.Module):
                 append_embedded(self._embed_spec('model_tokens', separator_ids))
 
             include_alignment_repr = item_index < len(sequence_uids) - 1
-            repr_types = list(self.config.task_types)
+            repr_types = list(self.config.compile_config.target_names)
             if include_alignment_repr:
                 repr_types.extend([
                     repr_type
-                    for repr_type in self.config.compile_config.repr_types[len(self.config.task_types):]
+                    for repr_type in self.config.compile_config.representation_names[len(self.config.compile_config.target_names):]
                 ])
 
             for repr_type in repr_types:
@@ -1418,7 +1440,7 @@ class SequentialRecModel(nn.Module):
                     else:
                         payload_positions.extend(range(start, end + 1))
 
-                if repr_type in self.config.task_types and item_index > 0:
+                if repr_type in self.config.compile_config.target_names and item_index > 0:
                     supervision.extend(
                         self._build_repr_supervision(
                             repr_type=repr_type,
@@ -1428,7 +1450,7 @@ class SequentialRecModel(nn.Module):
                             group='primary',
                         )
                     )
-                elif repr_type not in self.config.task_types and self.config.alignment_weight > 0 and include_alignment_repr:
+                elif repr_type not in self.config.compile_config.target_names and self.config.alignment_weight > 0 and include_alignment_repr:
                     supervision.extend(
                         self._build_repr_supervision(
                             repr_type=repr_type,
@@ -1459,9 +1481,9 @@ class SequentialRecModel(nn.Module):
             if item_index > 0 and separator_ids:
                 append_embedded(self._embed_spec('model_tokens', separator_ids))
 
-            marker_position, _ = append_embedded(self._embed_spec('type_marker', self.config.task_type))
+            marker_position, _ = append_embedded(self._embed_spec('type_marker', self._target_marker_name()))
             payload_positions = {}
-            for task_type in self.config.task_types:
+            for task_type in self.config.compile_config.target_names:
                 positions = []
                 for kind, value in self._render_single_view_item(uid, task_type):
                     if kind == 'type_marker':
@@ -1471,7 +1493,7 @@ class SequentialRecModel(nn.Module):
                 payload_positions[task_type] = positions
 
             if item_index > 0:
-                for task_type in self.config.task_types:
+                for task_type in self.config.compile_config.target_names:
                     supervision.extend(
                         self._build_repr_supervision(
                             repr_type=task_type,
@@ -1483,7 +1505,7 @@ class SequentialRecModel(nn.Module):
                     )
 
             if item_index < len(sample['sequence_uids']) - 1:
-                for repr_type in self.config.compile_config.repr_types[len(self.config.task_types):]:
+                for repr_type in self.config.compile_config.representation_names[len(self.config.compile_config.target_names):]:
                     segment_specs = self._render_single_view_item(uid, repr_type)
                     alignment_marker = None
                     alignment_positions = []
@@ -1520,6 +1542,7 @@ class SequentialRecModel(nn.Module):
         supervision_batch_indices = []
         supervision_positions = []
         supervision_kinds = []
+        supervision_representations = []
         supervision_labels = []
         supervision_groups = []
         supervision_slots = []
@@ -1531,6 +1554,7 @@ class SequentialRecModel(nn.Module):
                 supervision_batch_indices.append(batch_index)
                 supervision_positions.append(int(entry['position']))
                 supervision_kinds.append(entry['kind'])
+                supervision_representations.append(entry.get('representation', entry['kind']))
                 supervision_labels.append(int(entry['label']))
                 supervision_groups.append(entry['group'])
                 supervision_slots.append(int(entry.get('slot', -1)))
@@ -1543,6 +1567,7 @@ class SequentialRecModel(nn.Module):
                 'batch_indices': torch.tensor(supervision_batch_indices, dtype=torch.long, device=self.device),
                 'positions': torch.tensor(supervision_positions, dtype=torch.long, device=self.device),
                 'kinds': supervision_kinds,
+                'representations': supervision_representations,
                 'labels': torch.tensor(supervision_labels, dtype=torch.long, device=self.device),
                 'groups': supervision_groups,
                 'slots': torch.tensor(supervision_slots, dtype=torch.long, device=self.device),
@@ -1641,16 +1666,25 @@ class SequentialRecModel(nn.Module):
         batch_size = max(len(batch), 1)
         return {key: value / batch_size for key, value in totals.items()}
 
+    def _embedding_decoder_components(self):
+        if self.config.compile_config.representation_graph:
+            name = self.config.compile_config.primary_name('embedding', targets=True)
+            if not name:
+                raise ValueError('embedding decoder target is not configured')
+            return name, self.embedding_heads[name], self.embedding_tables[name].weight
+        return 'embedding', self.embedding_head, self.embedding_matrix
+
     def _compute_embedding_loss(self, pooled: torch.Tensor, batch):
+        name, head, table = self._embedding_decoder_components()
         target_indices = torch.tensor(
-            [int(self.compiled.item_views['embedding'][sample['target_uid']]) for sample in batch],
+            [int(self.compiled.item_views[name][sample['target_uid']]) for sample in batch],
             dtype=torch.long,
             device=self.device,
         )
-        targets = self.embedding_matrix[target_indices].to(dtype=self.compute_dtype)
-        predictions = self.embedding_head(pooled)
+        targets = table[target_indices].to(dtype=self.compute_dtype)
+        predictions = head(pooled)
         norm_predictions = F.normalize(predictions.float(), dim=-1)
-        norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
+        norm_table = F.normalize(table.float(), dim=-1)
         logits = norm_predictions @ norm_table.T
         loss = F.cross_entropy(logits, target_indices)
         cosine = F.cosine_similarity(predictions.float(), targets.float(), dim=-1).mean()
@@ -1736,6 +1770,7 @@ class SequentialRecModel(nn.Module):
 
     def _compute_mixed_supervision_loss(self, selected_hidden: torch.Tensor, supervision: dict):
         kinds = supervision['kinds']
+        representations = supervision.get('representations', kinds)
         labels = supervision['labels']
         groups = supervision['groups']
         slots = supervision['slots']
@@ -1743,8 +1778,9 @@ class SequentialRecModel(nn.Module):
         alignment_losses = []
         metrics = {}
 
-        for kind in ['uid', 'sid', 'hash', 'text', 'embedding']:
-            mask_indices = [index for index, entry_kind in enumerate(kinds) if entry_kind == kind]
+        for representation in dict.fromkeys(representations):
+            kind = self.config.compile_config.representation_kind(representation)
+            mask_indices = [index for index, entry in enumerate(representations) if entry == representation]
             if not mask_indices:
                 continue
             index_tensor = torch.tensor(mask_indices, dtype=torch.long, device=self.device)
@@ -1786,20 +1822,27 @@ class SequentialRecModel(nn.Module):
                 accuracy = (predictions == kind_labels).float().mean().item()
                 metrics['text_token_acc'] = accuracy
             else:
-                predictions = self.embedding_head(kind_hidden)
-                targets = self.embedding_matrix[kind_labels].to(dtype=self.compute_dtype)
+                if self.config.compile_config.representation_graph:
+                    head = self.embedding_heads[representation]
+                    table = self.embedding_tables[representation].weight
+                else:
+                    head = self.embedding_head
+                    table = self.embedding_matrix
+                predictions = head(kind_hidden)
+                targets = table[kind_labels].to(dtype=self.compute_dtype)
                 norm_predictions = F.normalize(predictions.float(), dim=-1)
-                norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
+                norm_table = F.normalize(table.float(), dim=-1)
                 logits = norm_predictions @ norm_table.T
                 losses = F.cross_entropy(logits, kind_labels, reduction='none')
                 accuracy = (logits.argmax(dim=-1) == kind_labels).float().mean().item()
                 cosine = F.cosine_similarity(predictions.float(), targets.float(), dim=-1).mean().item()
-                metrics['embedding_acc'] = accuracy
-                metrics['embedding_cosine'] = cosine
+                metric_prefix = representation if self.config.compile_config.representation_graph else 'embedding'
+                metrics[f'{metric_prefix}_acc'] = accuracy
+                metrics[f'{metric_prefix}_cosine'] = cosine
 
             for local_index, loss_value in enumerate(losses):
                 if group_mask[local_index] == 'primary':
-                    primary_losses.setdefault(kind, []).append(loss_value)
+                    primary_losses.setdefault(representation, []).append(loss_value)
                 else:
                     alignment_losses.append(loss_value)
 
@@ -1811,7 +1854,8 @@ class SequentialRecModel(nn.Module):
             'sid': float(getattr(self.config, 'multi_sid_loss_weight', 1.0)),
         }
         primary_parts = []
-        for kind, losses_for_kind in primary_losses.items():
+        for representation, losses_for_kind in primary_losses.items():
+            kind = self.config.compile_config.representation_kind(representation)
             kind_loss = torch.stack(losses_for_kind).mean()
             weight = task_loss_weights.get(kind, 1.0) if self.config.is_multi_task else 1.0
             primary_parts.append(kind_loss * weight)
@@ -1871,14 +1915,15 @@ class SequentialRecModel(nn.Module):
             metrics.update(self._compute_hash_parallel_ranking_metrics(pooled, batch))
             return loss, metrics
         loss, metrics = self._compute_embedding_loss(pooled, batch)
+        name, head, table = self._embedding_decoder_components()
         target_indices = torch.tensor(
-            [int(self.compiled.item_views['embedding'][sample['target_uid']]) for sample in batch],
+            [int(self.compiled.item_views[name][sample['target_uid']]) for sample in batch],
             dtype=torch.long,
             device=self.device,
         )
-        predictions = self.embedding_head(pooled)
+        predictions = head(pooled)
         norm_predictions = F.normalize(predictions.float(), dim=-1)
-        norm_table = F.normalize(self.embedding_matrix.float(), dim=-1)
+        norm_table = F.normalize(table.float(), dim=-1)
         logits = norm_predictions @ norm_table.T
         metrics.update(self._compute_ranking_metrics_from_logits(logits, target_indices, batch=batch))
         return loss, metrics

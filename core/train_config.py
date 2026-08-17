@@ -1,4 +1,5 @@
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
+from types import SimpleNamespace
 from typing import Optional
 
 from oba import NotFound
@@ -31,6 +32,12 @@ from utils.experiment_template import (
 from utils.frequency_breakdown import normalize_frequency_boundaries
 from utils.embedding_fusion import embedding_fusion_from_flat, normalize_embedding_fusion
 from utils.word2vec import WORD2VEC_DEFAULTS
+from utils.representation_schema import (
+    graph_from_legacy_config,
+    normalize_representation_graph,
+    plain,
+    upstreams_from_graph,
+)
 
 
 def _get(obj, name, default=None):
@@ -118,6 +125,7 @@ class TrainConfig:
     num_heads: int
     dropout: float
     upstreams: dict
+    representation_graph: Optional[dict] = None
 
     @property
     def effective_batch_size(self):
@@ -134,6 +142,8 @@ class TrainConfig:
     @classmethod
     def from_refconfig(cls, configurations):
         root = configurations.config
+        if str(_get(root, 'schema_version', '') or '').strip().lower() == 'trainer.v4':
+            return cls._from_v4(root)
         data_config = root.data
         representation = _get(root, 'representation')
         upstreams_section = _get(root, 'upstreams')
@@ -361,7 +371,7 @@ class TrainConfig:
             raise ValueError('trainer.multi.fused_loss_weight is reserved for a future differentiable fusion loss')
         if len(task_types) > 1 and multi_loss_values['consistency'] > 0:
             raise ValueError('trainer.multi.consistency_weight is reserved for a future cross-head consistency loss')
-        return cls(
+        config = cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
             repr_type=normalized_repr_type,
@@ -435,6 +445,147 @@ class TrainConfig:
             dropout=float(scratch.dropout),
             upstreams=canonical_upstreams,
         )
+        if config.repr_combine == 'add':
+            return config
+        graph = graph_from_legacy_config(asdict(config))
+        return replace(config, representation_graph=graph, upstreams=upstreams_from_graph(graph))
+
+    @classmethod
+    def _from_v4(cls, root):
+        raw = plain(root)
+        graph = normalize_representation_graph(
+            raw.get('representations'),
+            raw.get('encoder'),
+            raw.get('decoder'),
+        )
+        catalog = graph['representations']
+        encoder_names = graph['encoder']['representations']
+        targets = graph['decoder']['targets']
+        target_names = [target['representation'] for target in targets]
+        target_types = [catalog[name]['type'] for name in target_names]
+        encoder_types = [catalog[name]['type'] for name in encoder_names]
+        history_types = list(dict.fromkeys(target_types + encoder_types))
+        model_name = str((raw.get('model') or {}).get('name') or '').strip().lower()
+        if model_name not in {'scratch', 'scratchlegacy'} and model_utils.match(model_name) is None:
+            raise ValueError(
+                f'unknown model {model_name!r}; use scratch/scratchlegacy or configure the alias in .model'
+            )
+        if model_name in {'scratch', 'scratchlegacy'} and 'text' in encoder_types:
+            raise ValueError('scratch backbones do not support text representations')
+
+        upstreams = {}
+        sid_names = [name for name in encoder_names if catalog[name]['type'] == 'sid']
+        if sid_names:
+            spec = catalog[sid_names[0]]
+            codec = spec['codec']
+            upstreams['sid'] = {
+                'kind': 'quantized',
+                'embedding_model': None,
+                'embedding': spec['embedding'],
+                'export': codec['export'],
+                'quantizer': {'name': codec['name'], 'config': codec['quantizer']},
+                'encoder': codec['encoder'],
+                'trainer': codec['trainer'],
+            }
+        hash_names = [name for name in encoder_names if catalog[name]['type'] == 'hash']
+        if hash_names:
+            spec = catalog[hash_names[0]]
+            codec = spec['codec']
+            upstreams['hash'] = {
+                'kind': 'quantized',
+                'embedding_model': None,
+                'embedding': spec['embedding'],
+                'export': 'hash',
+                'quantizer': {'name': codec['name'], 'config': codec['quantizer']},
+            }
+        uid_names = [name for name in encoder_names if catalog[name]['type'] == 'uid']
+        if uid_names and catalog[uid_names[0]].get('hierarchy'):
+            upstreams['uid'] = {
+                'kind': 'clustered',
+                'clusterer': catalog[uid_names[0]]['hierarchy'],
+            }
+
+        decoder = {
+            'uid': {'mode': 'flat', 'topk': None},
+            'sid': {'mode': 'auto', 'beam_width': 20, 'beam_chunk_size': 0, 'collision_loss_weight': 0.1},
+            'hash': {'mode': 'parallel'},
+            'multi': {
+                'candidate_topk': 100,
+                'output_topk': 20,
+                'fusion': {
+                    'mode': 'frequency', 'uid_weight': 0.5, 'score_normalization': 'zscore',
+                    'temperature_uid': 1.0, 'temperature_sid': 1.0,
+                },
+                'frequency': {'threshold': 5, 'smoothing': 2.0},
+            },
+        }
+        decoder['multi'].update(graph['decoder']['multiple'])
+        for target in targets:
+            kind = catalog[target['representation']]['type']
+            decoding = dict(target.get('decoding') or {})
+            if kind == 'uid':
+                decoder['uid'] = decoding
+            elif kind == 'sid':
+                decoder['sid'] = decoding
+            elif kind == 'hash':
+                decoder['hash'] = decoding
+
+        encoder = raw.get('encoder') or {}
+        fallback_source_model = None
+        for name in encoder_names:
+            embedding_spec = catalog[name].get('embedding') or {}
+            sources = embedding_spec.get('sources') or []
+            if sources:
+                fallback_source_model = sources[0]['model']
+                break
+        trainer_defaults = {
+            'batch_size': 64, 'accumulate_batch': 1, 'valid_only': False, 'test_only': False,
+            'load_ckpt': None, 'overwrite': 'auto', 'epochs': 0, 'learning_rate': 0.0001,
+            'weight_decay': 0.01, 'lr_scheduler': 'constant', 'warmup_ratio': 0.0, 'seed': 42,
+            'device': None, 'num_gpus': 1, 'alignment': 0.0, 'uid_cluster_levels': None,
+            'uid_cluster_topk': None, 'code_decoding': 'auto', 'code_beam_width': 20,
+            'code_beam_chunk_size': 0, 'code_collision_loss_weight': 0.1,
+            'multi': {'uid_loss_weight': 1.0, 'sid_loss_weight': 1.0, 'fused_loss_weight': 0.0, 'consistency_weight': 0.0},
+        }
+        trainer_defaults.update(raw.get('trainer') or {})
+        evaluator_defaults = {
+            'main_metric': 'ndcg@10', 'patience': 3,
+            'metrics': ['ndcg@5', 'ndcg@10', 'ndcg@20', 'hr@5', 'hr@10', 'hr@20', 'mrr'],
+            'frequency_breakdown': False, 'frequency_buckets': [0, 5, 20, 100],
+        }
+        evaluator_defaults.update(raw.get('evaluator') or {})
+        legacy = {
+            'data': raw.get('data') or {},
+            'representation': {
+                'history': '+'.join(history_types),
+                'target': '+'.join(target_types),
+                'source_model': fallback_source_model,
+                'combine': graph['encoder']['combine'],
+                'max_items': encoder.get('max_items', 50),
+                'model_max_length': encoder.get('model_max_length', 0),
+                'item_text_max_tokens': encoder.get('item_text_max_tokens', 20),
+            },
+            'upstreams': upstreams,
+            'model': raw.get('model') or {},
+            'decoder': decoder,
+            'trainer': trainer_defaults,
+            'evaluator': evaluator_defaults,
+        }
+        def namespace(value):
+            if isinstance(value, dict):
+                return SimpleNamespace(**{key: namespace(item) for key, item in value.items()})
+            if isinstance(value, list):
+                return [namespace(item) for item in value]
+            return value
+
+        config = cls.from_refconfig(SimpleNamespace(config=namespace(legacy)))
+        return replace(
+            config,
+            representation_graph=graph,
+            upstreams=upstreams,
+            repr_source_model=None,
+            repr_embedding=None,
+        )
 
     @property
     def compile_config(self):
@@ -453,6 +604,7 @@ class TrainConfig:
             item_text_max_tokens=self.item_text_max_tokens,
             repr_combine=self.repr_combine,
             upstreams=self.upstreams,
+            representation_graph=self.representation_graph,
         )
 
     @property
@@ -528,12 +680,16 @@ class TrainConfig:
         payload.pop('code_beam_chunk_size', None)
         payload.pop('multi_candidate_topk', None)
         payload.pop('multi_output_topk', None)
+        if self.representation_graph:
+            for key in ('repr_source_model', 'repr_embedding', 'sid_export', 'sid_coder', 'hash_coder', 'upstreams'):
+                payload.pop(key, None)
         used_views = self.compile_config.used_views
         used_upstreams = used_upstreams_for_config(self.task_type, self.repr_type, self.uid_decoding)
-        payload['upstreams'] = {
-            key: value for key, value in self.upstreams.items()
-            if key in used_upstreams
-        }
+        if not self.representation_graph:
+            payload['upstreams'] = {
+                key: value for key, value in self.upstreams.items()
+                if key in used_upstreams
+            }
         if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
             payload.pop('repr_source_model', None)
         if 'embedding' not in used_views or not payload.get('repr_embedding'):

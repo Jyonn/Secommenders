@@ -1,0 +1,13 @@
+extends: _catalog.yaml
+
+encoder:
+  representations: [sid_content]
+
+decoder:
+  targets:
+    - representation: sid_content
+      decoding:
+        mode: ${code_decoding:auto}$
+        beam_width: ${code_beam_width:20}$
+        beam_chunk_size: ${code_beam_chunk_size:80}$
+        collision_loss_weight: ${code_collision_loss_weight:0.1}$

@@ -1,0 +1,9 @@
+extends: _catalog.yaml
+
+encoder:
+  representations: [uid, text]
+
+decoder:
+  targets:
+    - representation: uid
+      decoding: {mode: flat}

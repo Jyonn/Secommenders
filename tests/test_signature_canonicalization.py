@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from utils.artifact_identity import (
+    COMPILED_SPEC_VERSION,
     TRAIN_CONFIG_DEFAULTS,
     TRAINED_SPEC_VERSION,
     compiled_signature_from_config,
@@ -69,7 +70,8 @@ def test_lr_scheduler_and_warmup_participate_in_trained_signature():
     cosine = deepcopy(baseline)
     cosine.update({'epochs': 20, 'lr_scheduler': 'cosine', 'warmup_ratio': 0.1})
 
-    assert TRAINED_SPEC_VERSION == 'trained.v3'
+    assert TRAINED_SPEC_VERSION == 'trained.v4'
+    assert COMPILED_SPEC_VERSION == 'compiled.v3'
     assert trained_signature_from_config(baseline) != trained_signature_from_config(cosine)
 
 

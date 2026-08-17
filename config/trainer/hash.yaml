@@ -1,0 +1,9 @@
+extends: _catalog.yaml
+
+encoder:
+  representations: [hash_content]
+
+decoder:
+  targets:
+    - representation: hash_content
+      decoding: {mode: parallel}

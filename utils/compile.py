@@ -62,6 +62,7 @@ class CompileConfig:
     repr_combine: str = 'concat'
     upstreams: Optional[dict] = None
     embedding: Optional[dict] = None
+    representation_graph: Optional[dict] = None
 
     def __post_init__(self):
         self.data = str(self.data).lower()
@@ -75,6 +76,37 @@ class CompileConfig:
         self.hash_coder = str(self.hash_coder).strip().lower() if self.hash_coder else None
         self.upstreams = deepcopy(self.upstreams or {})
         self.embedding = deepcopy(self.embedding or {})
+        self.representation_graph = deepcopy(self.representation_graph or {})
+
+    @property
+    def representation_names(self):
+        if self.representation_graph:
+            return list(self.representation_graph['encoder']['representations'])
+        return self.repr_types
+
+    @property
+    def target_names(self):
+        if self.representation_graph:
+            return [target['representation'] for target in self.representation_graph['decoder']['targets']]
+        return self.task_types
+
+    def representation_kind(self, name):
+        if self.representation_graph:
+            return self.representation_graph['representations'][name]['type']
+        return name
+
+    def representation_spec(self, name):
+        if self.representation_graph:
+            return self.representation_graph['representations'][name]
+        return {'type': name}
+
+    def names_for_kind(self, kind, *, targets=False):
+        names = self.target_names if targets else self.representation_names
+        return [name for name in names if self.representation_kind(name) == kind]
+
+    def primary_name(self, kind, *, targets=False):
+        names = self.names_for_kind(kind, targets=targets)
+        return names[0] if names else None
 
     @property
     def repr_types(self):
@@ -106,7 +138,11 @@ class CompileConfig:
         uses_embedding = 'embedding' in self.used_views
         parts = [
             self.model,
-            f'{self.repr_type}2{self.task_type}',
+            (
+                f'{"+".join(self.representation_names)}2{"+".join(self.target_names)}'
+                if self.representation_graph
+                else f'{self.repr_type}2{self.task_type}'
+            ),
         ]
         if self.repr_combine != 'concat':
             parts.append(self.repr_combine)
@@ -116,7 +152,9 @@ class CompileConfig:
             parts.append(f'tl{self.item_text_max_tokens}')
         if self.model_max_length:
             parts.append(f'ml{self.model_max_length}')
-        if self.repr_source_model and (uses_sid or uses_hash or uses_embedding):
+        if self.representation_graph:
+            parts.append(f'rg{short_config_hash(self.representation_graph)}')
+        if not self.representation_graph and self.repr_source_model and (uses_sid or uses_hash or uses_embedding):
             parts.append(f'rsm-{self.repr_source_model}')
         if uses_embedding and self.embedding:
             parts.append(f'emb{short_config_hash(self.embedding)}')
@@ -126,8 +164,9 @@ class CompileConfig:
             parts.append(f'sc-{self.sid_coder}')
         if self.hash_coder and uses_hash:
             parts.append(f'hc-{self.hash_coder}')
-        for name, upstream in sorted(self.compile_upstreams.items()):
-            parts.append(f'{name}u{short_config_hash(upstream)}')
+        if not self.representation_graph:
+            for name, upstream in sorted(self.compile_upstreams.items()):
+                parts.append(f'{name}u{short_config_hash(upstream)}')
         return parts
 
     @property
@@ -139,6 +178,9 @@ class CompileConfig:
     def config_dict(self):
         payload = asdict(self)
         payload['upstreams'] = self.compile_upstreams
+        if self.representation_graph:
+            for key in ('repr_source_model', 'sid_export', 'sid_coder', 'hash_coder', 'upstreams', 'embedding'):
+                payload.pop(key, None)
         if not any(view in {'sid', 'hash', 'embedding'} for view in self.used_views):
             payload.pop('repr_source_model', None)
         if 'embedding' not in self.used_views or not payload.get('embedding'):
@@ -150,4 +192,6 @@ class CompileConfig:
             payload.pop('hash_coder', None)
         if not payload.get('upstreams'):
             payload.pop('upstreams', None)
+        if not payload.get('representation_graph'):
+            payload.pop('representation_graph', None)
         return payload

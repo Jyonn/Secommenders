@@ -113,10 +113,11 @@ def parse_trainer_command(command: str):
 
 def build_train_config(arg_map: dict):
     kwargs = dict(arg_map)
-    kwargs['config'] = 'config/trainer.yaml'
+    config_path = str(kwargs.get('config') or 'config/trainer.yaml')
+    kwargs['config'] = config_path
     configurations = ConfigInit(
         required_args=[],
-        default_args=dict(config='config/trainer.yaml'),
+        default_args=dict(config=config_path),
         makedirs=[],
     ).parse_kwargs(kwargs)
     return TrainConfig.from_refconfig(configurations)
@@ -141,6 +142,13 @@ def initial_batch_cap(model_name: str):
 
 
 def uses_embedding_path(base_args: dict):
+    if 'data' in base_args and 'model' in base_args:
+        config = build_train_config(base_args)
+        kinds = {
+            config.compile_config.representation_kind(name)
+            for name in config.compile_config.representation_names
+        }
+        return 'embedding' in kinds or 'embedding' in config.compile_config.task_types
     repr_type = str(base_args.get('repr_type') or '').lower()
     task_type = str(base_args.get('task_type') or '').lower()
     repr_parts = [part.strip() for part in repr_type.split('+') if part.strip()]
@@ -470,6 +478,13 @@ class SchedulerNotifier:
 
 
 def needs_oom_precheck(base_args: dict):
+    if 'data' in base_args and 'model' in base_args:
+        config = build_train_config(base_args)
+        target_kinds = {
+            config.compile_config.representation_kind(name)
+            for name in config.compile_config.target_names
+        }
+        return bool(target_kinds & {'sid', 'hash'})
     task_type = str(base_args.get('task_type', '')).lower()
     return task_type in {'sid', 'hash'}
 
@@ -605,8 +620,9 @@ class Scheduler:
         else:
             raise ValueError(f'Experiment #{index} must provide either "args" or "command"')
 
-        if 'data' not in base_args or 'model' not in base_args or 'task_type' not in base_args:
-            raise ValueError(f'Experiment #{index} is missing one of required args: data/model/task_type')
+        if 'data' not in base_args or 'model' not in base_args:
+            raise ValueError(f'Experiment #{index} is missing one of required args: data/model')
+        build_train_config(base_args)
 
         name = sanitize_name(raw_exp.get('name') or f'exp{index:03d}')
         batch_cap = int(raw_exp.get('batch_size_cap') or initial_batch_cap(str(base_args['model'])))

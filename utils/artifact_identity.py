@@ -19,11 +19,12 @@ from utils.experiment_template import (
     used_upstreams_for_config,
 )
 from utils.embedding_fusion import fusion_model_ref, is_legacy_single_source, normalize_embedding_fusion
+from utils.representation_schema import graph_from_legacy_config, upstreams_from_graph
 
 
-TRAINED_SPEC_VERSION = 'trained.v3'
+TRAINED_SPEC_VERSION = 'trained.v4'
 CLUSTERED_SPEC_VERSION = 'clustered.v3'
-COMPILED_SPEC_VERSION = 'compiled.v2'
+COMPILED_SPEC_VERSION = 'compiled.v3'
 QUANTIZED_SPEC_VERSION = 'quantized.v2'
 GENERIC_SPEC_VERSIONS = {
     'clustered': CLUSTERED_SPEC_VERSION,
@@ -43,6 +44,7 @@ LEGACY_CLUSTERED_FOLDER_RE = re.compile(
 TRAIN_CONFIG_DEFAULTS = {
     'repr_source_model': None,
     'repr_embedding': None,
+    'representation_graph': None,
     'sid_export': 'coll',
     'sid_coder': None,
     'hash_coder': None,
@@ -746,6 +748,10 @@ def compiled_spec_from_meta(meta: dict):
     if quantizer_name and 'hash' in view_text and config.get('hash_coder') is None:
         config['hash_coder'] = quantizer_name
     config['upstreams'] = _canonical_train_upstreams(config)
+    if not config.get('representation_graph') and config.get('repr_combine', 'concat') != 'add':
+        config['representation_graph'] = graph_from_legacy_config(config)
+    if config.get('representation_graph'):
+        config['upstreams'] = upstreams_from_graph(config['representation_graph'])
     compile_config = CompileConfig(
         data=config.get('data') or meta.get('data') or meta.get('dataset'),
         model=config.get('model'),
@@ -761,6 +767,7 @@ def compiled_spec_from_meta(meta: dict):
         repr_combine=config.get('repr_combine', 'concat'),
         upstreams=config.get('upstreams'),
         embedding=config.get('embedding'),
+        representation_graph=config.get('representation_graph'),
     )
     return {
         'stage': 'compiled',
@@ -1154,6 +1161,7 @@ def _compile_config_from_config(config: Any):
         repr_combine=_config_get(config, 'repr_combine', defaults['repr_combine']),
         upstreams=upstreams,
         embedding=_config_get(config, 'repr_embedding', defaults['repr_embedding']),
+        representation_graph=_config_get(config, 'representation_graph', defaults['representation_graph']),
     )
 
 
@@ -1187,6 +1195,9 @@ def _config_sign_payload(config: Any):
     payload.pop('code_beam_chunk_size', None)
     payload.pop('multi_candidate_topk', None)
     payload.pop('multi_output_topk', None)
+    if payload.get('representation_graph'):
+        for key in ('repr_source_model', 'repr_embedding', 'sid_export', 'sid_coder', 'hash_coder', 'upstreams'):
+            payload.pop(key, None)
     compile_config = _compile_config_from_config(payload)
     payload['task_type'] = compile_config.task_type
     payload['repr_type'] = compile_config.repr_type
@@ -1198,10 +1209,11 @@ def _config_sign_payload(config: Any):
         payload.get('repr_type'),
         payload.get('uid_decoding', TRAIN_CONFIG_DEFAULTS['uid_decoding']),
     )
-    payload['upstreams'] = {
-        key: value for key, value in (payload.get('upstreams') or {}).items()
-        if key in used_upstreams
-    }
+    if not payload.get('representation_graph'):
+        payload['upstreams'] = {
+            key: value for key, value in (payload.get('upstreams') or {}).items()
+            if key in used_upstreams
+        }
     if not any(view in {'sid', 'hash', 'embedding'} for view in used_views):
         payload.pop('repr_source_model', None)
     if 'embedding' not in used_views or not payload.get('repr_embedding'):
@@ -1493,5 +1505,9 @@ def migrate_train_config_dict(raw_config: dict[str, Any]):
     if isinstance(config.get('valid_only'), bool):
         config['valid_only'] = -1 if config['valid_only'] else 0
     config['upstreams'] = _canonical_train_upstreams(config)
+    if not config.get('representation_graph') and config.get('repr_combine', 'concat') != 'add':
+        config['representation_graph'] = graph_from_legacy_config(config)
+    if config.get('representation_graph'):
+        config['upstreams'] = upstreams_from_graph(config['representation_graph'])
 
     return {key: config[key] for key in TRAIN_CONFIG_FIELD_NAMES}
