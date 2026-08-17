@@ -46,5 +46,6 @@ and named metrics. Multiple SID decoder targets are trained jointly; their unpre
 metrics are the mean across SID targets. UID, hash, and text currently allow one active instance of
 each type.
 
-SID sources keep their full embedding dimensions because the quantizer autoencoder learns the
-projection. Dense `embedding` representations use their configured PCA reduction independently.
+SID sources keep their original values and full dimensions: they skip both L2 normalization and
+PCA because the quantizer autoencoder learns the projection. Dense `embedding` representations
+retain their configured normalization and PCA reduction independently.

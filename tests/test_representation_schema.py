@@ -208,12 +208,16 @@ def test_content_sid_profile_keeps_dense_content_and_collaborative_inputs_separa
     sid_source = config.compile_config.upstream_for('sid_content')['embedding']['sources'][0]
     catalog = config.representation_graph['representations']
     assert sid_source['model'] == 'llama3'
+    assert sid_source['normalize'] is False
     assert sid_source['reduce_dim'] == 0
+    assert catalog['embedding_content']['embedding']['sources'][0]['normalize'] is True
     assert catalog['embedding_content']['embedding']['sources'][0]['reduce_dim'] == 256
+    assert catalog['embedding_collaborative']['embedding']['sources'][0]['normalize'] is True
     assert catalog['embedding_collaborative']['embedding']['sources'][0]['reduce_dim'] == 64
 
     hybrid = _load_profile('sid-hybrid.yaml')
     hybrid_sources = hybrid.compile_config.upstream_for('sid_hybrid')['embedding']['sources']
+    assert [source['normalize'] for source in hybrid_sources] == [False, False]
     assert [source['reduce_dim'] for source in hybrid_sources] == [0, 0]
 
 

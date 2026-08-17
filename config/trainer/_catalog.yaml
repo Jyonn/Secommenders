@@ -38,7 +38,7 @@ representations:
     type: sid
     sources:
       - model: ${content_embedding_model:llama3}$
-        normalize: true
+        normalize: false
         reduce_dim: 0
         weight: ${content_embedding_weight:1.0}$
     fusion: {method: concat, normalize_output: false}
@@ -83,7 +83,7 @@ representations:
     type: sid
     sources:
       - model: word2vec
-        normalize: true
+        normalize: false
         reduce_dim: 0
         weight: ${collaborative_embedding_weight:1.0}$
         config:
@@ -141,11 +141,11 @@ representations:
     type: sid
     sources:
       - model: ${content_embedding_model:llama3}$
-        normalize: true
+        normalize: false
         reduce_dim: 0
         weight: ${content_embedding_weight:1.0}$
       - model: word2vec
-        normalize: true
+        normalize: false
         reduce_dim: 0
         weight: ${collaborative_embedding_weight:1.0}$
         config:
