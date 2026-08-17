@@ -192,6 +192,22 @@ def test_profiles_use_refconfig_native_multilevel_imports():
     ]
 
 
+def test_content_sid_profile_keeps_dense_content_and_collaborative_inputs_separate():
+    config = _load_profile('sid-content-dual-embedding.yaml')
+
+    assert config.compile_config.representation_names == [
+        'sid_content',
+        'embedding_content',
+        'embedding_collaborative',
+    ]
+    assert config.compile_config.target_names == ['sid_content']
+    assert config.compile_config.names_for_kind('embedding') == [
+        'embedding_content',
+        'embedding_collaborative',
+    ]
+    assert config.compile_config.upstream_for('sid_content')['embedding']['sources'][0]['model'] == 'llama3'
+
+
 def test_multi_sid_profile_keeps_independent_upstreams_and_targets():
     config = _load_profile('sid-multi.yaml')
 
