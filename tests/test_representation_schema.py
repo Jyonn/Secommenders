@@ -273,6 +273,18 @@ def test_multi_sid_profile_keeps_independent_upstreams_and_targets():
     assert set(hybrid.upstreams) == {'sid_content', 'sid_collaborative'}
 
 
+def test_sid_uid_content_embedding_profile_uses_three_input_views():
+    config = _load_profile('sid-uid-content-embedding.yaml')
+
+    assert config.compile_config.representation_names == [
+        'sid_content', 'uid', 'embedding_content',
+    ]
+    assert config.compile_config.target_names == ['sid_content']
+    assert config.representation_pair_bias is True
+    assert set(config.upstreams) == {'sid_content'}
+    assert config.upstreams['sid_content']['embedding']['sources'][0]['model'] == 'llama3'
+
+
 def test_model_initializes_independent_sid_embeddings_and_heads():
     config = _load_profile(
         'sid-multi.yaml',

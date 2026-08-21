@@ -12,6 +12,7 @@ imported values.
 - `uid-hierarchical.yaml`: hierarchical UID decoding.
 - `sid-content.yaml`: SID learned from content embeddings.
 - `sid-content-dual-embedding.yaml`: predicts content SID from content SID, content embedding, and collaborative embedding inputs.
+- `sid-uid-content-embedding.yaml`: predicts Llama-derived SID from UID, Llama-derived SID, and dense Llama embedding inputs; shared representation pair bias is enabled by default.
 - `sid-collaborative.yaml`: SID learned from Word2Vec collaborative embeddings.
 - `sid-hybrid.yaml`: SID generated from content and collaborative embeddings.
 - `sid-multi.yaml`: jointly trains independent content and collaborative SID spaces.

@@ -1,0 +1,18 @@
+$$import: _catalog.yaml
+
+# Three input views of each item: Llama-derived SID, UID, and dense Llama embedding.
+# The decoder predicts the Llama-derived SID.
+model:
+  representation_pair_bias: ${representation_pair_bias:true}$
+
+encoder:
+  representations: [sid_content, uid, embedding_content]
+
+decoder:
+  targets:
+    - representation: sid_content
+      decoding:
+        mode: ${code_decoding:auto}$
+        beam_width: ${code_beam_width:20}$
+        beam_chunk_size: ${code_beam_chunk_size:80}$
+        collision_loss_weight: ${code_collision_loss_weight:0.1}$
