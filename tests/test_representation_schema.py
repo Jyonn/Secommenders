@@ -285,6 +285,16 @@ def test_sid_uid_content_embedding_profile_uses_three_input_views():
     assert config.upstreams['sid_content']['embedding']['sources'][0]['model'] == 'llama3'
 
 
+def test_uid_sid_content_dual_embedding_profile_uses_canonical_target_order():
+    config = _load_profile('uid-sid-content-dual-embedding.yaml')
+
+    assert config.compile_config.target_names == ['sid_content', 'uid']
+    assert config.compile_config.representation_names == [
+        'sid_content', 'uid', 'embedding_content', 'embedding_collaborative',
+    ]
+    assert config.task_type == 'sid+uid'
+
+
 def test_model_initializes_independent_sid_embeddings_and_heads():
     config = _load_profile(
         'sid-multi.yaml',
