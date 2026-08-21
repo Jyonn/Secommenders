@@ -3,7 +3,7 @@ $$import: _catalog.yaml
 # Three input views of each item: Llama-derived SID, UID, and dense Llama embedding.
 # The decoder predicts the Llama-derived SID.
 model:
-  representation_pair_bias: ${representation_pair_bias:true}$
+  representation_pair_bias: ${representation_pair_bias:false}$
 
 encoder:
   representations: [sid_content, uid, embedding_content]

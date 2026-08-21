@@ -280,9 +280,16 @@ def test_sid_uid_content_embedding_profile_uses_three_input_views():
         'sid_content', 'uid', 'embedding_content',
     ]
     assert config.compile_config.target_names == ['sid_content']
-    assert config.representation_pair_bias is True
+    assert config.representation_pair_bias is False
     assert set(config.upstreams) == {'sid_content'}
     assert config.upstreams['sid_content']['embedding']['sources'][0]['model'] == 'llama3'
+
+    biased = _load_profile(
+        'sid-uid-content-embedding.yaml',
+        representation_pair_bias='true',
+    )
+    assert biased.representation_pair_bias is True
+    assert trained_signature_from_config(config) != trained_signature_from_config(biased)
 
 
 def test_uid_sid_content_dual_embedding_profile_uses_canonical_target_order():
