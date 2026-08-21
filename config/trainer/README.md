@@ -23,6 +23,12 @@ imported values.
 - `uid-text.yaml`: UID target with raw text context; requires an LLM backbone.
 
 Only representations referenced by `encoder.representations` or `decoder.targets` participate in artifact SIGNs.
+
+Set `model.representation_pair_bias: true` (or pass
+`--representation_pair_bias true` with the default template) to learn one zero-initialized
+representation-pair attention bias matrix shared by every layer and head. The matrix includes
+one `model` row/column for prompt and separator tokens in addition to the active named
+representations. Enabling it changes the trained SIGN; disabling it preserves existing SIGNs.
 Each active representation receives an independent `<repr:NAME>` marker. Run a profile with:
 
 ```bash

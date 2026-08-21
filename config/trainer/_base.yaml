@@ -7,6 +7,7 @@ model:
   name: ${model}$
   dtype: ${model_dtype:auto}$
   freeze_backbone: ${freeze_backbone:auto}$
+  representation_pair_bias: ${representation_pair_bias:false}$
   max_length: ${model_max_length:0}$
   lora:
     use: ${use_lora:auto}$

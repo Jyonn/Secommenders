@@ -124,6 +124,26 @@ def test_model_renders_independent_markers_for_embedding_instances():
     ]
 
 
+def test_shared_representation_pair_bias_builds_additive_attention_mask():
+    model = SequentialRecModel.__new__(SequentialRecModel)
+    torch.nn.Module.__init__(model)
+    model.representation_pair_bias_enabled = True
+    model.representation_pair_bias = torch.nn.Parameter(torch.zeros(3, 3))
+    model.representation_pair_bias.data[1, 2] = 1.5
+    model.compute_dtype = torch.float32
+
+    attention_mask = torch.tensor([[1, 1, 1]])
+    representation_ids = torch.tensor([[0, 1, 2]])
+    additive = model._representation_attention_mask(attention_mask, representation_ids)
+
+    assert additive.shape == (1, 1, 3, 3)
+    assert additive[0, 0, 1, 2] < -1e20  # Future positions remain causally masked.
+    assert additive[0, 0, 1, 0].item() == 0.0
+    model.representation_pair_bias.data[1, 0] = 1.5
+    additive = model._representation_attention_mask(attention_mask, representation_ids)
+    assert additive[0, 0, 1, 0].item() == pytest.approx(1.5)
+
+
 def test_model_initializes_independent_embedding_tables_and_projections():
     config = _load_profile(
         'embedding-dual.yaml',

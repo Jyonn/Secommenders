@@ -67,6 +67,7 @@ TRAIN_CONFIG_DEFAULTS = {
     'device': None,
     'num_gpus': 1,
     'freeze_backbone': 'auto',
+    'representation_pair_bias': False,
     'uid_decoding': 'flat',
     'uid_cluster_levels': None,
     'uid_cluster_topk': None,
@@ -1247,6 +1248,8 @@ def _config_sign_payload(config: Any):
                 payload.pop(key, None)
     if not payload.get('test_only'):
         payload.pop('load_ckpt', None)
+    if not payload.get('representation_pair_bias'):
+        payload.pop('representation_pair_bias', None)
     return payload
 
 

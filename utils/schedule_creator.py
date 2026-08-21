@@ -402,6 +402,9 @@ class Job:
     def warmup_ratio(self, value: float):
         return self._set_float_arg('warmup_ratio', value)
 
+    def representation_pair_bias(self, value: bool = True):
+        return self._set_arg('representation_pair_bias', bool(value))
+
     def seed(self, value: int):
         return self._set_int_arg('seed', value)
 

@@ -75,6 +75,17 @@ def test_lr_scheduler_and_warmup_participate_in_trained_signature():
     assert trained_signature_from_config(baseline) != trained_signature_from_config(cosine)
 
 
+def test_representation_pair_bias_only_changes_signature_when_enabled():
+    baseline = _sid_train_config('llama3')
+    explicit_disabled = deepcopy(baseline)
+    explicit_disabled['representation_pair_bias'] = False
+    enabled = deepcopy(baseline)
+    enabled['representation_pair_bias'] = True
+
+    assert trained_signature_from_config(baseline) == trained_signature_from_config(explicit_disabled)
+    assert trained_signature_from_config(baseline) != trained_signature_from_config(enabled)
+
+
 def test_legacy_train_config_migrates_with_historical_scheduler_defaults():
     legacy = _sid_train_config('llama3')
     legacy.pop('lr_scheduler', None)

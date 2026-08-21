@@ -67,6 +67,20 @@ class SequentialRecModel(nn.Module):
         hidden_size = self.encoder.hidden_size
         input_embed_dim = getattr(self.encoder, 'input_embed_dim', hidden_size)
         history_repr_names = list(config.compile_config.representation_names)
+        self.representation_pair_bias_enabled = bool(
+            getattr(config, 'representation_pair_bias', False)
+        )
+        self.attention_representation_names = ['model', *history_repr_names]
+        self.attention_representation_to_id = {
+            name: index for index, name in enumerate(self.attention_representation_names)
+        }
+        self.representation_pair_bias = (
+            nn.Parameter(torch.zeros(
+                len(self.attention_representation_names),
+                len(self.attention_representation_names),
+            ))
+            if self.representation_pair_bias_enabled else None
+        )
         history_repr_types = {config.compile_config.representation_kind(name) for name in history_repr_names}
         self.uses_uid_path = 'uid' in history_repr_types or 'uid' in task_types or config.repr_combine == 'add'
         self.uses_sid_path = 'sid' in history_repr_types or 'sid' in task_types
@@ -397,6 +411,47 @@ class SequentialRecModel(nn.Module):
             return uid_embed + content_embed
         raise ValueError(f'Unknown spec kind: {kind}')
 
+    def _embed_specs_with_representation_ids(self, specs):
+        pieces = []
+        representation_ids = []
+        pending_representation = None
+        for kind, value in specs:
+            representation = 'model'
+            if kind == 'type_marker':
+                representation = value if value in self.attention_representation_to_id else 'model'
+                pending_representation = representation if representation != 'model' else None
+            elif pending_representation is not None:
+                representation = pending_representation
+                pending_representation = None
+            elif kind == 'sid' and isinstance(value, tuple):
+                representation = value[0]
+            elif kind == 'embedding' and isinstance(value, tuple):
+                representation = value[0]
+            piece = self._embed_spec(kind, value)
+            pieces.append(piece)
+            representation_id = self.attention_representation_to_id.get(representation, 0)
+            representation_ids.extend([representation_id] * piece.shape[0])
+        return torch.cat(pieces, dim=0), torch.tensor(
+            representation_ids, dtype=torch.long, device=self.device
+        )
+
+    def _representation_attention_mask(self, attention_mask, representation_ids):
+        if not self.representation_pair_bias_enabled:
+            return attention_mask
+        batch_size, seq_len = attention_mask.shape
+        dtype = self.compute_dtype if self.compute_dtype.is_floating_point else torch.float32
+        minimum = torch.finfo(dtype).min
+        causal = torch.triu(
+            torch.full((seq_len, seq_len), minimum, dtype=dtype, device=self.device),
+            diagonal=1,
+        )
+        additive_mask = causal.view(1, 1, seq_len, seq_len).expand(batch_size, 1, -1, -1).clone()
+        additive_mask.masked_fill_(attention_mask[:, None, None, :] == 0, minimum)
+        pair_bias = self.representation_pair_bias[
+            representation_ids[:, :, None], representation_ids[:, None, :]
+        ].to(dtype=dtype)
+        return additive_mask + pair_bias.unsqueeze(1)
+
     def _text_logits(self, hidden_states: torch.Tensor):
         if self.model_token_head is None:
             raise ValueError('text supervision requested but model_token_head is not initialized')
@@ -549,16 +604,22 @@ class SequentialRecModel(nn.Module):
 
     def _build_batch_inputs(self, batch):
         sample_embeddings = []
+        sample_representation_ids = []
         for sample in batch:
             specs = self._build_sample_specs(sample)
-            pieces = [self._embed_spec(kind, value) for kind, value in specs]
-            sample_embeddings.append(torch.cat(pieces, dim=0))
+            embeddings, representation_ids = self._embed_specs_with_representation_ids(specs)
+            sample_embeddings.append(embeddings)
+            sample_representation_ids.append(representation_ids)
 
         padded = pad_sequence(sample_embeddings, batch_first=True)
         padded = padded.to(dtype=self.compute_dtype)
         lengths = torch.tensor([emb.shape[0] for emb in sample_embeddings], dtype=torch.long, device=self.device)
         attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
-        return padded, attention_mask.long(), lengths
+        padded_representation_ids = pad_sequence(sample_representation_ids, batch_first=True)
+        attention_mask = self._representation_attention_mask(
+            attention_mask.long(), padded_representation_ids
+        )
+        return padded, attention_mask, lengths
 
     def ranking_ks(self):
         max_k = (
@@ -577,34 +638,44 @@ class SequentialRecModel(nn.Module):
     def _build_sid_generation_batch_inputs(self, sample, sid_prefixes: list[list[int]], representation=None):
         name = self._resolve_sid_name(representation)
         sample_embeddings = []
+        sample_representation_ids = []
         for sid_prefix in sid_prefixes:
             specs = self._build_sample_specs(sample)
             if sid_prefix:
                 specs.append(('sid', (name, [int(code) for code in sid_prefix])))
-            pieces = [self._embed_spec(kind, value) for kind, value in specs]
-            sample_embeddings.append(torch.cat(pieces, dim=0))
+            embeddings, representation_ids = self._embed_specs_with_representation_ids(specs)
+            sample_embeddings.append(embeddings)
+            sample_representation_ids.append(representation_ids)
 
         padded = pad_sequence(sample_embeddings, batch_first=True)
         padded = padded.to(dtype=self.compute_dtype)
         lengths = torch.tensor([emb.shape[0] for emb in sample_embeddings], dtype=torch.long, device=self.device)
         attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
-        return padded, attention_mask.long(), lengths
+        padded_representation_ids = pad_sequence(sample_representation_ids, batch_first=True)
+        return padded, self._representation_attention_mask(
+            attention_mask.long(), padded_representation_ids
+        ), lengths
 
     def _build_sid_generation_mixed_batch_inputs(self, work_items, representation=None):
         name = self._resolve_sid_name(representation)
         sample_embeddings = []
+        sample_representation_ids = []
         for sample, sid_prefix in work_items:
             specs = self._build_sample_specs(sample)
             if sid_prefix:
                 specs.append(('sid', (name, [int(code) for code in sid_prefix])))
-            pieces = [self._embed_spec(kind, value) for kind, value in specs]
-            sample_embeddings.append(torch.cat(pieces, dim=0))
+            embeddings, representation_ids = self._embed_specs_with_representation_ids(specs)
+            sample_embeddings.append(embeddings)
+            sample_representation_ids.append(representation_ids)
 
         padded = pad_sequence(sample_embeddings, batch_first=True)
         padded = padded.to(dtype=self.compute_dtype)
         lengths = torch.tensor([emb.shape[0] for emb in sample_embeddings], dtype=torch.long, device=self.device)
         attention_mask = torch.arange(padded.shape[1], device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
-        return padded, attention_mask.long(), lengths
+        padded_representation_ids = pad_sequence(sample_representation_ids, batch_first=True)
+        return padded, self._representation_attention_mask(
+            attention_mask.long(), padded_representation_ids
+        ), lengths
 
     def _predict_sid_step_logits(self, sample, sid_prefixes: list[list[int]], slot_index: int, representation=None):
         name = self._resolve_sid_name(representation)
@@ -622,6 +693,8 @@ class SequentialRecModel(nn.Module):
 
     def _sid_kv_cache_supported(self):
         return (
+            not self.representation_pair_bias_enabled
+            and
             isinstance(self.encoder, (LLMSequenceEncoder, ScratchLlamaSequenceEncoder))
             and hasattr(self.encoder, 'forward_with_cache')
             and bool(getattr(self.encoder, 'forward_accepts_use_cache', False))
@@ -1534,10 +1607,14 @@ class SequentialRecModel(nn.Module):
         separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
         sequence_uids = sample['sequence_uids']
         embeddings = []
+        representation_ids = []
         supervision = []
 
-        def append_embedded(tensor: torch.Tensor):
+        def append_embedded(tensor: torch.Tensor, representation='model'):
             embeddings.append(tensor)
+            representation_ids.extend([
+                self.attention_representation_to_id.get(representation, 0)
+            ] * tensor.shape[0])
             return sum(piece.shape[0] for piece in embeddings[:-1]), sum(piece.shape[0] for piece in embeddings) - 1
 
         for item_index, uid in enumerate(sequence_uids):
@@ -1574,6 +1651,7 @@ class SequentialRecModel(nn.Module):
         sample_embeddings = torch.cat(embeddings, dim=0)
         return {
             'inputs_embeds': sample_embeddings,
+            'representation_ids': torch.tensor(representation_ids, dtype=torch.long, device=self.device),
             'supervision': supervision,
         }
 
@@ -1585,11 +1663,15 @@ class SequentialRecModel(nn.Module):
         separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
         sequence_uids = sample['sequence_uids']
         embeddings = []
+        representation_ids = []
         supervision = []
 
-        def append_embedded(tensor: torch.Tensor):
+        def append_embedded(tensor: torch.Tensor, representation='model'):
             start = sum(piece.shape[0] for piece in embeddings)
             embeddings.append(tensor)
+            representation_ids.extend([
+                self.attention_representation_to_id.get(representation, 0)
+            ] * tensor.shape[0])
             return start, start + tensor.shape[0] - 1
 
         for item_index, uid in enumerate(sequence_uids):
@@ -1609,7 +1691,7 @@ class SequentialRecModel(nn.Module):
                 marker_position = None
                 payload_positions = []
                 for kind, value in segment_specs:
-                    start, end = append_embedded(self._embed_spec(kind, value))
+                    start, end = append_embedded(self._embed_spec(kind, value), repr_type)
                     if kind == 'type_marker':
                         marker_position = start
                     else:
@@ -1639,31 +1721,38 @@ class SequentialRecModel(nn.Module):
         sample_embeddings = torch.cat(embeddings, dim=0)
         return {
             'inputs_embeds': sample_embeddings,
+            'representation_ids': torch.tensor(representation_ids, dtype=torch.long, device=self.device),
             'supervision': supervision,
         }
 
     def _build_finetune_sample_inputs_multi(self, sample):
         separator_ids = [int(token_id) for token_id in self.compiled.prompt_main['item_separator_ids']]
         embeddings = []
+        representation_ids = []
         supervision = []
 
-        def append_embedded(tensor: torch.Tensor):
+        def append_embedded(tensor: torch.Tensor, representation='model'):
             start = sum(piece.shape[0] for piece in embeddings)
             embeddings.append(tensor)
+            representation_ids.extend([
+                self.attention_representation_to_id.get(representation, 0)
+            ] * tensor.shape[0])
             return start, start + tensor.shape[0] - 1
 
         for item_index, uid in enumerate(sample['sequence_uids']):
             if item_index > 0 and separator_ids:
                 append_embedded(self._embed_spec('model_tokens', separator_ids))
 
-            marker_position, _ = append_embedded(self._embed_spec('type_marker', self._target_marker_name()))
+            marker_position, _ = append_embedded(
+                self._embed_spec('type_marker', self._target_marker_name())
+            )
             payload_positions = {}
             for task_type in self.config.compile_config.target_names:
                 positions = []
                 for kind, value in self._render_single_view_item(uid, task_type):
                     if kind == 'type_marker':
                         continue
-                    start, end = append_embedded(self._embed_spec(kind, value))
+                    start, end = append_embedded(self._embed_spec(kind, value), task_type)
                     positions.extend(range(start, end + 1))
                 payload_positions[task_type] = positions
 
@@ -1685,7 +1774,7 @@ class SequentialRecModel(nn.Module):
                     alignment_marker = None
                     alignment_positions = []
                     for kind, value in segment_specs:
-                        start, end = append_embedded(self._embed_spec(kind, value))
+                        start, end = append_embedded(self._embed_spec(kind, value), repr_type)
                         if kind == 'type_marker':
                             alignment_marker = start
                         else:
@@ -1703,6 +1792,7 @@ class SequentialRecModel(nn.Module):
 
         return {
             'inputs_embeds': torch.cat(embeddings, dim=0),
+            'representation_ids': torch.tensor(representation_ids, dtype=torch.long, device=self.device),
             'supervision': supervision,
         }
 
@@ -1714,6 +1804,9 @@ class SequentialRecModel(nn.Module):
         padded_embeds = torch.zeros((batch_size, max_len, hidden_size), dtype=self.compute_dtype, device=self.device)
         lengths = torch.tensor([sample['inputs_embeds'].shape[0] for sample in packed_samples], dtype=torch.long, device=self.device)
         attention_mask = torch.arange(max_len, device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
+        padded_representation_ids = torch.zeros(
+            (batch_size, max_len), dtype=torch.long, device=self.device
+        )
         supervision_batch_indices = []
         supervision_positions = []
         supervision_kinds = []
@@ -1725,6 +1818,7 @@ class SequentialRecModel(nn.Module):
         for batch_index, sample in enumerate(packed_samples):
             seq_len = sample['inputs_embeds'].shape[0]
             padded_embeds[batch_index, :seq_len] = sample['inputs_embeds']
+            padded_representation_ids[batch_index, :seq_len] = sample['representation_ids']
             for entry in sample['supervision']:
                 supervision_batch_indices.append(batch_index)
                 supervision_positions.append(int(entry['position']))
@@ -1736,7 +1830,9 @@ class SequentialRecModel(nn.Module):
 
         return (
             padded_embeds,
-            attention_mask.long(),
+            self._representation_attention_mask(
+                attention_mask.long(), padded_representation_ids
+            ),
             lengths,
             {
                 'batch_indices': torch.tensor(supervision_batch_indices, dtype=torch.long, device=self.device),

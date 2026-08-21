@@ -125,6 +125,7 @@ class TrainConfig:
     num_heads: int
     dropout: float
     upstreams: dict
+    representation_pair_bias: bool = False
     representation_graph: Optional[dict] = None
 
     @property
@@ -404,6 +405,13 @@ class TrainConfig:
             device=trainer.device,
             num_gpus=int(getattr(trainer, 'num_gpus', 1)),
             freeze_backbone=str(_get(model, 'freeze_backbone', getattr(trainer, 'freeze_backbone', 'auto'))).lower(),
+            representation_pair_bias=(
+                _get(model, 'representation_pair_bias', False)
+                if isinstance(_get(model, 'representation_pair_bias', False), bool)
+                else function.coerce_bool(
+                    str(_get(model, 'representation_pair_bias', False)).lower(), default=False
+                )
+            ),
             uid_decoding=uid_decoding,
             uid_cluster_levels=uid_cluster_levels,
             uid_cluster_topk=uid_cluster_topk,
@@ -693,6 +701,8 @@ class TrainConfig:
         payload.pop('frequency_breakdown', None)
         payload.pop('frequency_buckets', None)
         payload.pop('overwrite', None)
+        if not self.representation_pair_bias:
+            payload.pop('representation_pair_bias', None)
         payload.pop('code_beam_chunk_size', None)
         payload.pop('multi_candidate_topk', None)
         payload.pop('multi_output_topk', None)

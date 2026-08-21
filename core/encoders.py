@@ -135,7 +135,11 @@ class LLMSequenceEncoder(nn.Module):
         return self.model.get_input_embeddings().weight
 
     def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor | None = None):
-        use_no_grad = self.freeze_backbone and not self.use_lora
+        use_no_grad = (
+            self.freeze_backbone
+            and not self.use_lora
+            and not attention_mask.requires_grad
+        )
         model_kwargs = dict(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
@@ -214,7 +218,11 @@ class LLMSequenceEncoder(nn.Module):
     ):
         if not self.forward_accepts_use_cache:
             return self.forward(inputs_embeds, attention_mask, position_ids=position_ids), None
-        use_no_grad = self.freeze_backbone and not self.use_lora
+        use_no_grad = (
+            self.freeze_backbone
+            and not self.use_lora
+            and not attention_mask.requires_grad
+        )
         model_kwargs = dict(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
