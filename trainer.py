@@ -405,7 +405,7 @@ class Trainer:
         )
         self.model_core.sid_decoding_timing_enabled = profile_sid_decoding
         total_loss = 0.0
-        total_batches = 0
+        total_samples = 0
         metric_sums = {}
         accumulate_batch = max(1, self.config.accumulate_batch)
 
@@ -452,14 +452,15 @@ class Trainer:
                     optimizer.zero_grad()
 
             raw_loss = float(rec_loss.item())
-            total_loss += raw_loss
-            total_batches += 1
+            batch_size = len(batch)
+            total_loss += raw_loss * batch_size
+            total_samples += batch_size
             for key, value in metrics.items():
                 if isinstance(value, str):
                     continue
                 if key.startswith('sid_time_'):
                     continue
-                metric_sums[key] = metric_sums.get(key, 0.0) + float(value)
+                metric_sums[key] = metric_sums.get(key, 0.0) + float(value) * batch_size
 
             if profile_sid_decoding:
                 timing_parts = [
@@ -476,10 +477,10 @@ class Trainer:
             iterator.set_postfix(self._progress_postfix(is_train=is_train, raw_loss=raw_loss, metrics=metrics))
 
         if self.distributed and distributed_reduce:
-            totals = torch.tensor([total_loss, float(total_batches)], dtype=torch.float64, device=self.device)
+            totals = torch.tensor([total_loss, float(total_samples)], dtype=torch.float64, device=self.device)
             dist.all_reduce(totals, op=dist.ReduceOp.SUM)
             total_loss = float(totals[0].item())
-            total_batches = int(totals[1].item())
+            total_samples = int(totals[1].item())
             reduced_metric_sums = {}
             for key, value in metric_sums.items():
                 tensor = torch.tensor(float(value), dtype=torch.float64, device=self.device)
@@ -489,11 +490,11 @@ class Trainer:
 
         self.model_core.sid_decoding_timing_enabled = False
         self.model_core.enable_ranking_trace(False)
-        summary = {'loss': total_loss / max(total_batches, 1)}
+        summary = {'loss': total_loss / max(total_samples, 1)}
         if is_train:
             summary['learning_rate'] = float(optimizer.param_groups[0]['lr'])
         for key, value in metric_sums.items():
-            summary[key] = value / max(total_batches, 1)
+            summary[key] = value / max(total_samples, 1)
         if frequency_accumulator is not None and self.is_main_process:
             breakdown = frequency_accumulator.summary()
             breakdown.update({
@@ -556,6 +557,7 @@ class Trainer:
             'test_metric_name': self._default_ranking_metric(),
             'declared_test_metrics': self.config.metrics,
             'test_metrics': test_metrics,
+            'sample_counts': self._compiled_sample_counts(),
             'world_size': self.world_size,
             'status': 'finished',
             'finished_at': _utc_now_iso(),
@@ -577,6 +579,7 @@ class Trainer:
             'test_metric_name': self._default_ranking_metric(),
             'declared_test_metrics': self.config.metrics,
             'valid_metrics': valid_metrics,
+            'sample_counts': self._compiled_sample_counts(),
             'world_size': self.world_size,
             'status': 'valid_only_finished',
             'finished_at': _utc_now_iso(),
@@ -605,6 +608,7 @@ class Trainer:
             'checkpoint_main_metric': checkpoint.get('main_metric') if checkpoint else None,
             'checkpoint_valid_metrics': checkpoint.get('valid_metrics') if checkpoint else None,
             'test_metrics': test_metrics,
+            'sample_counts': self._compiled_sample_counts(),
             'world_size': self.world_size,
             'status': 'test_only_finished',
             'finished_at': _utc_now_iso(),
@@ -616,6 +620,13 @@ class Trainer:
             meta['analysis'] = analysis
         self.meta_path.write_text(json.dumps(meta, indent=2) + '\n')
         self._pnt(f'wrote test-only meta to {self.meta_path}')
+
+    def _compiled_sample_counts(self):
+        return {
+            'finetune': int(len(self.compiled.finetune)),
+            'valid': int(len(self.compiled.valid)),
+            'test': int(len(self.compiled.test)),
+        }
 
     def _load_meta_stub(self):
         if self.meta_path.exists():

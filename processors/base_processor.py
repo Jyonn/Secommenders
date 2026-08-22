@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from typing import Callable, Optional, Union
+import uuid
 
 import pandas as pd
 from pigmento import pnt
@@ -287,6 +288,7 @@ class Processor:
 
         return (
             processed_meta.get('version') == self.VER
+            and bool(processed_meta.get('build_id'))
             and processed_meta.get('formatted_version') == formatted_meta.get('version')
             and counts_match
             and float(processed_meta.get('valid_ratio', -1)) == float(self.VALID_RATIO)
@@ -349,6 +351,7 @@ class Processor:
         meta = {
             'version': self.VER,
             'stage': 'processed',
+            'build_id': uuid.uuid4().hex,
             'dataset': self.get_name(),
             'formatted_dir': str(self.formatted_dir),
             'num_test': int(self.num_test),

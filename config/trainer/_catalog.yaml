@@ -205,7 +205,7 @@ representations:
     type: embedding
     sources:
       - model: ${content_embedding_model:llama3}$
-        normalize: true
+        normalize: ${content_embedding_normalize:false}$
         reduce_dim: ${content_embedding_dim:256}$
         weight: ${content_embedding_weight:1.0}$
 

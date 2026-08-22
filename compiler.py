@@ -248,6 +248,13 @@ class Compiler:
             return False
         if meta.get('config') != self.config.config_dict:
             return False
+        processed_build_id = self._processed_build_id()
+        if not processed_build_id or meta.get('processed_build_id') != processed_build_id:
+            pnt(
+                f'compiled cache processed identity mismatch at {self.output_dir}; '
+                'rebuilding samples from current processed artifacts'
+            )
+            return False
         required_item_view_paths = [self.item_views_dir / 'uid.parquet']
         if self.requires_view('text'):
             required_item_view_paths.append(self.item_views_dir / 'text.parquet')
@@ -281,6 +288,15 @@ class Compiler:
             self.samples_dir / 'test.parquet',
         ] + required_item_view_paths
         return all(path.exists() for path in required_paths)
+
+    def _processed_build_id(self):
+        path = self.store.processed_dir() / 'meta.json'
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text()).get('build_id')
+        except (json.JSONDecodeError, OSError):
+            return None
 
     def validate(self):
         repr_types = [self.config.representation_kind(name) for name in self.config.representation_names]
@@ -364,12 +380,13 @@ class Compiler:
             f'textlen={self.config.item_text_max_tokens} alignment=always '
             f'model.maxlen={self.config.model_max_length or "native"}'
         )
+        # Validate/rebuild processed artifacts before trusting compiled samples.
+        self.load_processor()
         if self.is_cached():
             pnt(f'compiled dataset cached at {self.output_dir}')
             return
 
         pnt(f'cache miss, compiling into {self.output_dir}')
-        self.load_processor()
         self.init_backbone()
         self.build_vocab_and_prompts()
         self.build_item_views()
@@ -1378,6 +1395,7 @@ class Compiler:
                 'model_kind': self.backbone.kind,
                 'model_max_length': int(self.backbone.max_length),
                 'processed_dir': str(self.store.processed_dir()),
+                'processed_build_id': self._processed_build_id(),
                 'sid_quantizer_name': primary_sid_stats.get('quantizer_name'),
                 'sid_quantizer_scheme': primary_sid_stats.get('quantizer_scheme'),
                 'sid_recommended_decoding': primary_sid_stats.get('recommended_decoding'),
