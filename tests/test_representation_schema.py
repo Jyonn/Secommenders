@@ -231,13 +231,18 @@ def test_content_sid_profile_keeps_dense_content_and_collaborative_inputs_separa
     assert sid_source['normalize'] is False
     assert sid_source['reduce_dim'] == 0
     assert catalog['embedding_content']['embedding']['sources'][0]['normalize'] is False
-    assert catalog['embedding_content']['embedding']['sources'][0]['reduce_dim'] == 256
+    assert catalog['embedding_content']['embedding']['sources'][0]['reduce_dim'] == 0
     assert catalog['embedding_collaborative']['embedding']['sources'][0]['normalize'] is True
     assert catalog['embedding_collaborative']['embedding']['sources'][0]['reduce_dim'] == 64
 
-    normalized = _load_profile('embedding-dual.yaml', content_embedding_normalize='true')
+    normalized = _load_profile(
+        'embedding-dual.yaml',
+        content_embedding_normalize='true',
+        content_embedding_dim=256,
+    )
     normalized_catalog = normalized.representation_graph['representations']
     assert normalized_catalog['embedding_content']['embedding']['sources'][0]['normalize'] is True
+    assert normalized_catalog['embedding_content']['embedding']['sources'][0]['reduce_dim'] == 256
 
     hybrid = _load_profile('sid-hybrid.yaml')
     hybrid_sources = hybrid.compile_config.upstream_for('sid_hybrid')['embedding']['sources']

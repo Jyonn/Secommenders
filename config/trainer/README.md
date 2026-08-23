@@ -55,5 +55,6 @@ metrics are the mean across SID targets. UID, hash, and text currently allow one
 each type.
 
 SID sources keep their original values and full dimensions: they skip both L2 normalization and
-PCA because the quantizer autoencoder learns the projection. Dense `embedding` representations
-retain their configured normalization and PCA reduction independently.
+PCA because the quantizer autoencoder learns the projection. Dense content `embedding`
+representations now also default to raw, full-dimensional values; enable normalization or PCA
+explicitly with `content_embedding_normalize` and `content_embedding_dim`.
