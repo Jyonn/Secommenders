@@ -849,7 +849,7 @@ class Compiler:
         for item_id, row in zip(item_ids, codes):
             row = np.atleast_1d(row).tolist()
             base_sid = tuple(index * codebook_size + int(code) for index, code in enumerate(row))
-            base_sid_groups.setdefault(base_sid, []).append(item_id)
+            base_sid_groups.setdefault(base_sid, []).append(str(item_id))
 
         max_collision_size = max((len(group) for group in base_sid_groups.values()), default=1)
         collision_vocab_size = max_collision_size
@@ -897,10 +897,11 @@ class Compiler:
         missing = []
         ordered_values = []
         for item_id in tqdm(self.uid_raw_items, desc='sid align', leave=False):
-            if item_id not in sid_map:
+            item_key = str(item_id)
+            if item_key not in sid_map:
                 missing.append(item_id)
                 continue
-            ordered_values.append(sid_map[item_id])
+            ordered_values.append(sid_map[item_key])
         if missing:
             raise ValueError(f'{len(missing)} items missing sid codes, first missing item: {missing[0]}')
 
@@ -959,7 +960,7 @@ class Compiler:
                 slot_offsets[token_index] + slot_value_maps[token_index][int(code)]
                 for token_index, code in enumerate(packed)
             )
-            base_hash_groups.setdefault(base_hash, []).append(item_id)
+            base_hash_groups.setdefault(base_hash, []).append(str(item_id))
 
         max_collision_size = max((len(group) for group in base_hash_groups.values()), default=1)
         collision_vocab_size = max_collision_size
@@ -1013,10 +1014,11 @@ class Compiler:
         missing = []
         ordered_values = []
         for item_id in tqdm(self.uid_raw_items, desc='hash align', leave=False):
-            if item_id not in hash_map:
+            item_key = str(item_id)
+            if item_key not in hash_map:
                 missing.append(item_id)
                 continue
-            ordered_values.append(hash_map[item_id])
+            ordered_values.append(hash_map[item_key])
         if missing:
             raise ValueError(f'{len(missing)} items missing hash codes, first missing item: {missing[0]}')
 
