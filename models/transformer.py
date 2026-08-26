@@ -43,14 +43,14 @@ class ScratchTokenizer:
         return tokens
 
 
-class ScratchTransformerBackbone(BaseBackbone):
+class ScratchLlamaBackbone(BaseBackbone):
     def __init__(self, model_name: str, texts: list[str], max_length_override: int | None = None):
         super().__init__(model_name, max_length_override=max_length_override)
         self.tokenizer = ScratchTokenizer(texts)
 
     @property
     def kind(self):
-        return 'scratchlegacy'
+        return 'scratch'
 
     @property
     def native_max_length(self):
@@ -89,9 +89,3 @@ class ScratchTransformerBackbone(BaseBackbone):
         else:
             target_len = 1
         return len(prompt['history_prefix_ids']) + history_len + separator_len + len(prompt['query_prefix_ids']) + target_len
-
-
-class ScratchLlamaBackbone(ScratchTransformerBackbone):
-    @property
-    def kind(self):
-        return 'scratch'

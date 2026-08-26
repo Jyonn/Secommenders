@@ -662,19 +662,10 @@ class Trainer:
         # them to their historical defaults so we only reject true structural
         # mismatches instead of schema evolution.
         normalized_saved_config = dict(saved_config)
-        state_keys = set((checkpoint.get('model_state_dict') or {}).keys())
-        saved_legacy_scratch = any(
-            key.startswith(('encoder.encoder.', 'encoder.position_embedding.'))
-            for key in state_keys
+        normalized_saved_config.setdefault(
+            'representation_pair_bias_mode',
+            'shared' if normalized_saved_config.get('representation_pair_bias') else 'none',
         )
-        if saved_legacy_scratch and normalized_saved_config.get('model') == 'scratch':
-            if self.config.model == 'scratchlegacy':
-                normalized_saved_config['model'] = 'scratchlegacy'
-            elif self.config.model == 'scratch':
-                raise ValueError(
-                    'Checkpoint uses the former PyTorch scratch Transformer; '
-                    'load it with --model scratchlegacy instead'
-                )
         normalized_saved_config.setdefault('uid_decoding', 'flat')
         normalized_saved_config.setdefault('uid_cluster_levels', None)
         normalized_saved_config.setdefault('uid_cluster_topk', None)
@@ -684,6 +675,7 @@ class Trainer:
             'freeze_backbone', 'uid_decoding', 'uid_cluster_levels', 'uid_cluster_topk',
             'code_decoding', 'model_dtype', 'use_lora', 'lora_rank', 'lora_alpha', 'lora_dropout',
             'lora_layers', 'hidden_size', 'num_layers', 'num_heads', 'dropout',
+            'representation_pair_bias', 'representation_pair_bias_mode',
         ]
         if self.config.representation_graph:
             for key in (

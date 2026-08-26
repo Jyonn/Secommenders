@@ -68,6 +68,7 @@ TRAIN_CONFIG_DEFAULTS = {
     'num_gpus': 1,
     'freeze_backbone': 'auto',
     'representation_pair_bias': False,
+    'representation_pair_bias_mode': 'none',
     'uid_decoding': 'flat',
     'uid_cluster_levels': None,
     'uid_cluster_topk': None,
@@ -1180,8 +1181,6 @@ def _config_sign_payload(config: Any):
     payload = {key: normalized.get(key) for key in TRAIN_CONFIG_FIELD_NAMES if key in normalized}
     if payload.get('model') == 'scratch':
         payload['backbone_architecture'] = 'llama-v1'
-    elif payload.get('model') == 'scratchlegacy':
-        payload['backbone_architecture'] = 'torch-transformer-v1'
     payload.pop('device', None)
     batch_size = int(payload.get('batch_size') or TRAIN_CONFIG_DEFAULTS['batch_size'])
     accumulate_batch = int(payload.get('accumulate_batch') or TRAIN_CONFIG_DEFAULTS['accumulate_batch'])
@@ -1248,6 +1247,14 @@ def _config_sign_payload(config: Any):
                 payload.pop(key, None)
     if not payload.get('test_only'):
         payload.pop('load_ckpt', None)
+    raw_pair_bias_mode = str(payload.get('representation_pair_bias_mode') or 'none').lower().replace('-', '_')
+    if raw_pair_bias_mode in {'auto', 'none'} and payload.get('representation_pair_bias'):
+        raw_pair_bias_mode = 'shared'
+    payload['representation_pair_bias'] = raw_pair_bias_mode != 'none'
+    if raw_pair_bias_mode in {'none', 'shared'}:
+        payload.pop('representation_pair_bias_mode', None)
+    else:
+        payload['representation_pair_bias_mode'] = raw_pair_bias_mode
     if not payload.get('representation_pair_bias'):
         payload.pop('representation_pair_bias', None)
     return payload

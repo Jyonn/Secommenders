@@ -52,6 +52,10 @@ class LLMSequenceEncoder(nn.Module):
         self.model_dtype = torch_dtype or next(base_model.parameters()).dtype
         self.compute_dtype = self.model_dtype
         self.total_hidden_layers = function.resolve_hidden_layer_count(base_model.config)
+        attention_config = getattr(base_model.config, 'text_config', None) or base_model.config
+        self.num_attention_heads = int(getattr(attention_config, 'num_attention_heads', 0) or 0)
+        if self.num_attention_heads <= 0:
+            raise ValueError(f'Cannot resolve attention head count from model config for {model_key}')
         self.forward_accepts_use_cache = False
 
         if self.use_lora:
@@ -274,49 +278,5 @@ class ScratchLlamaSequenceEncoder(LLMSequenceEncoder):
         self.model_dtype = torch.float32
         self.compute_dtype = torch.float32
         self.total_hidden_layers = int(num_layers)
+        self.num_attention_heads = int(num_heads)
         self.forward_accepts_use_cache = True
-
-
-class ScratchSequenceEncoder(nn.Module):
-    def __init__(self, vocab_size: int, hidden_size: int, num_layers: int, num_heads: int, dropout: float, max_length: int):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.input_embed_dim = hidden_size
-        self.compute_dtype = torch.float32
-        self.num_heads = num_heads
-        self.token_embedding = nn.Embedding(vocab_size, hidden_size)
-        self.position_embedding = nn.Embedding(max_length, hidden_size)
-        layer = nn.TransformerEncoderLayer(
-            d_model=hidden_size,
-            nhead=num_heads,
-            dim_feedforward=hidden_size * 4,
-            dropout=dropout,
-            activation='gelu',
-            batch_first=True,
-        )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
-
-    def embed_model_tokens(self, token_ids: torch.Tensor):
-        return self.token_embedding(token_ids)
-
-    def get_input_embedding_weight(self):
-        return self.token_embedding.weight
-
-    def forward(self, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor, position_ids: torch.Tensor | None = None):
-        batch_size, seq_len, _ = inputs_embeds.shape
-        if position_ids is None:
-            positions = torch.arange(seq_len, device=inputs_embeds.device).unsqueeze(0).expand(batch_size, -1)
-        else:
-            positions = position_ids
-        hidden = inputs_embeds + self.position_embedding(positions)
-        src_key_padding_mask = None
-        if attention_mask.dim() == 4:
-            causal_mask = attention_mask.squeeze(1).repeat_interleave(self.num_heads, dim=0)
-        else:
-            causal_mask = torch.triu(
-                torch.ones(seq_len, seq_len, device=inputs_embeds.device, dtype=torch.bool),
-                diagonal=1,
-            )
-            src_key_padding_mask = attention_mask == 0
-        hidden = self.encoder(hidden, mask=causal_mask, src_key_padding_mask=src_key_padding_mask)
-        return hidden

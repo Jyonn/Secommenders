@@ -85,6 +85,17 @@ def test_representation_pair_bias_only_changes_signature_when_enabled():
     assert trained_signature_from_config(baseline) == trained_signature_from_config(explicit_disabled)
     assert trained_signature_from_config(baseline) != trained_signature_from_config(enabled)
 
+    shared_mode = deepcopy(baseline)
+    shared_mode.update({
+        'representation_pair_bias': True,
+        'representation_pair_bias_mode': 'shared',
+    })
+    head_mode = deepcopy(baseline)
+    head_mode['representation_pair_bias_mode'] = 'head'
+
+    assert trained_signature_from_config(enabled) == trained_signature_from_config(shared_mode)
+    assert trained_signature_from_config(enabled) != trained_signature_from_config(head_mode)
+
 
 def test_legacy_train_config_migrates_with_historical_scheduler_defaults():
     legacy = _sid_train_config('llama3')

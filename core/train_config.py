@@ -40,6 +40,25 @@ from utils.representation_schema import (
 )
 
 
+REPRESENTATION_PAIR_BIAS_MODES = {'none', 'shared', 'head', 'layer', 'layer_head'}
+
+
+def normalize_representation_pair_bias_mode(value, enabled=False):
+    if value is None or str(value).strip().lower() in {'', 'auto'}:
+        return 'shared' if enabled else 'none'
+    if isinstance(value, bool):
+        return 'shared' if value else 'none'
+    normalized = str(value).strip().lower().replace('-', '_')
+    if normalized in {'true', '1', 'yes', 'on'}:
+        return 'shared'
+    if normalized in {'false', '0', 'no', 'off'}:
+        return 'none'
+    if normalized not in REPRESENTATION_PAIR_BIAS_MODES:
+        supported = ', '.join(sorted(REPRESENTATION_PAIR_BIAS_MODES))
+        raise ValueError(f'unsupported representation_pair_bias_mode={value!r}; expected one of: {supported}')
+    return normalized
+
+
 def _get(obj, name, default=None):
     try:
         value = getattr(obj, name)
@@ -126,6 +145,7 @@ class TrainConfig:
     dropout: float
     upstreams: dict
     representation_pair_bias: bool = False
+    representation_pair_bias_mode: str = 'none'
     representation_graph: Optional[dict] = None
 
     @property
@@ -374,6 +394,16 @@ class TrainConfig:
             raise ValueError('trainer.multi.fused_loss_weight is reserved for a future differentiable fusion loss')
         if len(task_types) > 1 and multi_loss_values['consistency'] > 0:
             raise ValueError('trainer.multi.consistency_weight is reserved for a future cross-head consistency loss')
+        raw_pair_bias = _get(model, 'representation_pair_bias', False)
+        pair_bias_enabled = (
+            raw_pair_bias
+            if isinstance(raw_pair_bias, bool)
+            else function.coerce_bool(str(raw_pair_bias).lower(), default=False)
+        )
+        pair_bias_mode = normalize_representation_pair_bias_mode(
+            _get(model, 'representation_pair_bias_mode', 'auto'),
+            enabled=pair_bias_enabled,
+        )
         config = cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
@@ -405,13 +435,8 @@ class TrainConfig:
             device=trainer.device,
             num_gpus=int(getattr(trainer, 'num_gpus', 1)),
             freeze_backbone=str(_get(model, 'freeze_backbone', getattr(trainer, 'freeze_backbone', 'auto'))).lower(),
-            representation_pair_bias=(
-                _get(model, 'representation_pair_bias', False)
-                if isinstance(_get(model, 'representation_pair_bias', False), bool)
-                else function.coerce_bool(
-                    str(_get(model, 'representation_pair_bias', False)).lower(), default=False
-                )
-            ),
+            representation_pair_bias=pair_bias_mode != 'none',
+            representation_pair_bias_mode=pair_bias_mode,
             uid_decoding=uid_decoding,
             uid_cluster_levels=uid_cluster_levels,
             uid_cluster_topk=uid_cluster_topk,
@@ -476,11 +501,11 @@ class TrainConfig:
         encoder_types = [catalog[name]['type'] for name in encoder_names]
         history_types = list(dict.fromkeys(target_types + encoder_types))
         model_name = str((raw.get('model') or {}).get('name') or '').strip().lower()
-        if model_name not in {'scratch', 'scratchlegacy'} and model_utils.match(model_name) is None:
+        if model_name != 'scratch' and model_utils.match(model_name) is None:
             raise ValueError(
-                f'unknown model {model_name!r}; use scratch/scratchlegacy or configure the alias in .model'
+                f'unknown model {model_name!r}; use scratch or configure the alias in .model'
             )
-        if model_name in {'scratch', 'scratchlegacy'} and 'text' in encoder_types:
+        if model_name == 'scratch' and 'text' in encoder_types:
             raise ValueError('scratch backbones do not support text representations')
 
         upstreams = {}
@@ -688,8 +713,6 @@ class TrainConfig:
         payload = asdict(self)
         if self.model == 'scratch':
             payload['backbone_architecture'] = 'llama-v1'
-        elif self.model == 'scratchlegacy':
-            payload['backbone_architecture'] = 'torch-transformer-v1'
         payload.pop('device', None)
         payload['effective_batch_size'] = self.effective_batch_size
         payload.pop('seed', None)
@@ -703,6 +726,10 @@ class TrainConfig:
         payload.pop('overwrite', None)
         if not self.representation_pair_bias:
             payload.pop('representation_pair_bias', None)
+        # Shared is the historical enabled behavior, so omitting its explicit
+        # mode preserves existing artifact identities.
+        if self.representation_pair_bias_mode in {'none', 'shared'}:
+            payload.pop('representation_pair_bias_mode', None)
         payload.pop('code_beam_chunk_size', None)
         payload.pop('multi_candidate_topk', None)
         payload.pop('multi_output_topk', None)

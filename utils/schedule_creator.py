@@ -24,12 +24,12 @@ def _validate_compile_config(config: CompileConfig):
 
     repr_types = config.repr_types
     model_name = str(config.model).strip().lower()
-    is_scratch_model = model_name in {'scratch', 'scratchlegacy'}
+    is_scratch_model = model_name == 'scratch'
 
     if not is_scratch_model and model_utils.match(model_name) is None:
         raise ValueError(
             f'Unknown model "{config.model}". '
-            f'Use "scratch"/"scratchlegacy" for a scratch backbone or add the model alias to .model'
+            f'Use "scratch" for a scratch backbone or add the model alias to .model'
         )
     if not repr_types:
         raise ValueError('repr.type must contain at least one representation')
@@ -404,6 +404,12 @@ class Job:
 
     def representation_pair_bias(self, value: bool = True):
         return self._set_arg('representation_pair_bias', bool(value))
+
+    def representation_pair_bias_mode(self, value: str):
+        mode = str(value).strip().lower().replace('-', '_')
+        if mode not in {'none', 'shared', 'head'}:
+            raise ValueError('representation_pair_bias_mode expects none, shared, or head')
+        return self._set_arg('representation_pair_bias_mode', mode)
 
     def seed(self, value: int):
         return self._set_int_arg('seed', value)

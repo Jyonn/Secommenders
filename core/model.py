@@ -11,7 +11,7 @@ from models import build_backbone
 from utils import function
 from utils.multi_decoding import fuse_candidate_scores, normalize_candidate_scores, uid_frequency_gate
 
-from .encoders import LLMSequenceEncoder, ScratchLlamaSequenceEncoder, ScratchSequenceEncoder
+from .encoders import LLMSequenceEncoder, ScratchLlamaSequenceEncoder
 from .uid_hierarchy import UIDHierarchyArtifacts
 
 
@@ -52,34 +52,41 @@ class SequentialRecModel(nn.Module):
                 dropout=config.dropout,
                 max_length=compiled.meta['model_max_length'],
             )
-        elif compiled.model_kind == 'scratchlegacy':
-            self.encoder = ScratchSequenceEncoder(
-                vocab_size=compiled.model_vocab_size,
-                hidden_size=config.hidden_size,
-                num_layers=config.num_layers,
-                num_heads=config.num_heads,
-                dropout=config.dropout,
-                max_length=compiled.meta['model_max_length'],
-            )
         else:
             raise ValueError(f'Unsupported compiled model kind: {compiled.model_kind}')
 
         hidden_size = self.encoder.hidden_size
         input_embed_dim = getattr(self.encoder, 'input_embed_dim', hidden_size)
         history_repr_names = list(config.compile_config.representation_names)
-        self.representation_pair_bias_enabled = bool(
-            getattr(config, 'representation_pair_bias', False)
-        )
+        self.representation_pair_bias_mode = str(
+            getattr(config, 'representation_pair_bias_mode', 'shared')
+            if getattr(config, 'representation_pair_bias', False)
+            else 'none'
+        ).lower()
+        self.representation_pair_bias_enabled = self.representation_pair_bias_mode != 'none'
+        if self.representation_pair_bias_mode in {'layer', 'layer_head'}:
+            raise NotImplementedError(
+                f'representation_pair_bias_mode={self.representation_pair_bias_mode} requires '
+                'per-layer encoder injection, which is not implemented yet; use shared or head'
+            )
+        if self.representation_pair_bias_mode not in {'none', 'shared', 'head'}:
+            raise ValueError(f'unsupported representation pair bias mode: {self.representation_pair_bias_mode}')
         self.attention_representation_names = ['model', *history_repr_names]
         self.attention_representation_to_id = {
             name: index for index, name in enumerate(self.attention_representation_names)
         }
+        num_representations = len(self.attention_representation_names)
+        if self.representation_pair_bias_mode == 'shared':
+            pair_bias_shape = (num_representations, num_representations)
+        elif self.representation_pair_bias_mode == 'head':
+            num_attention_heads = int(getattr(self.encoder, 'num_attention_heads', 0) or 0)
+            if num_attention_heads <= 0:
+                raise ValueError('head pair bias requires the encoder attention-head count')
+            pair_bias_shape = (num_attention_heads, num_representations, num_representations)
+        else:
+            pair_bias_shape = None
         self.representation_pair_bias = (
-            nn.Parameter(torch.zeros(
-                len(self.attention_representation_names),
-                len(self.attention_representation_names),
-            ))
-            if self.representation_pair_bias_enabled else None
+            nn.Parameter(torch.zeros(pair_bias_shape)) if pair_bias_shape else None
         )
         history_repr_types = {config.compile_config.representation_kind(name) for name in history_repr_names}
         self.uses_uid_path = 'uid' in history_repr_types or 'uid' in task_types or config.repr_combine == 'add'
@@ -447,10 +454,23 @@ class SequentialRecModel(nn.Module):
         )
         additive_mask = causal.view(1, 1, seq_len, seq_len).expand(batch_size, 1, -1, -1).clone()
         additive_mask.masked_fill_(attention_mask[:, None, None, :] == 0, minimum)
-        pair_bias = self.representation_pair_bias[
-            representation_ids[:, :, None], representation_ids[:, None, :]
-        ].to(dtype=dtype)
-        return additive_mask + pair_bias.unsqueeze(1)
+        query_ids = representation_ids[:, :, None]
+        key_ids = representation_ids[:, None, :]
+        mode = getattr(
+            self,
+            'representation_pair_bias_mode',
+            'head' if self.representation_pair_bias.ndim == 3 else 'shared',
+        )
+        if mode == 'shared':
+            pair_bias = self.representation_pair_bias[query_ids, key_ids].unsqueeze(1)
+        elif mode == 'head':
+            num_representations = self.representation_pair_bias.shape[-1]
+            pair_indices = query_ids * num_representations + key_ids
+            flattened = self.representation_pair_bias.flatten(start_dim=1)
+            pair_bias = flattened[:, pair_indices].permute(1, 0, 2, 3)
+        else:
+            raise RuntimeError(f'unhandled representation pair bias mode: {mode}')
+        return additive_mask + pair_bias.to(dtype=dtype)
 
     def _text_logits(self, hidden_states: torch.Tensor):
         if self.model_token_head is None:

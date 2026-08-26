@@ -1,11 +1,11 @@
 from models.base import BaseBackbone
 from models.llm import LLMBackbone
 from models.registry import build_backbone
-from models.transformer import ScratchTransformerBackbone
+from models.transformer import ScratchLlamaBackbone
 
 __all__ = [
     'BaseBackbone',
     'LLMBackbone',
-    'ScratchTransformerBackbone',
+    'ScratchLlamaBackbone',
     'build_backbone',
 ]

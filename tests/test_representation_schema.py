@@ -144,6 +144,26 @@ def test_shared_representation_pair_bias_builds_additive_attention_mask():
     assert additive[0, 0, 1, 0].item() == pytest.approx(1.5)
 
 
+def test_per_head_representation_pair_bias_builds_distinct_head_masks():
+    model = SequentialRecModel.__new__(SequentialRecModel)
+    torch.nn.Module.__init__(model)
+    model.representation_pair_bias_enabled = True
+    model.representation_pair_bias_mode = 'head'
+    model.representation_pair_bias = torch.nn.Parameter(torch.zeros(2, 3, 3))
+    model.representation_pair_bias.data[0, 1, 0] = 1.5
+    model.representation_pair_bias.data[1, 1, 0] = -0.5
+    model.compute_dtype = torch.float32
+
+    attention_mask = torch.tensor([[1, 1, 1]])
+    representation_ids = torch.tensor([[0, 1, 2]])
+    additive = model._representation_attention_mask(attention_mask, representation_ids)
+
+    assert additive.shape == (1, 2, 3, 3)
+    assert additive[0, 0, 1, 0].item() == pytest.approx(1.5)
+    assert additive[0, 1, 1, 0].item() == pytest.approx(-0.5)
+    assert additive[0, :, 1, 2].max() < -1e20
+
+
 def test_model_initializes_independent_embedding_tables_and_projections():
     config = _load_profile(
         'embedding-dual.yaml',
@@ -298,7 +318,16 @@ def test_sid_uid_content_embedding_profile_uses_three_input_views():
         representation_pair_bias='true',
     )
     assert biased.representation_pair_bias is True
+    assert biased.representation_pair_bias_mode == 'shared'
     assert trained_signature_from_config(config) != trained_signature_from_config(biased)
+
+    per_head = _load_profile(
+        'sid-uid-content-embedding.yaml',
+        representation_pair_bias_mode='head',
+    )
+    assert per_head.representation_pair_bias is True
+    assert per_head.representation_pair_bias_mode == 'head'
+    assert trained_signature_from_config(per_head) != trained_signature_from_config(biased)
 
 
 def test_uid_sid_content_dual_embedding_profile_uses_canonical_target_order():

@@ -390,9 +390,6 @@ Each experiment can be written in either of two forms:
 Scratch backbones:
 
 - `scratch` uses a randomly initialized Llama causal Transformer. Its hidden size, layer count, head count, dropout, and maximum length come from the existing scratch configuration, and sequential SID decoding supports KV-cache.
-- `scratchlegacy` preserves the former `torch.nn.TransformerEncoder` implementation for reproducing old experiments. Old scratch checkpoints must be loaded with `--model scratchlegacy`.
-
-Running `python scripts/init_artifact_registry.py --stage trained` reports old scratch artifacts as `migration=scratch->scratchlegacy`. Rerun with `--apply` to rewrite their metadata, move them under the scratchlegacy signature, and retain the old signature as an alias. Artifacts carrying the new `backbone_architecture=llama-v1` identity marker remain under `scratch`.
 
 Early stopping accepts one or more main metrics. Separate multiple metrics with `|`, for example `--main_metric 'loss|ndcg@10'`. Loss metrics are minimized, other metrics are maximized, and an improvement in any listed metric resets patience and saves the current checkpoint. Metadata records both the first metric's backward-compatible `best_valid_metric` and the complete `best_valid_metrics` mapping.
 
@@ -403,7 +400,6 @@ The current scheduler uses these rules:
 - scheduler state persists terminal failures; pass `--retry-failed` when restarting a plan to reset only failed experiments to pending while leaving completed experiments untouched
 - initial batch size cap by model name:
   - `scratch -> 64`
-  - `scratchlegacy -> 64`
   - `qwen35th08b -> 32`
   - `qwen35th4b -> 16`
   - `llama3 -> 4`

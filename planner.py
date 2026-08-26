@@ -124,6 +124,7 @@ GROUPS = {
     'model': {
         'model_dtype': 'auto',
         'freeze_backbone': 'auto',
+        'representation_pair_bias_mode': 'none',
         'use_lora': 'auto',
         'lora_rank': 8,
         'lora_alpha': 32,
@@ -849,7 +850,7 @@ def _group_pairs_by_target(representation_pairs: list[str]):
 
 
 def _is_scratch_model(model: str):
-    return str(model).strip().lower() in {'scratch', 'scratchlegacy'}
+    return str(model).strip().lower() == 'scratch'
 
 
 def _models_compatible_with_history(models: list[str], history: tuple[str, ...]):

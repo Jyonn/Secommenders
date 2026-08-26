@@ -2,7 +2,7 @@ from typing import Optional
 
 from models.base import BaseBackbone
 from models.llm import LLMBackbone
-from models.transformer import ScratchLlamaBackbone, ScratchTransformerBackbone
+from models.transformer import ScratchLlamaBackbone
 from utils import model as model_utils
 
 
@@ -13,9 +13,7 @@ def build_backbone(model_name: str, item_texts: list[str], max_length_override: 
         return LLMBackbone(normalized_name, model_key, max_length_override=max_length_override)
     if normalized_name == 'scratch':
         return ScratchLlamaBackbone(normalized_name, item_texts, max_length_override=max_length_override)
-    if normalized_name == 'scratchlegacy':
-        return ScratchTransformerBackbone(normalized_name, item_texts, max_length_override=max_length_override)
     raise ValueError(
         f'Unknown model "{model_name}". '
-        f'Use "scratch"/"scratchlegacy" for a scratch backbone or configure a mapped model name in .model'
+        f'Use "scratch" for a scratch backbone or configure a mapped model name in .model'
     )

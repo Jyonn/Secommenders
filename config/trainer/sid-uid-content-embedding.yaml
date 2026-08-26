@@ -4,6 +4,7 @@ $$import: _catalog.yaml
 # The decoder predicts the Llama-derived SID.
 model:
   representation_pair_bias: ${representation_pair_bias:false}$
+  representation_pair_bias_mode: ${representation_pair_bias_mode:auto}$
 
 encoder:
   representations: [sid_content, uid, embedding_content]

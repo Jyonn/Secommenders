@@ -4,9 +4,8 @@ from core.encoders import LLMSequenceEncoder, ScratchLlamaSequenceEncoder
 from models import build_backbone
 
 
-def test_scratch_names_select_new_and_legacy_architectures():
+def test_scratch_selects_llama_architecture():
     assert build_backbone('scratch', []).kind == 'scratch'
-    assert build_backbone('scratchlegacy', []).kind == 'scratchlegacy'
 
 
 def test_scratch_llama_supports_configurable_depth_and_kv_cache():
