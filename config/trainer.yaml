@@ -181,14 +181,11 @@ decoder:
     candidate_topk: ${multi_candidate_topk:100}$
     output_topk: ${multi_output_topk:20}$
     fusion:
-      mode: ${multi_fusion:frequency}$
+      mode: ${multi_fusion:fixed}$
       uid_weight: ${multi_uid_weight:0.5}$
       score_normalization: ${multi_score_normalization:zscore}$
       temperature_uid: ${multi_temperature_uid:1.0}$
       temperature_sid: ${multi_temperature_sid:1.0}$
-    frequency:
-      threshold: ${multi_frequency_threshold:5}$
-      smoothing: ${multi_frequency_smoothing:2.0}$
 
 trainer:
   batch_size: ${batch_size:64}$

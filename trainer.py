@@ -145,8 +145,8 @@ class Trainer:
                 f'multi decoding tasks={self.config.task_type} fusion={self.config.multi_fusion} '
                 f'candidate_topk={self.config.multi_candidate_topk} output_topk={self.config.multi_output_topk} '
                 f'normalization={self.config.multi_score_normalization} '
-                f'frequency_threshold={self.config.multi_frequency_threshold:g} '
-                f'frequency_smoothing={self.config.multi_frequency_smoothing:g}'
+                f'uid_weight={self.config.multi_uid_weight:g} '
+                f'temperatures=uid:{self.config.multi_temperature_uid:g},sid:{self.config.multi_temperature_sid:g}'
             )
         elif self.config.task_type == 'uid' and self.config.uid_decoding == 'hierarchical':
             self._pnt(

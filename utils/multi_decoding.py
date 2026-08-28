@@ -19,50 +19,32 @@ def normalize_candidate_scores(scores, mode):
     return {uid: value for uid, value in zip(scores, values)}
 
 
-def uid_frequency_gate(frequency, *, mode, uid_weight, threshold, smoothing):
-    if mode == 'fixed':
-        return float(uid_weight)
-    if mode != 'frequency':
-        raise ValueError(f'unsupported multi fusion mode: {mode}')
-    logit = (
-        math.log1p(max(0.0, float(frequency)))
-        - math.log1p(max(0.0, float(threshold)))
-    ) / float(smoothing)
-    return 1.0 / (1.0 + math.exp(-logit))
-
-
 def fuse_candidate_scores(
     uid_scores,
     sid_scores,
-    frequencies,
     *,
-    fusion_mode,
     uid_weight,
     score_normalization,
     temperature_uid,
     temperature_sid,
-    frequency_threshold,
-    frequency_smoothing,
     output_topk,
 ):
     candidates = set(uid_scores) | set(sid_scores)
     if not candidates:
         return []
+    if set(uid_scores) != candidates or set(sid_scores) != candidates:
+        missing_uid = len(candidates - set(uid_scores))
+        missing_sid = len(candidates - set(sid_scores))
+        raise ValueError(
+            'multi-decoder fusion requires every candidate to have complete scores; '
+            f'missing uid={missing_uid} sid={missing_sid}'
+        )
     uid_scores = normalize_candidate_scores(uid_scores, score_normalization)
     sid_scores = normalize_candidate_scores(sid_scores, score_normalization)
-    uid_floor = min(uid_scores.values(), default=0.0) - 1.0
-    sid_floor = min(sid_scores.values(), default=0.0) - 1.0
     ranked = []
     for uid in candidates:
-        gate = uid_frequency_gate(
-            frequencies.get(uid, 0),
-            mode=fusion_mode,
-            uid_weight=uid_weight,
-            threshold=frequency_threshold,
-            smoothing=frequency_smoothing,
-        )
-        uid_score = uid_scores.get(uid, uid_floor) / float(temperature_uid)
-        sid_score = sid_scores.get(uid, sid_floor) / float(temperature_sid)
-        ranked.append((int(uid), gate * uid_score + (1.0 - gate) * sid_score))
+        uid_score = uid_scores[uid] / float(temperature_uid)
+        sid_score = sid_scores[uid] / float(temperature_sid)
+        ranked.append((int(uid), float(uid_weight) * uid_score + (1.0 - float(uid_weight)) * sid_score))
     ranked.sort(key=lambda item: (item[1], -item[0]), reverse=True)
     return ranked[:int(output_topk)]

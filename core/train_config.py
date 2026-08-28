@@ -126,8 +126,6 @@ class TrainConfig:
     multi_score_normalization: str
     multi_temperature_uid: float
     multi_temperature_sid: float
-    multi_frequency_threshold: float
-    multi_frequency_smoothing: float
     multi_uid_loss_weight: float
     multi_sid_loss_weight: float
     multi_fused_loss_weight: float
@@ -194,7 +192,6 @@ class TrainConfig:
         decoder_sid = _get(decoder, 'sid')
         decoder_multi = _get(decoder, 'multi')
         multi_fusion = _get(decoder_multi, 'fusion')
-        multi_frequency = _get(decoder_multi, 'frequency')
         trainer_multi = _get(trainer, 'multi')
         uid_decoding = str(_get(decoder_uid, 'mode', getattr(trainer, 'uid_decoding', 'flat'))).strip().lower()
         uid_cluster_topk = normalize_optional_string(_get(decoder_uid, 'topk', getattr(trainer, 'uid_cluster_topk', None)))
@@ -367,9 +364,9 @@ class TrainConfig:
         multi_output_topk = int(_get(decoder_multi, 'output_topk', 20))
         if multi_candidate_topk <= 0 or multi_output_topk <= 0:
             raise ValueError('decoder.multi candidate_topk and output_topk must be positive')
-        multi_fusion_mode = str(_get(multi_fusion, 'mode', 'frequency')).strip().lower()
-        if multi_fusion_mode not in {'fixed', 'frequency'}:
-            raise ValueError('decoder.multi.fusion.mode must be fixed or frequency')
+        multi_fusion_mode = str(_get(multi_fusion, 'mode', 'fixed')).strip().lower()
+        if multi_fusion_mode != 'fixed':
+            raise ValueError('decoder.multi.fusion.mode currently supports fixed only')
         multi_score_normalization = str(_get(multi_fusion, 'score_normalization', 'zscore')).strip().lower()
         if multi_score_normalization not in {'none', 'zscore', 'minmax'}:
             raise ValueError('decoder.multi.fusion.score_normalization must be none, zscore, or minmax')
@@ -380,9 +377,6 @@ class TrainConfig:
         multi_temperature_sid = float(_get(multi_fusion, 'temperature_sid', 1.0))
         if multi_temperature_uid <= 0 or multi_temperature_sid <= 0:
             raise ValueError('decoder.multi fusion temperatures must be positive')
-        multi_frequency_smoothing = float(_get(multi_frequency, 'smoothing', 2.0))
-        if multi_frequency_smoothing <= 0:
-            raise ValueError('decoder.multi.frequency.smoothing must be positive')
         multi_loss_values = {
             'uid': float(_get(trainer_multi, 'uid_loss_weight', 1.0)),
             'sid': float(_get(trainer_multi, 'sid_loss_weight', 1.0)),
@@ -468,8 +462,6 @@ class TrainConfig:
             multi_score_normalization=multi_score_normalization,
             multi_temperature_uid=multi_temperature_uid,
             multi_temperature_sid=multi_temperature_sid,
-            multi_frequency_threshold=float(_get(multi_frequency, 'threshold', 5)),
-            multi_frequency_smoothing=multi_frequency_smoothing,
             multi_uid_loss_weight=multi_loss_values['uid'],
             multi_sid_loss_weight=multi_loss_values['sid'],
             multi_fused_loss_weight=multi_loss_values['fused'],
@@ -569,7 +561,7 @@ class TrainConfig:
                 'candidate_topk': 100,
                 'output_topk': 20,
                 'fusion': {
-                    'mode': 'frequency', 'uid_weight': 0.5, 'score_normalization': 'zscore',
+                    'mode': 'fixed', 'uid_weight': 0.5, 'score_normalization': 'zscore',
                     'temperature_uid': 1.0, 'temperature_sid': 1.0,
                 },
                 'frequency': {'threshold': 5, 'smoothing': 2.0},

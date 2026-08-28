@@ -1,10 +1,40 @@
 import unittest
+import torch
+import torch.nn.functional as F
+
+from core.model import SequentialRecModel
 from utils.compile import CompileConfig, canonicalize_task_type
 from utils.artifact_identity import migrate_train_config_dict, trained_spec_from_config
-from utils.multi_decoding import fuse_candidate_scores, uid_frequency_gate
+from utils.multi_decoding import fuse_candidate_scores
 
 
 class MultiDecodingTests(unittest.TestCase):
+    def test_sequential_sid_rescores_every_union_candidate_with_teacher_forcing(self):
+        model = SequentialRecModel.__new__(SequentialRecModel)
+        torch.nn.Module.__init__(model)
+        model.dummy_parameter = torch.nn.Parameter(torch.zeros(1))
+        item_codes = torch.tensor([[0, 2], [1, 3]], dtype=torch.long)
+        model._resolve_sid_name = lambda representation=None: 'sid_content'
+        model._sid_item_codes = lambda representation=None: item_codes
+        model._mask_sid_logits_for_slots = lambda logits, slots, representation=None: logits
+
+        def predict(sample, prefixes, slot_index, representation=None):
+            if slot_index == 0:
+                return torch.tensor([[2.0, 1.0, 0.0, 0.0]])
+            rows = []
+            for prefix in prefixes:
+                rows.append([0.0, 0.0, 3.0, 1.0] if prefix == [0] else [0.0, 0.0, 1.0, 3.0])
+            return torch.tensor(rows)
+
+        model._predict_sid_step_logits = predict
+        scores = model._score_sequential_sid_candidates({}, [0, 1], 'sid_content')
+
+        slot0 = F.log_softmax(torch.tensor([2.0, 1.0, 0.0, 0.0]), dim=-1)
+        slot1_for_zero = F.log_softmax(torch.tensor([0.0, 0.0, 3.0, 1.0]), dim=-1)
+        slot1_for_one = F.log_softmax(torch.tensor([0.0, 0.0, 1.0, 3.0]), dim=-1)
+        self.assertAlmostEqual(scores[0], float(slot0[0] + slot1_for_zero[2]), places=6)
+        self.assertAlmostEqual(scores[1], float(slot0[1] + slot1_for_one[3]), places=6)
+
     def test_task_order_is_canonical(self):
         self.assertEqual(canonicalize_task_type('uid+sid'), 'sid+uid')
         self.assertEqual(canonicalize_task_type('sid+uid'), 'sid+uid')
@@ -25,32 +55,30 @@ class MultiDecodingTests(unittest.TestCase):
         self.assertEqual(config.task_types, ['sid', 'uid'])
         self.assertEqual(config.used_views, {'sid', 'uid'})
 
-    def test_frequency_gate_prefers_sid_for_cold_and_uid_for_warm(self):
-        kwargs = dict(mode='frequency', uid_weight=0.5, threshold=5, smoothing=0.5)
-        self.assertLess(uid_frequency_gate(0, **kwargs), 0.5)
-        self.assertGreater(uid_frequency_gate(100, **kwargs), 0.5)
-
-    def test_fixed_fusion_is_frequency_independent(self):
-        kwargs = dict(mode='fixed', uid_weight=0.5, threshold=5, smoothing=0.5)
-        self.assertEqual(uid_frequency_gate(0, **kwargs), 0.5)
-        self.assertEqual(uid_frequency_gate(100, **kwargs), 0.5)
-
-    def test_frequency_fusion_can_select_sid_cold_and_uid_warm_items(self):
+    def test_fixed_fusion_combines_complete_candidate_scores(self):
         ranked = fuse_candidate_scores(
             uid_scores={0: -5.0, 1: 5.0},
             sid_scores={0: 5.0, 1: -5.0},
-            frequencies={0: 0, 1: 100},
-            fusion_mode='frequency',
             uid_weight=0.5,
             score_normalization='zscore',
             temperature_uid=1.0,
             temperature_sid=1.0,
-            frequency_threshold=5,
-            frequency_smoothing=0.5,
             output_topk=2,
         )
         self.assertEqual({uid for uid, _ in ranked}, {0, 1})
-        self.assertTrue(all(score > 0 for _, score in ranked))
+        self.assertTrue(all(score == 0 for _, score in ranked))
+
+    def test_fusion_rejects_candidates_without_complete_scores(self):
+        with self.assertRaisesRegex(ValueError, 'complete scores'):
+            fuse_candidate_scores(
+                uid_scores={0: 1.0, 1: 0.5},
+                sid_scores={0: 1.0},
+                uid_weight=0.5,
+                score_normalization='none',
+                temperature_uid=1.0,
+                temperature_sid=1.0,
+                output_topk=2,
+            )
 
     def test_registry_migration_omits_multi_defaults_for_single_task(self):
         migrated = migrate_train_config_dict({

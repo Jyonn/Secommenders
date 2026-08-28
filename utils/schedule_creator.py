@@ -527,12 +527,6 @@ class Job:
     def multi_uid_weight(self, value: float):
         return self._set_float_arg('multi_uid_weight', value)
 
-    def multi_frequency_threshold(self, value: float):
-        return self._set_float_arg('multi_frequency_threshold', value)
-
-    def multi_frequency_smoothing(self, value: float):
-        return self._set_float_arg('multi_frequency_smoothing', value)
-
     def model_dtype(self, value: str):
         return self._set_string_arg('model_dtype', value, lower=True)
 

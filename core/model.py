@@ -9,7 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from models import build_backbone
 from utils import function
-from utils.multi_decoding import fuse_candidate_scores, normalize_candidate_scores, uid_frequency_gate
+from utils.multi_decoding import fuse_candidate_scores, normalize_candidate_scores
 
 from .encoders import LLMSequenceEncoder, ScratchLlamaSequenceEncoder
 from .uid_hierarchy import UIDHierarchyArtifacts
@@ -1208,34 +1208,54 @@ class SequentialRecModel(nn.Module):
             result['sid_kv_diagnostic'] = ' | '.join(self._sid_kv_diagnostics) or 'no KV-cache diagnostic recorded'
         return result
 
-    def _multi_uid_gate(self, uid: int):
-        frequency = float(self.item_target_frequencies[int(uid)].item())
-        return uid_frequency_gate(
-            frequency,
-            mode=self.config.multi_fusion,
-            uid_weight=self.config.multi_uid_weight,
-            threshold=self.config.multi_frequency_threshold,
-            smoothing=self.config.multi_frequency_smoothing,
-        )
+    def _multi_uid_weight(self):
+        return float(self.config.multi_uid_weight)
 
     def _fuse_multi_candidates(self, uid_scores: dict[int, float], sid_scores: dict[int, float]):
-        frequencies = {
-            int(uid): float(self.item_target_frequencies[int(uid)].item())
-            for uid in set(uid_scores) | set(sid_scores)
-        }
         return fuse_candidate_scores(
             uid_scores,
             sid_scores,
-            frequencies,
-            fusion_mode=self.config.multi_fusion,
             uid_weight=self.config.multi_uid_weight,
             score_normalization=self.config.multi_score_normalization,
             temperature_uid=self.config.multi_temperature_uid,
             temperature_sid=self.config.multi_temperature_sid,
-            frequency_threshold=self.config.multi_frequency_threshold,
-            frequency_smoothing=self.config.multi_frequency_smoothing,
             output_topk=self.config.multi_output_topk,
         )
+
+    def _score_sequential_sid_candidates(self, sample, candidate_uids, representation=None):
+        """Teacher-force complete SID sequences for every candidate in the union."""
+        name = self._resolve_sid_name(representation)
+        ordered_uids = [int(uid) for uid in candidate_uids]
+        if not ordered_uids:
+            return {}
+        item_codes = self._sid_item_codes(name)
+        candidate_index = torch.tensor(ordered_uids, dtype=torch.long, device=item_codes.device)
+        candidate_codes = item_codes.index_select(0, candidate_index).to(device=self.device)
+        scores = torch.zeros(len(ordered_uids), dtype=torch.float32, device=self.device)
+
+        for slot_index in range(candidate_codes.shape[1]):
+            prefixes = [tuple(int(code) for code in row[:slot_index].tolist()) for row in candidate_codes]
+            unique_prefixes = list(dict.fromkeys(prefixes))
+            prefix_rows = {prefix: index for index, prefix in enumerate(unique_prefixes)}
+            logits = self._predict_sid_step_logits(
+                sample,
+                [list(prefix) for prefix in unique_prefixes],
+                slot_index,
+                name,
+            )
+            slot_indices = torch.full(
+                (len(unique_prefixes),), slot_index, dtype=torch.long, device=self.device,
+            )
+            log_probs = F.log_softmax(
+                self._mask_sid_logits_for_slots(logits, slot_indices, name).float(), dim=-1,
+            )
+            row_indices = torch.tensor(
+                [prefix_rows[prefix] for prefix in prefixes], dtype=torch.long, device=self.device,
+            )
+            labels = candidate_codes[:, slot_index].long()
+            scores = scores + log_probs[row_indices, labels]
+
+        return {uid: float(score) for uid, score in zip(ordered_uids, scores.tolist())}
 
     def _compute_multi_ranking_metrics(self, pooled: torch.Tensor, batch, sid_representations=None):
         if sid_representations is None or isinstance(sid_representations, str):
@@ -1246,12 +1266,14 @@ class SequentialRecModel(nn.Module):
         uid_logits = self._uid_logits(pooled).float()
         uid_values, uid_indices = torch.topk(uid_logits, k=candidate_topk, dim=-1)
 
-        scores_by_representation = []
+        retrieval_by_representation = []
+        parallel_scores_by_representation = []
         for sid_name in sid_representations:
             if self._sid_decoding_mode(sid_name) == 'parallel':
                 semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled, sid_name)
+                full_scores = semantic_scores + collision_scores
                 sid_values, sid_indices = torch.topk(
-                    semantic_scores + collision_scores,
+                    full_scores,
                     k=candidate_topk,
                     dim=-1,
                 )
@@ -1262,6 +1284,7 @@ class SequentialRecModel(nn.Module):
                     }
                     for indices, values in zip(sid_indices, sid_values)
                 ]
+                parallel_scores_by_representation.append(full_scores)
             else:
                 beams_by_sample = self._beam_search_sid_items_batch_with_kv_cache(batch, sid_name)
                 if beams_by_sample is None:
@@ -1273,40 +1296,49 @@ class SequentialRecModel(nn.Module):
                     }
                     for beams in beams_by_sample
                 ]
-            scores_by_representation.append(per_sample)
-
-        sid_scores_by_sample = []
-        for sample_index in range(len(batch)):
-            normalized = [
-                normalize_candidate_scores(
-                    per_representation[sample_index],
-                    self.config.multi_score_normalization,
-                )
-                for per_representation in scores_by_representation
-            ]
-            candidates = set().union(*(scores.keys() for scores in normalized))
-            floors = [min(scores.values(), default=0.0) - 1.0 for scores in normalized]
-            sid_scores_by_sample.append({
-                uid: sum(scores.get(uid, floor) for scores, floor in zip(normalized, floors)) / len(normalized)
-                for uid in candidates
-            })
+                parallel_scores_by_representation.append(None)
+            retrieval_by_representation.append(per_sample)
 
         ks = self.ranking_ks()
         totals = self._init_ranking_totals(ks)
-        totals['multi_uid_gate_mean'] = 0.0
+        totals['multi_uid_weight'] = 0.0
         totals['multi_candidates'] = 0.0
-        for batch_index, (sample, per_sid) in enumerate(zip(batch, sid_scores_by_sample)):
+        for batch_index, sample in enumerate(batch):
+            candidates = set(int(uid) for uid in uid_indices[batch_index].tolist())
+            for per_representation in retrieval_by_representation:
+                candidates.update(per_representation[batch_index])
+            ordered_candidates = sorted(candidates)
             per_uid = {
-                int(uid): float(score)
-                for uid, score in zip(uid_indices[batch_index].tolist(), uid_values[batch_index].tolist())
+                uid: float(uid_logits[batch_index, uid].item())
+                for uid in ordered_candidates
             }
-            for uid in per_sid:
-                per_uid.setdefault(uid, float(uid_logits[batch_index, uid].item()))
+
+            complete_sid_scores = []
+            for sid_name, parallel_scores in zip(
+                sid_representations, parallel_scores_by_representation,
+            ):
+                if parallel_scores is None:
+                    scores = self._score_sequential_sid_candidates(
+                        sample, ordered_candidates, sid_name,
+                    )
+                else:
+                    scores = {
+                        uid: float(parallel_scores[batch_index, uid].item())
+                        for uid in ordered_candidates
+                    }
+                complete_sid_scores.append(normalize_candidate_scores(
+                    scores, self.config.multi_score_normalization,
+                ))
+
+            per_sid = {
+                uid: sum(scores[uid] for scores in complete_sid_scores) / len(complete_sid_scores)
+                for uid in ordered_candidates
+            }
             fused = self._fuse_multi_candidates(per_uid, per_sid)
             ranked_uids = [uid for uid, _ in fused]
-            totals['multi_candidates'] += float(len(set(per_uid) | set(per_sid)))
+            totals['multi_candidates'] += float(len(ordered_candidates))
             if ranked_uids:
-                totals['multi_uid_gate_mean'] += sum(self._multi_uid_gate(uid) for uid in ranked_uids) / len(ranked_uids)
+                totals['multi_uid_weight'] += self._multi_uid_weight()
             self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)
         batch_size = max(len(batch), 1)
         return {key: value / batch_size for key, value in totals.items()}
