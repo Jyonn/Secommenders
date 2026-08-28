@@ -146,6 +146,7 @@ class TrainConfig:
     upstreams: dict
     representation_pair_bias: bool = False
     representation_pair_bias_mode: str = 'none'
+    representation_pair_bias_residual_scale: float = 0.1
     representation_graph: Optional[dict] = None
 
     @property
@@ -404,6 +405,11 @@ class TrainConfig:
             _get(model, 'representation_pair_bias_mode', 'auto'),
             enabled=pair_bias_enabled,
         )
+        pair_bias_residual_scale = float(
+            _get(model, 'representation_pair_bias_residual_scale', 0.1)
+        )
+        if pair_bias_residual_scale < 0:
+            raise ValueError('representation_pair_bias_residual_scale must be non-negative')
         config = cls(
             data=data_config.name.lower(),
             model=model.name.lower(),
@@ -437,6 +443,7 @@ class TrainConfig:
             freeze_backbone=str(_get(model, 'freeze_backbone', getattr(trainer, 'freeze_backbone', 'auto'))).lower(),
             representation_pair_bias=pair_bias_mode != 'none',
             representation_pair_bias_mode=pair_bias_mode,
+            representation_pair_bias_residual_scale=pair_bias_residual_scale,
             uid_decoding=uid_decoding,
             uid_cluster_levels=uid_cluster_levels,
             uid_cluster_topk=uid_cluster_topk,
@@ -730,6 +737,7 @@ class TrainConfig:
         # mode preserves existing artifact identities.
         if self.representation_pair_bias_mode in {'none', 'shared'}:
             payload.pop('representation_pair_bias_mode', None)
+            payload.pop('representation_pair_bias_residual_scale', None)
         payload.pop('code_beam_chunk_size', None)
         payload.pop('multi_candidate_topk', None)
         payload.pop('multi_output_topk', None)

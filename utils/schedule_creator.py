@@ -411,6 +411,12 @@ class Job:
             raise ValueError('representation_pair_bias_mode expects none, shared, or head')
         return self._set_arg('representation_pair_bias_mode', mode)
 
+    def representation_pair_bias_residual_scale(self, value: float):
+        scale = float(value)
+        if scale < 0:
+            raise ValueError('representation_pair_bias_residual_scale must be non-negative')
+        return self._set_float_arg('representation_pair_bias_residual_scale', scale)
+
     def seed(self, value: int):
         return self._set_int_arg('seed', value)
 

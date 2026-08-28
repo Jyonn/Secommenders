@@ -149,9 +149,12 @@ def test_per_head_representation_pair_bias_builds_distinct_head_masks():
     torch.nn.Module.__init__(model)
     model.representation_pair_bias_enabled = True
     model.representation_pair_bias_mode = 'head'
-    model.representation_pair_bias = torch.nn.Parameter(torch.zeros(2, 3, 3))
-    model.representation_pair_bias.data[0, 1, 0] = 1.5
-    model.representation_pair_bias.data[1, 1, 0] = -0.5
+    model.representation_pair_bias = torch.nn.Parameter(torch.zeros(3, 3))
+    model.representation_pair_bias.data[1, 0] = 0.5
+    model.representation_pair_bias_head_residual = torch.nn.Parameter(torch.zeros(2, 3, 3))
+    model.representation_pair_bias_head_residual.data[0, 1, 0] = 1.0
+    model.representation_pair_bias_head_residual.data[1, 1, 0] = -1.0
+    model.representation_pair_bias_residual_scale = 0.25
     model.compute_dtype = torch.float32
 
     attention_mask = torch.tensor([[1, 1, 1]])
@@ -159,8 +162,8 @@ def test_per_head_representation_pair_bias_builds_distinct_head_masks():
     additive = model._representation_attention_mask(attention_mask, representation_ids)
 
     assert additive.shape == (1, 2, 3, 3)
-    assert additive[0, 0, 1, 0].item() == pytest.approx(1.5)
-    assert additive[0, 1, 1, 0].item() == pytest.approx(-0.5)
+    assert additive[0, 0, 1, 0].item() == pytest.approx(0.75)
+    assert additive[0, 1, 1, 0].item() == pytest.approx(0.25)
     assert additive[0, :, 1, 2].max() < -1e20
 
 
@@ -327,6 +330,7 @@ def test_sid_uid_content_embedding_profile_uses_three_input_views():
     )
     assert per_head.representation_pair_bias is True
     assert per_head.representation_pair_bias_mode == 'head'
+    assert per_head.representation_pair_bias_residual_scale == pytest.approx(0.1)
     assert trained_signature_from_config(per_head) != trained_signature_from_config(biased)
 
 

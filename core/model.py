@@ -76,18 +76,24 @@ class SequentialRecModel(nn.Module):
             name: index for index, name in enumerate(self.attention_representation_names)
         }
         num_representations = len(self.attention_representation_names)
-        if self.representation_pair_bias_mode == 'shared':
+        self.representation_pair_bias_head_residual = None
+        self.representation_pair_bias_residual_scale = float(
+            getattr(config, 'representation_pair_bias_residual_scale', 0.1)
+        )
+        if self.representation_pair_bias_mode in {'shared', 'head'}:
             pair_bias_shape = (num_representations, num_representations)
-        elif self.representation_pair_bias_mode == 'head':
-            num_attention_heads = int(getattr(self.encoder, 'num_attention_heads', 0) or 0)
-            if num_attention_heads <= 0:
-                raise ValueError('head pair bias requires the encoder attention-head count')
-            pair_bias_shape = (num_attention_heads, num_representations, num_representations)
         else:
             pair_bias_shape = None
         self.representation_pair_bias = (
             nn.Parameter(torch.zeros(pair_bias_shape)) if pair_bias_shape else None
         )
+        if self.representation_pair_bias_mode == 'head':
+            num_attention_heads = int(getattr(self.encoder, 'num_attention_heads', 0) or 0)
+            if num_attention_heads <= 0:
+                raise ValueError('head pair bias requires the encoder attention-head count')
+            self.representation_pair_bias_head_residual = nn.Parameter(torch.zeros(
+                num_attention_heads, num_representations, num_representations,
+            ))
         history_repr_types = {config.compile_config.representation_kind(name) for name in history_repr_names}
         self.uses_uid_path = 'uid' in history_repr_types or 'uid' in task_types or config.repr_combine == 'add'
         self.uses_sid_path = 'sid' in history_repr_types or 'sid' in task_types
@@ -461,13 +467,16 @@ class SequentialRecModel(nn.Module):
             'representation_pair_bias_mode',
             'head' if self.representation_pair_bias.ndim == 3 else 'shared',
         )
+        global_bias = self.representation_pair_bias[query_ids, key_ids].unsqueeze(1)
         if mode == 'shared':
-            pair_bias = self.representation_pair_bias[query_ids, key_ids].unsqueeze(1)
+            pair_bias = global_bias
         elif mode == 'head':
-            num_representations = self.representation_pair_bias.shape[-1]
+            residual = self.representation_pair_bias_head_residual
+            num_representations = residual.shape[-1]
             pair_indices = query_ids * num_representations + key_ids
-            flattened = self.representation_pair_bias.flatten(start_dim=1)
-            pair_bias = flattened[:, pair_indices].permute(1, 0, 2, 3)
+            flattened = residual.flatten(start_dim=1)
+            head_residual = flattened[:, pair_indices].permute(1, 0, 2, 3)
+            pair_bias = global_bias + self.representation_pair_bias_residual_scale * head_residual
         else:
             raise RuntimeError(f'unhandled representation pair bias mode: {mode}')
         return additive_mask + pair_bias.to(dtype=dtype)

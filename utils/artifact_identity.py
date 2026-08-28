@@ -69,6 +69,8 @@ TRAIN_CONFIG_DEFAULTS = {
     'freeze_backbone': 'auto',
     'representation_pair_bias': False,
     'representation_pair_bias_mode': 'none',
+    # None identifies head checkpoints created before global+residual bias.
+    'representation_pair_bias_residual_scale': None,
     'uid_decoding': 'flat',
     'uid_cluster_levels': None,
     'uid_cluster_topk': None,
@@ -1253,6 +1255,7 @@ def _config_sign_payload(config: Any):
     payload['representation_pair_bias'] = raw_pair_bias_mode != 'none'
     if raw_pair_bias_mode in {'none', 'shared'}:
         payload.pop('representation_pair_bias_mode', None)
+        payload.pop('representation_pair_bias_residual_scale', None)
     else:
         payload['representation_pair_bias_mode'] = raw_pair_bias_mode
     if not payload.get('representation_pair_bias'):

@@ -151,6 +151,7 @@ model:
   freeze_backbone: ${freeze_backbone:auto}$
   representation_pair_bias: ${representation_pair_bias:false}$
   representation_pair_bias_mode: ${representation_pair_bias_mode:auto}$
+  representation_pair_bias_residual_scale: ${representation_pair_bias_residual_scale:0.1}$
   max_length: ${model_max_length:0}$
   lora:
     use: ${use_lora:auto}$

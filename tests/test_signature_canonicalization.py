@@ -96,6 +96,14 @@ def test_representation_pair_bias_only_changes_signature_when_enabled():
     assert trained_signature_from_config(enabled) == trained_signature_from_config(shared_mode)
     assert trained_signature_from_config(enabled) != trained_signature_from_config(head_mode)
 
+    changed_scale = deepcopy(head_mode)
+    changed_scale['representation_pair_bias_residual_scale'] = 0.2
+    assert trained_signature_from_config(head_mode) != trained_signature_from_config(changed_scale)
+
+    residual_head = deepcopy(head_mode)
+    residual_head['representation_pair_bias_residual_scale'] = 0.1
+    assert trained_signature_from_config(head_mode) != trained_signature_from_config(residual_head)
+
 
 def test_legacy_train_config_migrates_with_historical_scheduler_defaults():
     legacy = _sid_train_config('llama3')

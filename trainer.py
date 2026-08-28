@@ -666,6 +666,7 @@ class Trainer:
             'representation_pair_bias_mode',
             'shared' if normalized_saved_config.get('representation_pair_bias') else 'none',
         )
+        normalized_saved_config.setdefault('representation_pair_bias_residual_scale', None)
         normalized_saved_config.setdefault('uid_decoding', 'flat')
         normalized_saved_config.setdefault('uid_cluster_levels', None)
         normalized_saved_config.setdefault('uid_cluster_topk', None)
@@ -677,6 +678,8 @@ class Trainer:
             'lora_layers', 'hidden_size', 'num_layers', 'num_heads', 'dropout',
             'representation_pair_bias', 'representation_pair_bias_mode',
         ]
+        if self.config.representation_pair_bias_mode == 'head':
+            required_keys.append('representation_pair_bias_residual_scale')
         if self.config.representation_graph:
             for key in (
                 'repr_source_model', 'sid_export', 'sid_coder', 'hash_coder',

@@ -5,6 +5,7 @@ $$import: _catalog.yaml
 model:
   representation_pair_bias: ${representation_pair_bias:false}$
   representation_pair_bias_mode: ${representation_pair_bias_mode:auto}$
+  representation_pair_bias_residual_scale: ${representation_pair_bias_residual_scale:0.1}$
 
 encoder:
   representations: [sid_content, uid, embedding_content]

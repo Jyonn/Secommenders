@@ -129,6 +129,18 @@ def _find_bias(state_dict):
     return matches[0]
 
 
+def _find_head_residual(state_dict):
+    matches = [
+        (name, value) for name, value in state_dict.items()
+        if name == 'representation_pair_bias_head_residual'
+        or name.endswith('.representation_pair_bias_head_residual')
+    ]
+    if len(matches) > 1:
+        names = ', '.join(name for name, _ in matches)
+        raise ValueError(f'checkpoint contains multiple head-residual matrices: {names}')
+    return matches[0] if matches else None
+
+
 def _selected_matrices(tensor, head):
     values = tensor.detach().float().cpu()
     if values.ndim == 2:
@@ -158,7 +170,27 @@ def inspect_checkpoint(path, precision=4, include_model=True, as_json=False, hea
     if not isinstance(state_dict, dict):
         raise ValueError('checkpoint does not contain a usable model_state_dict')
     parameter_name, tensor = _find_bias(state_dict)
-    selected_matrices, mode = _selected_matrices(tensor, head)
+    config = checkpoint.get('config') if isinstance(checkpoint.get('config'), dict) else {}
+    if not config:
+        config = _load_json(path.parent / 'meta.json').get('config') or {}
+    residual_match = _find_head_residual(state_dict)
+    component_parameters = [parameter_name]
+    if residual_match:
+        residual_name, residual = residual_match
+        if tensor.ndim != 2 or residual.ndim != 3 or tuple(residual.shape[1:]) != tuple(tensor.shape):
+            raise ValueError(
+                'global/head-residual pair bias shapes must be [R,R] and [H,R,R], got '
+                f'{list(tensor.shape)} and {list(residual.shape)}'
+            )
+        scale = float(config.get('representation_pair_bias_residual_scale', 0.1))
+        effective = tensor.detach().float().cpu().unsqueeze(0) + scale * residual.detach().float().cpu()
+        selected_matrices, _ = _selected_matrices(effective, head)
+        selected_matrices.insert(0, ('global', tensor.detach().float().cpu().tolist()))
+        mode = 'global+head_residual'
+        component_parameters.append(residual_name)
+    else:
+        scale = None
+        selected_matrices, mode = _selected_matrices(tensor, head)
     matrix_size = len(selected_matrices[0][1])
     if not matrix_size or any(
         len(row) != matrix_size
@@ -167,9 +199,6 @@ def inspect_checkpoint(path, precision=4, include_model=True, as_json=False, hea
     ):
         raise ValueError(f'{parameter_name} must contain non-empty square matrices')
 
-    config = checkpoint.get('config') if isinstance(checkpoint.get('config'), dict) else {}
-    if not config:
-        config = _load_json(path.parent / 'meta.json').get('config') or {}
     names, catalog = _representation_names(config, matrix_size)
     labels = _display_labels(names, catalog)
 
@@ -194,8 +223,10 @@ def inspect_checkpoint(path, precision=4, include_model=True, as_json=False, hea
         'checkpoint': str(path),
         'epoch': checkpoint.get('epoch'),
         'parameter': parameter_name,
+        'component_parameters': component_parameters,
         'mode': mode,
         'parameter_shape': list(tensor.shape),
+        'head_residual_scale': scale,
         'orientation': 'rows=query, columns=key',
         'representations': [
             {'name': name, 'label': label, 'kind': _kind_for(name, catalog)}
@@ -211,7 +242,10 @@ def inspect_checkpoint(path, precision=4, include_model=True, as_json=False, hea
     print(f'checkpoint : {path}')
     print(f'epoch      : {epoch if epoch is not None else "-"}')
     print(f'parameter  : {parameter_name}')
-    print(f'mode       : {mode} shape={list(tensor.shape)}')
+    shape_text = f'global={list(tensor.shape)}'
+    if residual_match:
+        shape_text += f' residual={list(residual.shape)} scale={scale:g}'
+    print(f'mode       : {mode} {shape_text}')
     print('orientation: rows are Query representations; columns are Key representations')
     for analysis in analyses:
         suffix = '' if analysis['title'] == 'shared' else f' ({analysis["title"]})'

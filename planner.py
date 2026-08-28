@@ -125,6 +125,7 @@ GROUPS = {
         'model_dtype': 'auto',
         'freeze_backbone': 'auto',
         'representation_pair_bias_mode': 'none',
+        'representation_pair_bias_residual_scale': 0.1,
         'use_lora': 'auto',
         'lora_rank': 8,
         'lora_alpha': 32,
