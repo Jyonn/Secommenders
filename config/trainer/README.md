@@ -14,6 +14,7 @@ imported values.
 - `sid-content-dual-embedding.yaml`: predicts content SID from content SID, content embedding, and collaborative embedding inputs.
 - `uid-sid-content-dual-embedding.yaml`: jointly predicts content SID and UID from SID, UID, content embedding, and collaborative embedding inputs.
 - `sid-uid-content-embedding.yaml`: predicts Llama-derived SID from UID, Llama-derived SID, and dense Llama embedding inputs.
+- `sid-uid-content-multi-decoder.yaml`: jointly predicts SID and UID from UID, Llama-derived SID, and dense Llama embedding inputs.
 - `sid-collaborative.yaml`: SID learned from Word2Vec collaborative embeddings.
 - `sid-hybrid.yaml`: SID generated from content and collaborative embeddings.
 - `sid-multi.yaml`: jointly trains independent content and collaborative SID spaces.

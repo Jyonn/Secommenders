@@ -344,6 +344,18 @@ def test_uid_sid_content_dual_embedding_profile_uses_canonical_target_order():
     assert config.task_type == 'sid+uid'
 
 
+def test_sid_uid_content_multi_decoder_profile_uses_three_input_views():
+    config = _load_profile('sid-uid-content-multi-decoder.yaml')
+
+    assert config.compile_config.representation_names == [
+        'sid_content', 'uid', 'embedding_content',
+    ]
+    assert config.compile_config.target_names == ['sid_content', 'uid']
+    assert config.task_type == 'sid+uid'
+    assert config.multi_candidate_topk == 100
+    assert config.multi_uid_weight == pytest.approx(0.5)
+
+
 def test_model_initializes_independent_sid_embeddings_and_heads():
     config = _load_profile(
         'sid-multi.yaml',
