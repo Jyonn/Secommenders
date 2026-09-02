@@ -47,7 +47,7 @@ class VocabularyRegistry:
 
 
 class Compiler:
-    VER = 'v3.1'
+    VER = 'v3.2'
     SUPPORTED_REPR_TYPES = {'uid', 'sid', 'hash', 'text', 'embedding'}
     SUPPORTED_TASK_TYPES = {'uid', 'sid', 'hash', 'embedding'}
     SUPPORTED_REPR_COMBINES = {'concat', 'add'}
@@ -1236,7 +1236,7 @@ class Compiler:
         )
         if split_name == 'finetune':
             columns = [
-                self.processor.UID_COL,
+                'uid',
                 'sequence_uids',
                 'sequence_item_count',
                 'prediction_count',
@@ -1244,7 +1244,7 @@ class Compiler:
             ]
         else:
             columns = [
-                self.processor.UID_COL,
+                'uid',
                 'history_uids',
                 'target_uid',
                 'ground_truth_uids',
@@ -1281,7 +1281,7 @@ class Compiler:
 
                 rows.append(
                     {
-                        self.processor.UID_COL: row[self.processor.UID_COL],
+                        'uid': row[self.processor.UID_COL],
                         'sequence_uids': usable_sequence,
                         'sequence_item_count': int(len(usable_sequence)),
                         'prediction_count': int(len(usable_sequence) - 1),
@@ -1332,7 +1332,7 @@ class Compiler:
 
                 rows.append(
                     {
-                        self.processor.UID_COL: row[self.processor.UID_COL],
+                        'uid': row[self.processor.UID_COL],
                         'history_uids': history_uids,
                         'target_uid': int(target_uid),
                         'ground_truth_uids': ground_truth_uids if ground_truth_uids is not None else [int(target_uid)],
