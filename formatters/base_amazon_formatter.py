@@ -19,6 +19,7 @@ class AmazonFormatter(UICTFormatter):
 
     MAX_LINES = 0
     REQUIRE_STRINGIFY = False
+    SUBSET_ALIASES = ()
 
     LEGACY_REVIEW_PATTERNS = (
         '{subset}.json.gz',
@@ -68,7 +69,12 @@ class AmazonFormatter(UICTFormatter):
                 f'Add `{self.get_name()} = /path/to/amazon-beauty` to .data.'
             )
         data_dir = Path(self.data_dir)
-        candidates = [data_dir / pattern.format(subset=self.subset) for pattern in patterns]
+        subsets = (self.subset, *self.SUBSET_ALIASES)
+        candidates = [
+            data_dir / pattern.format(subset=subset)
+            for subset in subsets
+            for pattern in patterns
+        ]
         for candidate in candidates:
             if candidate.is_file():
                 return candidate

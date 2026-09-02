@@ -57,3 +57,24 @@ def test_beauty_formatter_reads_amazon_2023_fields(tmp_path):
 
     assert formatter.items['asin'].tolist() == ['P1', 'P2']
     assert users.to_dict('records') == [{'reviewerID': 'U1', 'history': ['P1', 'P2']}]
+
+
+def test_beauty_formatter_reads_all_beauty_files(tmp_path):
+    _write_jsonl_gzip(
+        tmp_path / 'meta_All_Beauty.json.gz',
+        [{'asin': 'A1', 'title': 'Face Wash'}],
+    )
+    _write_jsonl_gzip(
+        tmp_path / 'All_Beauty.json.gz',
+        [
+            {'reviewerID': 'U1', 'asin': 'A1', 'overall': 5, 'unixReviewTime': 1000},
+            {'reviewerID': 'U1', 'asin': 'A1', 'overall': 4, 'unixReviewTime': 2000},
+        ],
+    )
+
+    formatter = BeautyFormatter(data_dir=tmp_path)
+    formatter.items = formatter.load_items()
+    users = formatter.load_users()
+
+    assert formatter.items['asin'].tolist() == ['A1']
+    assert users.to_dict('records') == [{'reviewerID': 'U1', 'history': ['A1', 'A1']}]

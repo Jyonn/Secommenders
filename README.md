@@ -31,7 +31,8 @@ python processor.py --data mind
 ```
 
 Amazon Beauty supports both legacy review files such as
-`reviews_Beauty_5.json.gz` + `meta_Beauty.json.gz` and Amazon Reviews 2023
+`All_Beauty.json.gz` + `meta_All_Beauty.json.gz` (as well as the older
+`reviews_Beauty_5.json.gz` + `meta_Beauty.json.gz` names) and Amazon Reviews 2023
 files `raw_review_Beauty.jsonl.gz` + `raw_meta_Beauty.jsonl.gz`. Configure the
 directory in the local `.data` file:
 
