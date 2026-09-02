@@ -1,6 +1,6 @@
 from formatters.base_amazon_formatter import AmazonFormatter
 
 
-class BeautyFormatter(AmazonFormatter):
+class BooksFormatter(AmazonFormatter):
     def __init__(self, **kwargs):
-        super().__init__(subset='All_Beauty', **kwargs)
+        super().__init__(subset='Books', **kwargs)

@@ -30,15 +30,20 @@ python formatter.py --data mind
 python processor.py --data mind
 ```
 
-Amazon Beauty supports both legacy review files such as
-`All_Beauty.json.gz` + `meta_All_Beauty.json.gz` (as well as the older
-`reviews_Beauty_5.json.gz` + `meta_Beauty.json.gz` names) and Amazon Reviews 2023
-files `raw_review_Beauty.jsonl.gz` + `raw_meta_Beauty.jsonl.gz`. Configure the
-directory in the local `.data` file:
+Amazon Beauty, CDs and Vinyl, Books, and Automotive use the exact review and
+metadata filenames shown below. Configure their directories in the local
+`.data` file:
 
 ```ini
 beauty = /path/to/Amazon/Beauty
+cds = /path/to/Amazon/CDs
+books = /path/to/Amazon/Books
+automotive = /path/to/Amazon/Automotive
 ```
+
+The expected file pairs are `All_Beauty.json.gz` + `meta_All_Beauty.json.gz`,
+`CDs_and_Vinyl.json.gz` + `meta_CDs_and_Vinyl.json.gz`, `Books.json.gz` +
+`meta_Books.json.gz`, and `Automotive.json.gz` + `meta_Automotive.json.gz`.
 
 Then prepare it and train the UID baseline with:
 
