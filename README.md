@@ -30,6 +30,35 @@ python formatter.py --data mind
 python processor.py --data mind
 ```
 
+Amazon Beauty supports both legacy review files such as
+`reviews_Beauty_5.json.gz` + `meta_Beauty.json.gz` and Amazon Reviews 2023
+files `raw_review_Beauty.jsonl.gz` + `raw_meta_Beauty.jsonl.gz`. Configure the
+directory in the local `.data` file:
+
+```ini
+beauty = /path/to/Amazon/Beauty
+```
+
+Then prepare it and train the UID baseline with:
+
+```bash
+python formatter.py --data beauty
+python processor.py --data beauty
+python trainer.py --config config/trainer/uid.yaml --data beauty --model scratch
+```
+
+For content-derived SID training, item titles are exposed as the default text
+attribute. For example:
+
+```bash
+python trainer.py \
+  --config config/trainer/sid-content.yaml \
+  --data beauty \
+  --model scratch \
+  --content_embedding_model p5beauty \
+  --sid_codebook_size 128
+```
+
 MIND also provides nested small-scale variants matching the RVS/RAS scale
 protocol. `MINDS<N>` uses a stable user shuffle, a shared 0.3% held-out test
 tail, and the first `N%` of all deduplicated users for training. Available
