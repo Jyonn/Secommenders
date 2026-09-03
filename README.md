@@ -546,3 +546,30 @@ python trainer.py \
 
 The fused matrix is stored in the signed compiled artifact. Its sources, order, transforms, and weights therefore
 participate in both compiled and trained SIGNs. `--repr_source_model llama3` remains the single-source shorthand.
+
+### UID/SID Candidate Case Study
+
+Compare candidates produced by a trained UID+SID decoder and export qualitative cases:
+
+```bash
+python candidate_analyzer.py \
+  --config config/trainer/sid-uid-content-multi-decoder.yaml \
+  --data mindf \
+  --model scratch \
+  --load_ckpt artifacts/trained/mindf/<sign>/42/train/best.pt \
+  --samples 100 \
+  --cases 5 \
+  --topk 10 \
+  --output reports/mindf_candidate_analysis.json
+```
+
+To measure collaborative affinity, provide an existing Word2Vec embedding artifact directory:
+
+```bash
+--collaborative_embedding_dir artifacts/embedded/mindf/word2vec/<sign>
+```
+
+The analyzer uses the model's actual UID retrieval, SID decoding, complete SID teacher-forcing
+rescoring, and fused ranking. Candidate tables report content and collaborative similarity to the
+closest history item, training-target popularity, SID-prefix overlap, source membership, and
+ground-truth hits. It writes both JSON and a Markdown case-study report.
