@@ -125,6 +125,21 @@ def _rank_map(candidates):
     return {int(uid): rank for rank, uid in enumerate(candidates, start=1)}
 
 
+def _expand_runtime_topk(config, topk):
+    """Expand evaluation-only limits after artifact resolution."""
+    topk = int(topk)
+    config.code_beam_width = max(int(config.code_beam_width), topk)
+    config.multi_candidate_topk = max(int(config.multi_candidate_topk), topk)
+    config.multi_output_topk = max(int(config.multi_output_topk), topk)
+    graph = config.compile_config.representation_graph
+    for target in graph['decoder']['targets']:
+        name = target['representation']
+        if config.compile_config.representation_kind(name) != 'sid':
+            continue
+        decoding = target.setdefault('decoding', {})
+        decoding['beam_width'] = max(int(decoding.get('beam_width', 20)), topk)
+
+
 def _branch_candidates(model, pooled, sample, sid_names, topk):
     uid_logits = model._uid_logits(pooled).float()[0]
     uid_top = torch.topk(uid_logits, k=min(topk, len(uid_logits))).indices.tolist()
@@ -360,6 +375,7 @@ def main():
     trainer = Trainer(config)
     trainer._load_checkpoint_for_eval(config.load_ckpt)
     model = trainer.model_core
+    _expand_runtime_topk(config, topk)
     model.eval()
     dataset = CompiledTestSampleDataset(trainer.compiled.test)
     sid_names = config.compile_config.names_for_kind('sid', targets=True)

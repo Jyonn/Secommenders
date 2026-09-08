@@ -572,4 +572,6 @@ To measure collaborative affinity, provide an existing Word2Vec embedding artifa
 The analyzer uses the model's actual UID retrieval, SID decoding, complete SID teacher-forcing
 rescoring, and fused ranking. Candidate tables report content and collaborative similarity to the
 closest history item, training-target popularity, SID-prefix overlap, source membership, and
-ground-truth hits. It writes both JSON and a Markdown case-study report.
+ground-truth hits. It writes both JSON and a Markdown case-study report. `--topk N` temporarily
+raises SID beam width and fused output size to at least `N` after loading the original artifacts,
+so all three branches can display the requested number of candidates without changing SIGNs.
