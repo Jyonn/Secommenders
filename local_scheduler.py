@@ -40,8 +40,8 @@ RECIF_SCALE_SCRATCH_REPRESENTATIONS = [
 QWEN_GRID1_DATASETS = ['raf']
 QWEN_GRID1_MODEL = 'qwen35th08b'
 QWEN_GRID1_SOURCE_MODEL = 'pretrain-multimodal'
-BEAUTY_MULTI_DECODER_CONFIG = 'config/trainer/sid-uid-content-multi-decoder.yaml'
-BEAUTY_BIAS_VARIANTS = [
+MULTI_DECODER_CONFIG = 'config/trainer/sid-uid-content-multi-decoder.yaml'
+MULTI_REPRESENTATION_BIAS_VARIANTS = [
     ('none', False, 'none', 0.0),
     ('shared', True, 'shared', 0.0),
     ('head-r003', True, 'head', 0.03),
@@ -277,13 +277,16 @@ def build_qwen_first_round_grid(datasets=None):
     return outputs
 
 
-def build_beauty_multi_representation_grid():
+def build_multi_representation_grid(dataset: str):
+    dataset = str(dataset).strip().lower()
+    if not dataset:
+        raise ValueError('multi-representation grid requires a dataset')
     jobs = []
-    for label, enabled, mode, residual_scale in BEAUTY_BIAS_VARIANTS:
+    for label, enabled, mode, residual_scale in MULTI_REPRESENTATION_BIAS_VARIANTS:
         job = (
-            Job(f'beauty_multi_repr_{label}')
-            .trainer_config(BEAUTY_MULTI_DECODER_CONFIG)
-            .data('beauty')
+            Job(f'{dataset}_multi_repr_{label}')
+            .trainer_config(MULTI_DECODER_CONFIG)
+            .data(dataset)
             .model('scratch')
             .main_metric('ndcg@10|loss')
             .maxitems(256)
@@ -308,9 +311,17 @@ def build_beauty_multi_representation_grid():
 
     return Schedule(
         jobs=jobs,
-        name='beauty_multi_representation_grid',
+        name=f'{dataset}_multi_representation_grid',
         effective_batch_size=64,
-    ).export(Path('config/beauty_multi_representation_grid_scheduler.yaml'))
+    ).export(Path(f'config/{dataset}_multi_representation_grid_scheduler.yaml'))
+
+
+def build_beauty_multi_representation_grid():
+    return build_multi_representation_grid('beauty')
+
+
+def build_mindf_multi_representation_grid():
+    return build_multi_representation_grid('mindf')
 
 
 if __name__ == '__main__':
