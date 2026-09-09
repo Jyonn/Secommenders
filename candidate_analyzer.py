@@ -393,6 +393,7 @@ def main():
     analyzer = {key: kwargs.pop(key) for key in list(kwargs) if key in ANALYZER_KEYS}
     if not kwargs.get('load_ckpt'):
         raise ValueError('--load_ckpt is required')
+    kwargs['test_only'] = True
     configurations = ConfigInit([], {'config': 'config/trainer/sid-uid-content-multi-decoder.yaml'}, []).parse_kwargs(kwargs)
     config = TrainConfig.from_refconfig(configurations)
     if not config.is_multi_task or 'uid' not in config.task_types or 'sid' not in config.task_types:

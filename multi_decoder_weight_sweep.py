@@ -64,6 +64,7 @@ def main():
     sweep = {key: kwargs.pop(key) for key in list(kwargs) if key in SWEEP_KEYS}
     if not kwargs.get('load_ckpt'):
         raise ValueError('--load_ckpt is required')
+    kwargs['test_only'] = True
     configurations = ConfigInit(
         [], {'config': 'config/trainer/sid-uid-content-multi-decoder.yaml'}, [],
     ).parse_kwargs(kwargs)
