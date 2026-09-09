@@ -1,0 +1,96 @@
+name: beauty_multi_representation_grid
+poll_interval_seconds: 15
+effective_batch_size: 64
+experiments:
+- name: beauty_multi_repr_none
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: beauty
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 0.5
+    representation_pair_bias: false
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+  batch_size_cap: 16
+- name: beauty_multi_repr_shared
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: beauty
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 0.5
+    representation_pair_bias: true
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+    representation_pair_bias_mode: shared
+  batch_size_cap: 16
+- name: beauty_multi_repr_head-r003
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: beauty
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 0.5
+    representation_pair_bias: true
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+    representation_pair_bias_mode: head
+    representation_pair_bias_residual_scale: 0.03
+  batch_size_cap: 16
+- name: beauty_multi_repr_head-r010
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: beauty
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 0.5
+    representation_pair_bias: true
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+    representation_pair_bias_mode: head
+    representation_pair_bias_residual_scale: 0.1
+  batch_size_cap: 16
+- name: beauty_multi_repr_head-r030
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: beauty
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 0.5
+    representation_pair_bias: true
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+    representation_pair_bias_mode: head
+    representation_pair_bias_residual_scale: 0.3
+  batch_size_cap: 16

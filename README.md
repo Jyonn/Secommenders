@@ -575,3 +575,23 @@ closest history item, training-target popularity, SID-prefix overlap, source mem
 ground-truth hits. It writes both JSON and a Markdown case-study report. `--topk N` temporarily
 raises SID beam width and fused output size to at least `N` after loading the original artifacts,
 so all three branches can display the requested number of candidates without changing SIGNs.
+Use `--samples 0 --selection fusion-win` to scan the complete test set and deterministically retain
+cases where the fused ground-truth rank is strictly better than both its UID and SID ranks.
+
+### Multi-decoder Weight Sweep
+
+Candidate generation is substantially more expensive than score fusion. Sweep several UID/SID
+weights from one checkpoint while decoding each test sample only once:
+
+```bash
+python multi_decoder_weight_sweep.py \
+  --config config/trainer/sid-uid-content-multi-decoder.yaml \
+  --data beauty \
+  --model scratch \
+  --load_ckpt artifacts/trained/beauty/<sign>/42/train/best.pt \
+  --uid_weights 0,0.25,0.5,0.75,1 \
+  --output reports/beauty_multi_decoder_weight_sweep.json
+```
+
+Endpoint weights still rerank the shared UID/SID candidate union, so they are not equivalent to
+standalone UID-only or SID-only retrieval.

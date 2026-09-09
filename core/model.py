@@ -1257,14 +1257,14 @@ class SequentialRecModel(nn.Module):
 
         return {uid: float(score) for uid, score in zip(ordered_uids, scores.tolist())}
 
-    def _compute_multi_ranking_metrics(self, pooled: torch.Tensor, batch, sid_representations=None):
+    def _score_multi_candidate_unions(self, pooled: torch.Tensor, batch, sid_representations=None):
         if sid_representations is None or isinstance(sid_representations, str):
             sid_representations = [self._resolve_sid_name(sid_representations)]
         else:
             sid_representations = [self._resolve_sid_name(name) for name in sid_representations]
         candidate_topk = min(int(self.config.multi_candidate_topk), int(self.compiled.num_items))
         uid_logits = self._uid_logits(pooled).float()
-        uid_values, uid_indices = torch.topk(uid_logits, k=candidate_topk, dim=-1)
+        _, uid_indices = torch.topk(uid_logits, k=candidate_topk, dim=-1)
 
         retrieval_by_representation = []
         parallel_scores_by_representation = []
@@ -1299,10 +1299,7 @@ class SequentialRecModel(nn.Module):
                 parallel_scores_by_representation.append(None)
             retrieval_by_representation.append(per_sample)
 
-        ks = self.ranking_ks()
-        totals = self._init_ranking_totals(ks)
-        totals['multi_uid_weight'] = 0.0
-        totals['multi_candidates'] = 0.0
+        scored_unions = []
         for batch_index, sample in enumerate(batch):
             candidates = set(int(uid) for uid in uid_indices[batch_index].tolist())
             for per_representation in retrieval_by_representation:
@@ -1334,9 +1331,25 @@ class SequentialRecModel(nn.Module):
                 uid: sum(scores[uid] for scores in complete_sid_scores) / len(complete_sid_scores)
                 for uid in ordered_candidates
             }
+            scored_unions.append({
+                'uid_scores': per_uid,
+                'sid_scores': per_sid,
+                'candidate_count': len(ordered_candidates),
+            })
+        return scored_unions
+
+    def _compute_multi_ranking_metrics(self, pooled: torch.Tensor, batch, sid_representations=None):
+        scored_unions = self._score_multi_candidate_unions(pooled, batch, sid_representations)
+        ks = self.ranking_ks()
+        totals = self._init_ranking_totals(ks)
+        totals['multi_uid_weight'] = 0.0
+        totals['multi_candidates'] = 0.0
+        for sample, scores in zip(batch, scored_unions):
+            per_uid = scores['uid_scores']
+            per_sid = scores['sid_scores']
             fused = self._fuse_multi_candidates(per_uid, per_sid)
             ranked_uids = [uid for uid, _ in fused]
-            totals['multi_candidates'] += float(len(ordered_candidates))
+            totals['multi_candidates'] += float(scores['candidate_count'])
             if ranked_uids:
                 totals['multi_uid_weight'] += self._multi_uid_weight()
             self._accumulate_ranking_metrics(totals, ks, ranked_uids, sample)

@@ -17,7 +17,7 @@ from utils.multi_decoding import normalize_candidate_scores
 
 
 ANALYZER_KEYS = {
-    'samples', 'cases', 'topk', 'output', 'collaborative_embedding_dir',
+    'samples', 'cases', 'topk', 'output', 'collaborative_embedding_dir', 'selection',
 }
 
 
@@ -254,6 +254,27 @@ def _analyze_sample(model, sample, sid_names, context, topk):
         in_uid, in_sid = uid in uid_set, uid in sid_set
         source = 'both' if in_uid and in_sid else ('uid-only' if in_uid else 'sid-only')
         records.append(_candidate_record(uid, source, ranks, scores, local_context))
+    target_rank_triplets = [
+        {
+            'uid': ranks['uid'].get(uid),
+            'sid': ranks['sid'].get(uid),
+            'fused': ranks['fused'].get(uid),
+        }
+        for uid in target_uids
+    ]
+    fusion_wins = [
+        rank
+        for rank in target_rank_triplets
+        if rank['uid'] is not None
+        and rank['sid'] is not None
+        and rank['fused'] is not None
+        and rank['fused'] < rank['uid']
+        and rank['fused'] < rank['sid']
+    ]
+    fusion_rank_gain = max(
+        (min(rank['uid'], rank['sid']) - rank['fused'] for rank in fusion_wins),
+        default=0,
+    )
     return {
         'user_id': str(sample['uid']),
         'history_item_ids': [str(context['raw_item_ids'][uid]) for uid in sample['history_uids']],
@@ -263,6 +284,9 @@ def _analyze_sample(model, sample, sid_names, context, topk):
         'target_recalled_by_uid': bool(target_uids & uid_set),
         'target_recalled_by_sid': bool(target_uids & sid_set),
         'target_recalled_by_fused': bool(target_uids & set(fused_candidates)),
+        'target_ranks': target_rank_triplets,
+        'fusion_rank_win': bool(fusion_wins),
+        'fusion_rank_gain': int(fusion_rank_gain),
         'uid_candidates': uid_candidates,
         'sid_candidates': sid_candidates,
         'fused_candidates': fused_candidates,
@@ -303,9 +327,15 @@ def _render_table(headers, rows):
 
 
 def _render_case(case, topk):
+    target_ranks = ', '.join(
+        f'UID={rank["uid"] or "-"}/SID={rank["sid"] or "-"}/Fused={rank["fused"] or "-"}'
+        for rank in case['target_ranks']
+    )
     lines = [
         f'USER {case["user_id"]} | target={",".join(case["target_item_ids"])} '
         f'| UID/SID Jaccard={case["topk_overlap_jaccard"]:.3f}',
+        f'Target ranks: {target_ranks} | fusion_win={case["fusion_rank_win"]} '
+        f'| rank_gain={case["fusion_rank_gain"]}',
         'History:',
     ]
     for item_id, text in zip(case['history_item_ids'][-10:], case['history_texts'][-10:]):
@@ -327,6 +357,8 @@ def _aggregate(cases):
         'uid_target_recall': mean([float(case['target_recalled_by_uid']) for case in cases]),
         'sid_target_recall': mean([float(case['target_recalled_by_sid']) for case in cases]),
         'fused_target_recall': mean([float(case['target_recalled_by_fused']) for case in cases]),
+        'fusion_rank_win_count': sum(int(case['fusion_rank_win']) for case in cases),
+        'fusion_rank_win_rate': mean([float(case['fusion_rank_win']) for case in cases]),
     }
     for source in ('uid-only', 'sid-only', 'both'):
         rows = [row for case in cases for row in case['candidates'] if row['source'] == source]
@@ -366,9 +398,12 @@ def main():
     if not config.is_multi_task or 'uid' not in config.task_types or 'sid' not in config.task_types:
         raise ValueError('candidate analysis requires a SID+UID multi-decoder trainer config')
 
-    samples = max(1, int(analyzer.get('samples', 100)))
+    requested_samples = int(analyzer.get('samples', 100))
     case_count = max(1, int(analyzer.get('cases', 5)))
     topk = max(1, int(analyzer.get('topk', 10)))
+    selection = str(analyzer.get('selection', 'disagreement')).strip().lower()
+    if selection not in {'disagreement', 'fusion-win'}:
+        raise ValueError('--selection must be disagreement or fusion-win')
     output_path = Path(analyzer.get('output') or f'reports/{config.data}_candidate_analysis.json')
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -378,6 +413,7 @@ def main():
     _expand_runtime_topk(config, topk)
     model.eval()
     dataset = CompiledTestSampleDataset(trainer.compiled.test)
+    samples = len(dataset) if requested_samples <= 0 else min(requested_samples, len(dataset))
     sid_names = config.compile_config.names_for_kind('sid', targets=True)
     raw_item_ids = trainer.compiled.uid_raw_items
     metadata = _load_item_metadata(config.data, raw_item_ids)
@@ -403,20 +439,26 @@ def main():
 
     cases = []
     with torch.inference_mode():
-        for index in range(min(samples, len(dataset))):
+        for index in range(samples):
             cases.append(_analyze_sample(model, dataset[index], sid_names, context, topk))
-    cases.sort(
-        key=lambda case: (
-            case['topk_overlap_jaccard'],
-            not case['target_recalled_by_fused'],
-            case['user_id'],
+    if selection == 'fusion-win':
+        eligible = [case for case in cases if case['fusion_rank_win']]
+        eligible.sort(key=lambda case: (-case['fusion_rank_gain'], case['user_id']))
+    else:
+        eligible = sorted(
+            cases,
+            key=lambda case: (
+                case['topk_overlap_jaccard'],
+                not case['target_recalled_by_fused'],
+                case['user_id'],
+            ),
         )
-    )
-    selected = cases[:min(case_count, len(cases))]
+    selected = eligible[:min(case_count, len(eligible))]
     report = {
         'data': config.data,
         'checkpoint': str(config.load_ckpt),
         'topk': topk,
+        'selection': selection,
         'content_representation': content_name,
         'collaborative_embedding_dir': analyzer.get('collaborative_embedding_dir'),
         'summary': _aggregate(cases),

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from utils import Schedule
+from utils.schedule_creator import Job
 
 
 DATASETS = [
@@ -39,6 +40,14 @@ RECIF_SCALE_SCRATCH_REPRESENTATIONS = [
 QWEN_GRID1_DATASETS = ['raf']
 QWEN_GRID1_MODEL = 'qwen35th08b'
 QWEN_GRID1_SOURCE_MODEL = 'pretrain-multimodal'
+BEAUTY_MULTI_DECODER_CONFIG = 'config/trainer/sid-uid-content-multi-decoder.yaml'
+BEAUTY_BIAS_VARIANTS = [
+    ('none', False, 'none', 0.0),
+    ('shared', True, 'shared', 0.0),
+    ('head-r003', True, 'head', 0.03),
+    ('head-r010', True, 'head', 0.10),
+    ('head-r030', True, 'head', 0.30),
+]
 QWEN_GRID1_LEARNING_RATES = [3e-5, 1e-4]
 QWEN_GRID1_EFFECTIVE_BATCH_SIZES = [64]
 QWEN_GRID1_SCHEDULERS = [
@@ -266,6 +275,42 @@ def build_qwen_first_round_grid(datasets=None):
             )
         )
     return outputs
+
+
+def build_beauty_multi_representation_grid():
+    jobs = []
+    for label, enabled, mode, residual_scale in BEAUTY_BIAS_VARIANTS:
+        job = (
+            Job(f'beauty_multi_repr_{label}')
+            .trainer_config(BEAUTY_MULTI_DECODER_CONFIG)
+            .data('beauty')
+            .model('scratch')
+            .main_metric('ndcg@10|loss')
+            .maxitems(256)
+            .batch_size(16)
+            .accumulate_batch(4)
+            .batch_size_cap(16)
+            .code_beam_chunk_size(80)
+            .multi_uid_weight(0.5)
+            .representation_pair_bias(enabled)
+            .seed(42)
+            .args(
+                sid_codebook_size=128,
+                content_embedding_normalize=False,
+                content_embedding_dim=0,
+            )
+        )
+        if enabled:
+            job.representation_pair_bias_mode(mode)
+        if mode == 'head':
+            job.representation_pair_bias_residual_scale(residual_scale)
+        jobs.append(job)
+
+    return Schedule(
+        jobs=jobs,
+        name='beauty_multi_representation_grid',
+        effective_batch_size=64,
+    ).export(Path('config/beauty_multi_representation_grid_scheduler.yaml'))
 
 
 if __name__ == '__main__':
