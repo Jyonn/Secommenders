@@ -30,6 +30,7 @@ def test_runtime_topk_expands_sid_and_fusion_without_rebuilding_config():
         code_beam_width=20,
         multi_candidate_topk=100,
         multi_output_topk=20,
+        representation_graph=compile_config.representation_graph,
         compile_config=compile_config,
     )
 
@@ -39,6 +40,38 @@ def test_runtime_topk_expands_sid_and_fusion_without_rebuilding_config():
     assert config.multi_candidate_topk == 100
     assert config.multi_output_topk == 100
     assert target['decoding']['beam_width'] == 100
+
+
+def test_runtime_topk_mutates_canonical_graph_when_compile_config_is_a_copy():
+    graph = {
+        'representations': {'sid_content': {'type': 'sid'}},
+        'decoder': {'targets': [
+            {'representation': 'sid_content', 'decoding': {'beam_width': 20}},
+        ]},
+    }
+
+    class CopyingConfig:
+        code_beam_width = 20
+        multi_candidate_topk = 100
+        multi_output_topk = 20
+        representation_graph = graph
+
+        @property
+        def compile_config(self):
+            copied_target = {
+                'representation': 'sid_content',
+                'decoding': dict(self.representation_graph['decoder']['targets'][0]['decoding']),
+            }
+            return SimpleNamespace(
+                representation_graph={'decoder': {'targets': [copied_target]}},
+                representation_kind=lambda name: 'sid',
+            )
+
+    config = CopyingConfig()
+    _expand_runtime_topk(config, 100)
+
+    assert config.representation_graph['decoder']['targets'][0]['decoding']['beam_width'] == 100
+    assert config.compile_config.representation_graph['decoder']['targets'][0]['decoding']['beam_width'] == 100
 
 
 def test_aggregate_counts_strict_fusion_rank_wins():

@@ -131,10 +131,13 @@ def _expand_runtime_topk(config, topk):
     config.code_beam_width = max(int(config.code_beam_width), topk)
     config.multi_candidate_topk = max(int(config.multi_candidate_topk), topk)
     config.multi_output_topk = max(int(config.multi_output_topk), topk)
-    graph = config.compile_config.representation_graph
+    # TrainConfig.compile_config is a property that returns a fresh copy. Mutate
+    # the canonical graph so subsequent model lookups retain the runtime width.
+    graph = config.representation_graph
+    compile_config = config.compile_config
     for target in graph['decoder']['targets']:
         name = target['representation']
-        if config.compile_config.representation_kind(name) != 'sid':
+        if compile_config.representation_kind(name) != 'sid':
             continue
         decoding = target.setdefault('decoding', {})
         decoding['beam_width'] = max(int(decoding.get('beam_width', 20)), topk)
