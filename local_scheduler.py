@@ -48,6 +48,12 @@ MULTI_REPRESENTATION_BIAS_VARIANTS = [
     ('head-r010', True, 'head', 0.10),
     ('head-r030', True, 'head', 0.30),
 ]
+MULTI_REPRESENTATION_REPLICATION_VARIANTS = [
+    ('none', False, 'none', 0.0),
+    ('shared', True, 'shared', 0.0),
+    ('head-r010', True, 'head', 0.10),
+]
+MULTI_REPRESENTATION_REPLICATION_SEEDS = [42, 43, 44]
 QWEN_GRID1_LEARNING_RATES = [3e-5, 1e-4]
 QWEN_GRID1_EFFECTIVE_BATCH_SIZES = [64]
 QWEN_GRID1_SCHEDULERS = [
@@ -322,6 +328,43 @@ def build_beauty_multi_representation_grid():
 
 def build_mindf_multi_representation_grid():
     return build_multi_representation_grid('mindf')
+
+
+def build_mindf_multi_representation_replications():
+    jobs = []
+    for label, enabled, mode, residual_scale in MULTI_REPRESENTATION_REPLICATION_VARIANTS:
+        for seed in MULTI_REPRESENTATION_REPLICATION_SEEDS:
+            job = (
+                Job(f'mindf_multi_repr_{label}_s{seed}')
+                .trainer_config(MULTI_DECODER_CONFIG)
+                .data('mindf')
+                .model('scratch')
+                .main_metric('ndcg@10|loss')
+                .maxitems(256)
+                .batch_size(16)
+                .accumulate_batch(4)
+                .batch_size_cap(16)
+                .code_beam_chunk_size(80)
+                .multi_uid_weight(0.5)
+                .representation_pair_bias(enabled)
+                .seed(seed)
+                .args(
+                    sid_codebook_size=128,
+                    content_embedding_normalize=False,
+                    content_embedding_dim=0,
+                )
+            )
+            if enabled:
+                job.representation_pair_bias_mode(mode)
+            if mode == 'head':
+                job.representation_pair_bias_residual_scale(residual_scale)
+            jobs.append(job)
+
+    return Schedule(
+        jobs=jobs,
+        name='mindf_multi_representation_replications',
+        effective_batch_size=64,
+    ).export(Path('config/mindf_multi_representation_replications_scheduler.yaml'))
 
 
 if __name__ == '__main__':
