@@ -1,0 +1,99 @@
+name: mindf_multi_decoder_weight_head_r030
+poll_interval_seconds: 15
+effective_batch_size: 64
+experiments:
+- name: mindf_multi_decoder_head_r030_uidw000
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: mindf
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 0.0
+    representation_pair_bias: true
+    representation_pair_bias_mode: head
+    representation_pair_bias_residual_scale: 0.3
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+  batch_size_cap: 16
+- name: mindf_multi_decoder_head_r030_uidw025
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: mindf
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 0.25
+    representation_pair_bias: true
+    representation_pair_bias_mode: head
+    representation_pair_bias_residual_scale: 0.3
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+  batch_size_cap: 16
+- name: mindf_multi_decoder_head_r030_uidw050
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: mindf
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 0.5
+    representation_pair_bias: true
+    representation_pair_bias_mode: head
+    representation_pair_bias_residual_scale: 0.3
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+  batch_size_cap: 16
+- name: mindf_multi_decoder_head_r030_uidw075
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: mindf
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 0.75
+    representation_pair_bias: true
+    representation_pair_bias_mode: head
+    representation_pair_bias_residual_scale: 0.3
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+  batch_size_cap: 16
+- name: mindf_multi_decoder_head_r030_uidw100
+  args:
+    config: config/trainer/sid-uid-content-multi-decoder.yaml
+    data: mindf
+    model: scratch
+    main_metric: ndcg@10|loss
+    maxitems: 256
+    batch_size: 16
+    accumulate_batch: 4
+    code_beam_chunk_size: 80
+    multi_uid_weight: 1.0
+    representation_pair_bias: true
+    representation_pair_bias_mode: head
+    representation_pair_bias_residual_scale: 0.3
+    seed: 42
+    sid_codebook_size: 128
+    content_embedding_normalize: false
+    content_embedding_dim: 0
+  batch_size_cap: 16

@@ -367,6 +367,40 @@ def build_mindf_multi_representation_replications():
     ).export(Path('config/mindf_multi_representation_replications_scheduler.yaml'))
 
 
+def build_mindf_multi_decoder_weight_ablation():
+    jobs = []
+    for uid_weight in (0.0, 0.25, 0.5, 0.75, 1.0):
+        weight_label = f'{uid_weight:.2f}'.replace('.', '')
+        jobs.append(
+            Job(f'mindf_multi_decoder_head_r030_uidw{weight_label}')
+            .trainer_config(MULTI_DECODER_CONFIG)
+            .data('mindf')
+            .model('scratch')
+            .main_metric('ndcg@10|loss')
+            .maxitems(256)
+            .batch_size(16)
+            .accumulate_batch(4)
+            .batch_size_cap(16)
+            .code_beam_chunk_size(80)
+            .multi_uid_weight(uid_weight)
+            .representation_pair_bias(True)
+            .representation_pair_bias_mode('head')
+            .representation_pair_bias_residual_scale(0.3)
+            .seed(42)
+            .args(
+                sid_codebook_size=128,
+                content_embedding_normalize=False,
+                content_embedding_dim=0,
+            )
+        )
+
+    return Schedule(
+        jobs=jobs,
+        name='mindf_multi_decoder_weight_head_r030',
+        effective_batch_size=64,
+    ).export(Path('config/mindf_multi_decoder_weight_head_r030_scheduler.yaml'))
+
+
 if __name__ == '__main__':
     # build_simple_schedule()
     # build_basic_schedules()
