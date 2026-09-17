@@ -609,7 +609,7 @@ class SequentialRecModel(nn.Module):
         if mode == 'auto':
             meta = self._sid_meta(name)
             mode = str(meta.get('recommended_decoding') or 'sequential').strip().lower()
-        if mode not in {'sequential', 'parallel'}:
+        if mode not in {'sequential', 'parallel', 'fast'}:
             raise ValueError(f'Unsupported code_decoding: {mode}')
         return mode
 
@@ -1208,6 +1208,49 @@ class SequentialRecModel(nn.Module):
             result['sid_kv_diagnostic'] = ' | '.join(self._sid_kv_diagnostics) or 'no KV-cache diagnostic recorded'
         return result
 
+    def _sid_fast_item_scores(self, batch, representation=None):
+        """Approximate all item scores along one greedy semantic SID prefix.
+
+        The collision slot is intentionally excluded: collision ids are local
+        disambiguators inside a semantic-code group and are not a global
+        semantic retrieval signal.
+        """
+        name = self._resolve_sid_name(representation)
+        item_codes = self._sid_item_codes(name).to(device=self.device)
+        if item_codes.numel() == 0:
+            raise ValueError('sid fast decoding requires compiled sid item codes')
+        base_num_quantizers = int(self._sid_meta(name)['base_num_quantizers'] or 0)
+        if base_num_quantizers <= 0:
+            raise ValueError('sid fast decoding requires at least one semantic code slot')
+
+        scores = torch.zeros(
+            (len(batch), item_codes.shape[0]), dtype=torch.float32, device=self.device,
+        )
+        for batch_index, sample in enumerate(batch):
+            greedy_prefix = []
+            for slot_index in range(base_num_quantizers):
+                logits = self._predict_sid_step_logits(
+                    sample, [greedy_prefix], slot_index, name,
+                )
+                allowed_logits, allowed_start = self._sid_allowed_logits_for_slot(
+                    logits, slot_index, name,
+                )
+                log_probs = F.log_softmax(allowed_logits.float(), dim=-1).squeeze(0)
+                slot_positions = item_codes[:, slot_index] - allowed_start
+                scores[batch_index] += log_probs.index_select(0, slot_positions)
+                greedy_code = int(allowed_logits.argmax(dim=-1).item()) + allowed_start
+                greedy_prefix.append(greedy_code)
+        return scores
+
+    def _compute_sid_fast_ranking_metrics(self, batch, representation=None):
+        scores = self._sid_fast_item_scores(batch, representation)
+        target_indices = torch.tensor(
+            [int(sample['target_uid']) for sample in batch],
+            dtype=torch.long,
+            device=self.device,
+        )
+        return self._compute_ranking_metrics_from_logits(scores, target_indices, batch=batch)
+
     def _multi_uid_weight(self):
         override = getattr(self.config, 'test_multi_uid_weight', None)
         return float(self.config.multi_uid_weight if override is None else override)
@@ -1218,6 +1261,72 @@ class SequentialRecModel(nn.Module):
     def _multi_rrf_k(self):
         override = getattr(self.config, 'test_multi_rrf_k', None)
         return float(self.config.multi_rrf_k if override is None else override)
+
+    def _normalize_score_tensor(self, scores: torch.Tensor, mode: str):
+        mode = str(mode).strip().lower()
+        if mode == 'none':
+            return scores
+        if mode == 'zscore':
+            mean = scores.mean(dim=-1, keepdim=True)
+            std = scores.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-8)
+            return (scores - mean) / std
+        if mode == 'minmax':
+            minimum = scores.amin(dim=-1, keepdim=True)
+            scale = (scores.amax(dim=-1, keepdim=True) - minimum).clamp_min(1e-8)
+            return (scores - minimum) / scale
+        raise ValueError(f'Unsupported score normalization: {mode}')
+
+    @staticmethod
+    def _rank_score_tensor(scores: torch.Tensor):
+        order = torch.argsort(scores, dim=-1, descending=True)
+        ranks = torch.empty_like(order)
+        rank_values = torch.arange(
+            1, scores.shape[-1] + 1, dtype=order.dtype, device=scores.device,
+        ).expand_as(order)
+        ranks.scatter_(dim=-1, index=order, src=rank_values)
+        return ranks.float()
+
+    def _fuse_multi_score_tensors(self, uid_scores: torch.Tensor, sid_scores: torch.Tensor):
+        uid_weight = self._multi_uid_weight()
+        if self._multi_fusion_mode() == 'rrf':
+            uid_ranks = self._rank_score_tensor(uid_scores)
+            sid_ranks = self._rank_score_tensor(sid_scores)
+            rrf_k = self._multi_rrf_k()
+            return (
+                uid_weight / (rrf_k + uid_ranks)
+                + (1.0 - uid_weight) / (rrf_k + sid_ranks)
+            )
+        normalization = self.config.multi_score_normalization
+        uid_scores = self._normalize_score_tensor(uid_scores, normalization)
+        sid_scores = self._normalize_score_tensor(sid_scores, normalization)
+        return (
+            uid_weight * uid_scores / float(self.config.multi_temperature_uid)
+            + (1.0 - uid_weight) * sid_scores / float(self.config.multi_temperature_sid)
+        )
+
+    def _multi_full_catalog_scores(self, pooled, batch, sid_representations):
+        modes = [self._sid_decoding_mode(name) for name in sid_representations]
+        if not all(mode in {'fast', 'parallel'} for mode in modes):
+            if self._multi_fusion_mode() == 'rrf':
+                raise ValueError(
+                    'decoder.multi.fusion.mode=rrf requires every SID target to use '
+                    'decoding.mode=fast or parallel; sequential SID only exposes a Top-K list'
+                )
+            return None
+
+        sid_score_tensors = []
+        for sid_name, mode in zip(sid_representations, modes):
+            if mode == 'fast':
+                sid_scores = self._sid_fast_item_scores(batch, sid_name)
+            else:
+                semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled, sid_name)
+                sid_scores = semantic_scores + collision_scores
+            sid_score_tensors.append(self._normalize_score_tensor(
+                sid_scores, self.config.multi_score_normalization,
+            ))
+        sid_scores = torch.stack(sid_score_tensors, dim=0).mean(dim=0)
+        uid_scores = self._uid_logits(pooled).float()
+        return self._fuse_multi_score_tensors(uid_scores, sid_scores)
 
     def _fuse_multi_candidates(
         self,
@@ -1288,6 +1397,13 @@ class SequentialRecModel(nn.Module):
             sid_representations = [self._resolve_sid_name(sid_representations)]
         else:
             sid_representations = [self._resolve_sid_name(name) for name in sid_representations]
+        if self._multi_fusion_mode() == 'rrf' and any(
+            self._sid_decoding_mode(name) == 'sequential' for name in sid_representations
+        ):
+            raise ValueError(
+                'decoder.multi.fusion.mode=rrf is unavailable with sequential SID decoding; '
+                'use decoding.mode=fast or parallel'
+            )
         candidate_topk = min(int(self.config.multi_candidate_topk), int(self.compiled.num_items))
         uid_logits = self._uid_logits(pooled).float()
         _, uid_indices = torch.topk(uid_logits, k=candidate_topk, dim=-1)
@@ -1295,9 +1411,13 @@ class SequentialRecModel(nn.Module):
         retrieval_by_representation = []
         parallel_scores_by_representation = []
         for sid_name in sid_representations:
-            if self._sid_decoding_mode(sid_name) == 'parallel':
-                semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled, sid_name)
-                full_scores = semantic_scores + collision_scores
+            decoding_mode = self._sid_decoding_mode(sid_name)
+            if decoding_mode in {'parallel', 'fast'}:
+                if decoding_mode == 'fast':
+                    full_scores = self._sid_fast_item_scores(batch, sid_name)
+                else:
+                    semantic_scores, collision_scores = self._sid_parallel_item_scores(pooled, sid_name)
+                    full_scores = semantic_scores + collision_scores
                 sid_values, sid_indices = torch.topk(
                     full_scores,
                     k=candidate_topk,
@@ -1392,6 +1512,21 @@ class SequentialRecModel(nn.Module):
         return scored_unions
 
     def _compute_multi_ranking_metrics(self, pooled: torch.Tensor, batch, sid_representations=None):
+        if sid_representations is None or isinstance(sid_representations, str):
+            sid_representations = [self._resolve_sid_name(sid_representations)]
+        else:
+            sid_representations = [self._resolve_sid_name(name) for name in sid_representations]
+        full_scores = self._multi_full_catalog_scores(pooled, batch, sid_representations)
+        if full_scores is not None:
+            labels = torch.tensor(
+                [int(sample['target_uid']) for sample in batch],
+                dtype=torch.long,
+                device=self.device,
+            )
+            metrics = self._compute_ranking_metrics_from_logits(full_scores, labels, batch=batch)
+            metrics['multi_uid_weight'] = self._multi_uid_weight()
+            metrics['multi_candidates'] = float(self.compiled.num_items)
+            return metrics
         scored_unions = self._score_multi_candidate_unions(pooled, batch, sid_representations)
         ks = self.ranking_ks()
         totals = self._init_ranking_totals(ks)
@@ -2315,12 +2450,16 @@ class SequentialRecModel(nn.Module):
                 per_target_metrics = []
                 metrics = {}
                 for name in target_names:
-                    if self._sid_decoding_mode(name) == 'parallel':
+                    decoding_mode = self._sid_decoding_mode(name)
+                    if decoding_mode == 'parallel':
                         sid_loss, sid_metrics = self._compute_sid_parallel_loss(pooled, batch, name)
                         sid_metrics.update(self._compute_sid_parallel_ranking_metrics(pooled, batch, name))
                     else:
                         sid_loss, sid_metrics = self._compute_sid_loss(batch, name)
-                        sid_metrics.update(self._compute_sid_ranking_metrics(batch, name))
+                        if decoding_mode == 'fast':
+                            sid_metrics.update(self._compute_sid_fast_ranking_metrics(batch, name))
+                        else:
+                            sid_metrics.update(self._compute_sid_ranking_metrics(batch, name))
                     losses.append(sid_loss)
                     per_target_metrics.append(sid_metrics)
                     metrics.update({f'{name}_{key}': value for key, value in sid_metrics.items()})
@@ -2367,12 +2506,16 @@ class SequentialRecModel(nn.Module):
             return loss, metrics
         if self.config.task_type == 'sid':
             sid_name = self._primary_sid_name()
-            if self._sid_decoding_mode(sid_name) == 'parallel':
+            decoding_mode = self._sid_decoding_mode(sid_name)
+            if decoding_mode == 'parallel':
                 loss, metrics = self._compute_sid_parallel_loss(pooled, batch, sid_name)
                 metrics.update(self._compute_sid_parallel_ranking_metrics(pooled, batch, sid_name))
             else:
                 loss, metrics = self._compute_sid_loss(batch, sid_name)
-                metrics.update(self._compute_sid_ranking_metrics(batch, sid_name))
+                if decoding_mode == 'fast':
+                    metrics.update(self._compute_sid_fast_ranking_metrics(batch, sid_name))
+                else:
+                    metrics.update(self._compute_sid_ranking_metrics(batch, sid_name))
             return loss, metrics
         if self.config.task_type == 'hash':
             loss, metrics = self._compute_hash_parallel_loss(pooled, batch)

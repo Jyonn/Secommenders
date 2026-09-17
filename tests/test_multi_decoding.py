@@ -9,6 +9,55 @@ from utils.multi_decoding import fuse_candidate_ranks, fuse_candidate_scores
 
 
 class MultiDecodingTests(unittest.TestCase):
+    def test_fast_sid_scores_full_catalog_and_ignores_collision_slot(self):
+        model = SequentialRecModel.__new__(SequentialRecModel)
+        torch.nn.Module.__init__(model)
+        model.dummy_parameter = torch.nn.Parameter(torch.zeros(1))
+        item_codes = torch.tensor([
+            [0, 2, 4],
+            [0, 2, 5],
+            [1, 3, 4],
+        ], dtype=torch.long)
+        model._resolve_sid_name = lambda representation=None: 'sid_content'
+        model._sid_item_codes = lambda representation=None: item_codes
+        model._sid_meta = lambda representation=None: {'base_num_quantizers': 2}
+        model._sid_allowed_logits_for_slot = lambda logits, slot, representation=None: (
+            logits[:, slot * 2:(slot + 1) * 2], slot * 2,
+        )
+
+        def predict(sample, prefixes, slot_index, representation=None):
+            if slot_index == 0:
+                return torch.tensor([[3.0, 1.0, 0.0, 0.0, 100.0, -100.0]])
+            self.assertEqual(prefixes, [[0]])
+            return torch.tensor([[0.0, 0.0, 2.0, 1.0, -100.0, 100.0]])
+
+        model._predict_sid_step_logits = predict
+        scores = model._sid_fast_item_scores([{}], 'sid_content')[0]
+
+        slot0 = F.log_softmax(torch.tensor([3.0, 1.0]), dim=-1)
+        slot1 = F.log_softmax(torch.tensor([2.0, 1.0]), dim=-1)
+        self.assertEqual(tuple(scores.shape), (3,))
+        self.assertAlmostEqual(float(scores[0]), float(slot0[0] + slot1[0]), places=6)
+        self.assertAlmostEqual(float(scores[1]), float(scores[0]), places=6)
+        self.assertAlmostEqual(float(scores[2]), float(slot0[1] + slot1[1]), places=6)
+
+    def test_full_catalog_rrf_uses_complete_ranks(self):
+        model = SequentialRecModel.__new__(SequentialRecModel)
+        torch.nn.Module.__init__(model)
+        model.dummy_parameter = torch.nn.Parameter(torch.zeros(1))
+        model._multi_uid_weight = lambda: 0.5
+        model._multi_fusion_mode = lambda: 'rrf'
+        model._multi_rrf_k = lambda: 0.0
+
+        fused = model._fuse_multi_score_tensors(
+            torch.tensor([[4.0, 3.0, 2.0, 1.0]]),
+            torch.tensor([[1.0, 2.0, 3.0, 4.0]]),
+        )
+
+        self.assertEqual(tuple(fused.shape), (1, 4))
+        self.assertAlmostEqual(float(fused[0, 0]), float(fused[0, 3]), places=6)
+        self.assertAlmostEqual(float(fused[0, 1]), float(fused[0, 2]), places=6)
+
     def test_sequential_sid_rescores_every_union_candidate_with_teacher_forcing(self):
         model = SequentialRecModel.__new__(SequentialRecModel)
         torch.nn.Module.__init__(model)

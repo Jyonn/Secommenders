@@ -358,6 +358,11 @@ class TrainConfig:
             raise ValueError('trainer.uid_cluster_levels is required when uid_decoding=hierarchical')
         if uid_decoding == 'hierarchical' and not uid_cluster_topk:
             raise ValueError('trainer.uid_cluster_topk is required when uid_decoding=hierarchical')
+        code_decoding = str(
+            _get(decoder_sid, 'mode', getattr(trainer, 'code_decoding', 'auto'))
+        ).strip().lower()
+        if code_decoding not in {'auto', 'sequential', 'parallel', 'fast'}:
+            raise ValueError('decoder SID mode must be auto, sequential, parallel, or fast')
         code_beam_width = int(_get(decoder_sid, 'beam_width', getattr(trainer, 'code_beam_width', 20)))
         code_beam_chunk_size = int(
             _get(decoder_sid, 'beam_chunk_size', getattr(trainer, 'code_beam_chunk_size', 0))
@@ -463,7 +468,7 @@ class TrainConfig:
             uid_decoding=uid_decoding,
             uid_cluster_levels=uid_cluster_levels,
             uid_cluster_topk=uid_cluster_topk,
-            code_decoding=str(_get(decoder_sid, 'mode', getattr(trainer, 'code_decoding', 'auto'))).strip().lower(),
+            code_decoding=code_decoding,
             main_metric='|'.join(
                 metric.strip().lower()
                 for metric in str(getattr(evaluator, 'main_metric', 'ndcg@10')).split('|')

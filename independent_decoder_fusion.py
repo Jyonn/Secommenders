@@ -105,9 +105,14 @@ def _encode_context(model, sample):
 
 
 def _sid_retrieval(model, pooled, sample, sid_name, topk):
-    if model._sid_decoding_mode(sid_name) == 'parallel':
+    mode = model._sid_decoding_mode(sid_name)
+    if mode == 'parallel':
         semantic, collision = model._sid_parallel_item_scores(pooled, sid_name)
         scores = (semantic + collision)[0]
+        indices = torch.topk(scores, k=min(topk, len(scores))).indices.tolist()
+        return [int(uid) for uid in indices], scores
+    if mode == 'fast':
+        scores = model._sid_fast_item_scores([sample], sid_name)[0]
         indices = torch.topk(scores, k=min(topk, len(scores))).indices.tolist()
         return [int(uid) for uid in indices], scores
 
@@ -190,6 +195,12 @@ def main():
     if len(sid_names) != 1:
         raise ValueError(f'SID-only checkpoint must expose exactly one SID target, got {sid_names}')
     sid_name = sid_names[0]
+    sid_decoding_mode = sid_model._sid_decoding_mode(sid_name)
+    if 'rrf' in fusion_methods and sid_decoding_mode == 'sequential':
+        raise ValueError(
+            'RRF requires the SID checkpoint to use decoding.mode=fast or parallel; '
+            'sequential beam search does not define ranks for the full item catalog'
+        )
     max_sid_width = sid_model._sid_beam_width(sid_name)
     if args.candidate_topk > max_sid_width:
         graph = sid_trainer.config.representation_graph
@@ -208,6 +219,11 @@ def main():
         for weight in weights
     }
     candidate_counts = {key: 0.0 for key in totals_fused}
+    sid_order_for_uid = torch.tensor(
+        [sid_raw_to_local[str(raw_id)] for raw_id in uid_trainer.compiled.uid_raw_items],
+        dtype=torch.long,
+        device=sid_model.device,
+    )
 
     with torch.inference_mode():
         for uid_sample, sid_sample in tqdm(pairs, desc='independent-fusion'):
@@ -223,6 +239,51 @@ def main():
                 sid_model, sid_pooled, sid_sample, sid_name, args.candidate_topk,
             )
             sid_top_raw = [str(sid_trainer.compiled.uid_raw_items[uid]) for uid in sid_top_local]
+
+            if parallel_scores is not None:
+                sid_full_uid_order = parallel_scores.index_select(0, sid_order_for_uid).to(uid_model.device)
+                uid_model._accumulate_ranking_metrics(
+                    totals_uid,
+                    ks,
+                    torch.topk(uid_logits, k=min(args.output_topk, len(uid_logits))).indices.tolist(),
+                    uid_sample,
+                )
+                sid_full_ranking = torch.topk(
+                    sid_full_uid_order, k=min(args.output_topk, len(sid_full_uid_order)),
+                ).indices.tolist()
+                uid_model._accumulate_ranking_metrics(
+                    totals_sid, ks, sid_full_ranking, uid_sample,
+                )
+                for method in fusion_methods:
+                    for weight in weights:
+                        if method == 'rrf':
+                            uid_ranks = uid_model._rank_score_tensor(uid_logits.unsqueeze(0))
+                            sid_ranks = uid_model._rank_score_tensor(sid_full_uid_order.unsqueeze(0))
+                            fused_scores = (
+                                weight / (args.rrf_k + uid_ranks)
+                                + (1.0 - weight) / (args.rrf_k + sid_ranks)
+                            )[0]
+                        else:
+                            uid_normalized = uid_model._normalize_score_tensor(
+                                uid_logits.unsqueeze(0), args.score_normalization,
+                            )[0]
+                            sid_normalized = uid_model._normalize_score_tensor(
+                                sid_full_uid_order.unsqueeze(0), args.score_normalization,
+                            )[0]
+                            fused_scores = (
+                                weight * uid_normalized / args.temperature_uid
+                                + (1.0 - weight) * sid_normalized / args.temperature_sid
+                            )
+                        ranked = torch.topk(
+                            fused_scores, k=min(args.output_topk, len(fused_scores)),
+                        ).indices.tolist()
+                        key = (method, weight)
+                        uid_model._accumulate_ranking_metrics(
+                            totals_fused[key], ks, ranked, uid_sample,
+                        )
+                        candidate_counts[key] += len(fused_scores)
+                continue
+
             union_raw = list(dict.fromkeys(uid_top_raw + sid_top_raw))
 
             union_uid_local = [uid_raw_to_local[raw_id] for raw_id in union_raw]

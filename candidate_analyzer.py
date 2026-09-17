@@ -149,9 +149,13 @@ def _branch_candidates(model, pooled, sample, sid_names, topk):
     sid_top_by_name = {}
     parallel_scores = {}
     for sid_name in sid_names:
-        if model._sid_decoding_mode(sid_name) == 'parallel':
-            semantic, collision = model._sid_parallel_item_scores(pooled, sid_name)
-            scores = (semantic + collision)[0]
+        decoding_mode = model._sid_decoding_mode(sid_name)
+        if decoding_mode in {'parallel', 'fast'}:
+            if decoding_mode == 'fast':
+                scores = model._sid_fast_item_scores([sample], sid_name)[0]
+            else:
+                semantic, collision = model._sid_parallel_item_scores(pooled, sid_name)
+                scores = (semantic + collision)[0]
             indices = torch.topk(scores, k=min(topk, len(scores))).indices.tolist()
             sid_top_by_name[sid_name] = [int(uid) for uid in indices]
             parallel_scores[sid_name] = scores
