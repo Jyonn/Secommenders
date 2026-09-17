@@ -9,7 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from models import build_backbone
 from utils import function
-from utils.multi_decoding import fuse_candidate_scores, normalize_candidate_scores
+from utils.multi_decoding import fuse_candidate_ranks, fuse_candidate_scores, normalize_candidate_scores
 
 from .encoders import LLMSequenceEncoder, ScratchLlamaSequenceEncoder
 from .uid_hierarchy import UIDHierarchyArtifacts
@@ -1209,13 +1209,39 @@ class SequentialRecModel(nn.Module):
         return result
 
     def _multi_uid_weight(self):
-        return float(self.config.multi_uid_weight)
+        override = getattr(self.config, 'test_multi_uid_weight', None)
+        return float(self.config.multi_uid_weight if override is None else override)
 
-    def _fuse_multi_candidates(self, uid_scores: dict[int, float], sid_scores: dict[int, float]):
+    def _multi_fusion_mode(self):
+        return getattr(self.config, 'test_multi_fusion', None) or self.config.multi_fusion
+
+    def _multi_rrf_k(self):
+        override = getattr(self.config, 'test_multi_rrf_k', None)
+        return float(self.config.multi_rrf_k if override is None else override)
+
+    def _fuse_multi_candidates(
+        self,
+        uid_scores: dict[int, float],
+        sid_scores: dict[int, float],
+        uid_candidates=None,
+        sid_candidates=None,
+    ):
+        if self._multi_fusion_mode() == 'rrf':
+            if uid_candidates is None:
+                uid_candidates = sorted(uid_scores, key=uid_scores.get, reverse=True)
+            if sid_candidates is None:
+                sid_candidates = sorted(sid_scores, key=sid_scores.get, reverse=True)
+            return fuse_candidate_ranks(
+                uid_candidates,
+                sid_candidates,
+                uid_weight=self._multi_uid_weight(),
+                rrf_k=self._multi_rrf_k(),
+                output_topk=self.config.multi_output_topk,
+            )
         return fuse_candidate_scores(
             uid_scores,
             sid_scores,
-            uid_weight=self.config.multi_uid_weight,
+            uid_weight=self._multi_uid_weight(),
             score_normalization=self.config.multi_score_normalization,
             temperature_uid=self.config.multi_temperature_uid,
             temperature_sid=self.config.multi_temperature_sid,
@@ -1310,6 +1336,24 @@ class SequentialRecModel(nn.Module):
                 for uid in ordered_candidates
             }
 
+            if self._multi_fusion_mode() == 'rrf':
+                sid_rank_scores = {}
+                for per_representation in retrieval_by_representation:
+                    for rank, uid in enumerate(per_representation[batch_index], start=1):
+                        sid_rank_scores[uid] = sid_rank_scores.get(uid, 0.0) + 1.0 / rank
+                scored_unions.append({
+                    'uid_scores': per_uid,
+                    'sid_scores': {},
+                    'uid_candidates': [int(uid) for uid in uid_indices[batch_index].tolist()],
+                    'sid_candidates': sorted(
+                        sid_rank_scores,
+                        key=lambda uid: (sid_rank_scores[uid], -uid),
+                        reverse=True,
+                    ),
+                    'candidate_count': len(ordered_candidates),
+                })
+                continue
+
             complete_sid_scores = []
             for sid_name, parallel_scores in zip(
                 sid_representations, parallel_scores_by_representation,
@@ -1331,9 +1375,18 @@ class SequentialRecModel(nn.Module):
                 uid: sum(scores[uid] for scores in complete_sid_scores) / len(complete_sid_scores)
                 for uid in ordered_candidates
             }
+            sid_retrieved = set()
+            for per_representation in retrieval_by_representation:
+                sid_retrieved.update(per_representation[batch_index])
             scored_unions.append({
                 'uid_scores': per_uid,
                 'sid_scores': per_sid,
+                'uid_candidates': [int(uid) for uid in uid_indices[batch_index].tolist()],
+                'sid_candidates': sorted(
+                    sid_retrieved,
+                    key=lambda uid: (per_sid[uid], -uid),
+                    reverse=True,
+                ),
                 'candidate_count': len(ordered_candidates),
             })
         return scored_unions
@@ -1347,7 +1400,12 @@ class SequentialRecModel(nn.Module):
         for sample, scores in zip(batch, scored_unions):
             per_uid = scores['uid_scores']
             per_sid = scores['sid_scores']
-            fused = self._fuse_multi_candidates(per_uid, per_sid)
+            fused = self._fuse_multi_candidates(
+                per_uid,
+                per_sid,
+                scores['uid_candidates'],
+                scores['sid_candidates'],
+            )
             ranked_uids = [uid for uid, _ in fused]
             totals['multi_candidates'] += float(scores['candidate_count'])
             if ranked_uids:

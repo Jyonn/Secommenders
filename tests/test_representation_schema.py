@@ -354,6 +354,22 @@ def test_sid_uid_content_multi_decoder_profile_uses_three_input_views():
     assert config.task_type == 'sid+uid'
     assert config.multi_candidate_topk == 100
     assert config.multi_uid_weight == pytest.approx(0.5)
+    assert config.multi_rrf_k == pytest.approx(60.0)
+
+
+def test_rrf_test_override_does_not_change_training_signature():
+    base = _load_profile('sid-uid-content-multi-decoder.yaml')
+    rrf = _load_profile(
+        'sid-uid-content-multi-decoder.yaml',
+        test_multi_fusion='rrf',
+        test_multi_uid_weight=0.75,
+        test_multi_rrf_k=10,
+    )
+
+    assert rrf.test_multi_fusion == 'rrf'
+    assert rrf.test_multi_uid_weight == pytest.approx(0.75)
+    assert rrf.test_multi_rrf_k == pytest.approx(10.0)
+    assert trained_signature_from_config(rrf) == trained_signature_from_config(base)
 
 
 def test_model_initializes_independent_sid_embeddings_and_heads():

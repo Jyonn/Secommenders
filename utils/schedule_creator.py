@@ -527,6 +527,9 @@ class Job:
     def multi_uid_weight(self, value: float):
         return self._set_float_arg('multi_uid_weight', value)
 
+    def multi_rrf_k(self, value: float):
+        return self._set_float_arg('multi_rrf_k', value)
+
     def model_dtype(self, value: str):
         return self._set_string_arg('model_dtype', value, lower=True)
 

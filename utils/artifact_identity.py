@@ -86,6 +86,7 @@ TRAIN_CONFIG_DEFAULTS = {
     'multi_output_topk': 20,
     'multi_fusion': 'fixed',
     'multi_uid_weight': 0.5,
+    'multi_rrf_k': 60.0,
     'multi_score_normalization': 'zscore',
     'multi_temperature_uid': 1.0,
     'multi_temperature_sid': 1.0,
@@ -93,6 +94,9 @@ TRAIN_CONFIG_DEFAULTS = {
     'multi_sid_loss_weight': 1.0,
     'multi_fused_loss_weight': 0.0,
     'multi_consistency_weight': 0.0,
+    'test_multi_fusion': None,
+    'test_multi_uid_weight': None,
+    'test_multi_rrf_k': None,
     'model_dtype': 'auto',
     'use_lora': 'auto',
     'lora_rank': 8,
@@ -1195,6 +1199,9 @@ def _config_sign_payload(config: Any):
     payload.pop('code_beam_chunk_size', None)
     payload.pop('multi_candidate_topk', None)
     payload.pop('multi_output_topk', None)
+    payload.pop('test_multi_fusion', None)
+    payload.pop('test_multi_uid_weight', None)
+    payload.pop('test_multi_rrf_k', None)
     if payload.get('representation_graph'):
         for key in ('repr_source_model', 'repr_embedding', 'sid_export', 'sid_coder', 'hash_coder', 'upstreams'):
             payload.pop(key, None)

@@ -181,7 +181,15 @@ def _branch_candidates(model, pooled, sample, sid_names, topk):
         uid: sum(scores[uid] for scores in normalized_sid_spaces) / len(normalized_sid_spaces)
         for uid in union
     }
-    fused = model._fuse_multi_candidates(uid_scores, sid_scores)
+    sid_retrieved = set()
+    for candidates in sid_top_by_name.values():
+        sid_retrieved.update(candidates)
+    sid_candidates = sorted(
+        sid_retrieved,
+        key=lambda uid: (sid_scores[uid], -uid),
+        reverse=True,
+    )
+    fused = model._fuse_multi_candidates(uid_scores, sid_scores, uid_top, sid_candidates)
     return {
         'uid_top': [int(uid) for uid in uid_top],
         'sid_top_by_name': sid_top_by_name,

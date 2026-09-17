@@ -48,3 +48,28 @@ def fuse_candidate_scores(
         ranked.append((int(uid), float(uid_weight) * uid_score + (1.0 - float(uid_weight)) * sid_score))
     ranked.sort(key=lambda item: (item[1], -item[0]), reverse=True)
     return ranked[:int(output_topk)]
+
+
+def fuse_candidate_ranks(
+    uid_candidates,
+    sid_candidates,
+    *,
+    uid_weight,
+    rrf_k,
+    output_topk,
+):
+    if float(rrf_k) < 0:
+        raise ValueError('RRF k must be non-negative')
+    uid_ranks = {int(uid): rank for rank, uid in enumerate(uid_candidates, start=1)}
+    sid_ranks = {int(uid): rank for rank, uid in enumerate(sid_candidates, start=1)}
+    candidates = set(uid_ranks) | set(sid_ranks)
+    ranked = []
+    for uid in candidates:
+        score = 0.0
+        if uid in uid_ranks:
+            score += float(uid_weight) / (float(rrf_k) + uid_ranks[uid])
+        if uid in sid_ranks:
+            score += (1.0 - float(uid_weight)) / (float(rrf_k) + sid_ranks[uid])
+        ranked.append((uid, score))
+    ranked.sort(key=lambda item: (item[1], -item[0]), reverse=True)
+    return ranked[:int(output_topk)]

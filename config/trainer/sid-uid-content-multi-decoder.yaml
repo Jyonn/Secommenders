@@ -17,6 +17,7 @@ decoder:
     fusion:
       mode: ${multi_fusion:fixed}$
       uid_weight: ${multi_uid_weight:0.5}$
+      rrf_k: ${multi_rrf_k:60}$
       score_normalization: ${multi_score_normalization:zscore}$
       temperature_uid: ${multi_temperature_uid:1.0}$
       temperature_sid: ${multi_temperature_sid:1.0}$

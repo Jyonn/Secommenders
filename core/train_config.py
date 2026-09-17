@@ -123,6 +123,7 @@ class TrainConfig:
     multi_output_topk: int
     multi_fusion: str
     multi_uid_weight: float
+    multi_rrf_k: float
     multi_score_normalization: str
     multi_temperature_uid: float
     multi_temperature_sid: float
@@ -146,6 +147,9 @@ class TrainConfig:
     representation_pair_bias_mode: str = 'none'
     representation_pair_bias_residual_scale: float = 0.1
     representation_graph: Optional[dict] = None
+    test_multi_fusion: Optional[str] = None
+    test_multi_uid_weight: Optional[float] = None
+    test_multi_rrf_k: Optional[float] = None
 
     @property
     def effective_batch_size(self):
@@ -365,14 +369,32 @@ class TrainConfig:
         if multi_candidate_topk <= 0 or multi_output_topk <= 0:
             raise ValueError('decoder.multi candidate_topk and output_topk must be positive')
         multi_fusion_mode = str(_get(multi_fusion, 'mode', 'fixed')).strip().lower()
-        if multi_fusion_mode != 'fixed':
-            raise ValueError('decoder.multi.fusion.mode currently supports fixed only')
+        if multi_fusion_mode not in {'fixed', 'rrf'}:
+            raise ValueError('decoder.multi.fusion.mode must be fixed or rrf')
         multi_score_normalization = str(_get(multi_fusion, 'score_normalization', 'zscore')).strip().lower()
         if multi_score_normalization not in {'none', 'zscore', 'minmax'}:
             raise ValueError('decoder.multi.fusion.score_normalization must be none, zscore, or minmax')
         multi_uid_weight = float(_get(multi_fusion, 'uid_weight', 0.5))
         if not 0.0 <= multi_uid_weight <= 1.0:
             raise ValueError('decoder.multi.fusion.uid_weight must be in [0, 1]')
+        multi_rrf_k = float(_get(multi_fusion, 'rrf_k', 60.0))
+        if multi_rrf_k < 0:
+            raise ValueError('decoder.multi.fusion.rrf_k must be non-negative')
+        test_multi_fusion = _get(evaluator, 'multi_fusion_override', None)
+        if test_multi_fusion is not None:
+            test_multi_fusion = str(test_multi_fusion).strip().lower()
+            if test_multi_fusion not in {'fixed', 'rrf'}:
+                raise ValueError('test_multi_fusion must be fixed or rrf')
+        test_multi_uid_weight = _get(evaluator, 'multi_uid_weight_override', None)
+        if test_multi_uid_weight is not None:
+            test_multi_uid_weight = float(test_multi_uid_weight)
+            if not 0.0 <= test_multi_uid_weight <= 1.0:
+                raise ValueError('test_multi_uid_weight must be in [0, 1]')
+        test_multi_rrf_k = _get(evaluator, 'multi_rrf_k_override', None)
+        if test_multi_rrf_k is not None:
+            test_multi_rrf_k = float(test_multi_rrf_k)
+            if test_multi_rrf_k < 0:
+                raise ValueError('test_multi_rrf_k must be non-negative')
         multi_temperature_uid = float(_get(multi_fusion, 'temperature_uid', 1.0))
         multi_temperature_sid = float(_get(multi_fusion, 'temperature_sid', 1.0))
         if multi_temperature_uid <= 0 or multi_temperature_sid <= 0:
@@ -459,6 +481,7 @@ class TrainConfig:
             multi_output_topk=multi_output_topk,
             multi_fusion=multi_fusion_mode,
             multi_uid_weight=multi_uid_weight,
+            multi_rrf_k=multi_rrf_k,
             multi_score_normalization=multi_score_normalization,
             multi_temperature_uid=multi_temperature_uid,
             multi_temperature_sid=multi_temperature_sid,
@@ -478,7 +501,10 @@ class TrainConfig:
             num_heads=int(scratch.num_heads),
             dropout=float(scratch.dropout),
             upstreams=canonical_upstreams,
-        )
+            test_multi_fusion=test_multi_fusion,
+            test_multi_uid_weight=test_multi_uid_weight,
+            test_multi_rrf_k=test_multi_rrf_k,
+            )
         if config.repr_combine == 'add':
             return config
         graph = graph_from_legacy_config(asdict(config))
@@ -561,7 +587,7 @@ class TrainConfig:
                 'candidate_topk': 100,
                 'output_topk': 20,
                 'fusion': {
-                    'mode': 'fixed', 'uid_weight': 0.5, 'score_normalization': 'zscore',
+                    'mode': 'fixed', 'uid_weight': 0.5, 'rrf_k': 60.0, 'score_normalization': 'zscore',
                     'temperature_uid': 1.0, 'temperature_sid': 1.0,
                 },
                 'frequency': {'threshold': 5, 'smoothing': 2.0},
@@ -733,6 +759,9 @@ class TrainConfig:
         payload.pop('code_beam_chunk_size', None)
         payload.pop('multi_candidate_topk', None)
         payload.pop('multi_output_topk', None)
+        payload.pop('test_multi_fusion', None)
+        payload.pop('test_multi_uid_weight', None)
+        payload.pop('test_multi_rrf_k', None)
         if self.representation_graph:
             for key in ('repr_source_model', 'repr_embedding', 'sid_export', 'sid_coder', 'hash_coder', 'upstreams'):
                 payload.pop(key, None)

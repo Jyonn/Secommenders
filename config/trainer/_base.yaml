@@ -47,3 +47,6 @@ evaluator:
   metrics: ${metrics:ndcg@5,ndcg@10,ndcg@20,hr@5,hr@10,hr@20,mrr}$
   frequency_breakdown: ${frequency_breakdown:false}$
   frequency_buckets: ${frequency_buckets:0,5,20,100}$
+  multi_fusion_override: ${test_multi_fusion:null}$
+  multi_uid_weight_override: ${test_multi_uid_weight:null}$
+  multi_rrf_k_override: ${test_multi_rrf_k:null}$

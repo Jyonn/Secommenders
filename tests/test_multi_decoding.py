@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from core.model import SequentialRecModel
 from utils.compile import CompileConfig, canonicalize_task_type
 from utils.artifact_identity import migrate_train_config_dict, trained_spec_from_config
-from utils.multi_decoding import fuse_candidate_scores
+from utils.multi_decoding import fuse_candidate_ranks, fuse_candidate_scores
 
 
 class MultiDecodingTests(unittest.TestCase):
@@ -79,6 +79,28 @@ class MultiDecodingTests(unittest.TestCase):
                 temperature_sid=1.0,
                 output_topk=2,
             )
+
+    def test_rrf_combines_retrieval_ranks_without_complete_scores(self):
+        ranked = fuse_candidate_ranks(
+            uid_candidates=[0, 1, 2],
+            sid_candidates=[2, 3, 0],
+            uid_weight=0.5,
+            rrf_k=60,
+            output_topk=4,
+        )
+        self.assertEqual([uid for uid, _ in ranked], [0, 2, 1, 3])
+
+    def test_weighted_rrf_endpoints_reproduce_branch_order(self):
+        uid_ranked = fuse_candidate_ranks(
+            uid_candidates=[3, 1], sid_candidates=[2, 0],
+            uid_weight=1.0, rrf_k=60, output_topk=2,
+        )
+        sid_ranked = fuse_candidate_ranks(
+            uid_candidates=[3, 1], sid_candidates=[2, 0],
+            uid_weight=0.0, rrf_k=60, output_topk=2,
+        )
+        self.assertEqual([uid for uid, _ in uid_ranked], [3, 1])
+        self.assertEqual([uid for uid, _ in sid_ranked], [2, 0])
 
     def test_registry_migration_omits_multi_defaults_for_single_task(self):
         migrated = migrate_train_config_dict({

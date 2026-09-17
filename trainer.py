@@ -142,10 +142,11 @@ class Trainer:
         )
         if self.config.is_multi_task:
             self._pnt(
-                f'multi decoding tasks={self.config.task_type} fusion={self.config.multi_fusion} '
+                f'multi decoding tasks={self.config.task_type} fusion={self.model_core._multi_fusion_mode()} '
                 f'candidate_topk={self.config.multi_candidate_topk} output_topk={self.config.multi_output_topk} '
                 f'normalization={self.config.multi_score_normalization} '
-                f'uid_weight={self.config.multi_uid_weight:g} '
+                f'uid_weight={self.model_core._multi_uid_weight():g} '
+                f'rrf_k={self.model_core._multi_rrf_k():g} '
                 f'temperatures=uid:{self.config.multi_temperature_uid:g},sid:{self.config.multi_temperature_sid:g}'
             )
         elif self.config.task_type == 'uid' and self.config.uid_decoding == 'hierarchical':
@@ -197,9 +198,11 @@ class Trainer:
         )
         if self.config.is_multi_task:
             self._pnt(
-                f'multi decoding tasks={self.config.task_type} fusion={self.config.multi_fusion} '
+                f'multi decoding tasks={self.config.task_type} fusion={self.model_core._multi_fusion_mode()} '
                 f'candidate_topk={self.config.multi_candidate_topk} output_topk={self.config.multi_output_topk} '
-                f'normalization={self.config.multi_score_normalization}'
+                f'normalization={self.config.multi_score_normalization} '
+                f'uid_weight={self.model_core._multi_uid_weight():g} '
+                f'rrf_k={self.model_core._multi_rrf_k():g}'
             )
         elif self.config.task_type == 'uid' and self.config.uid_decoding == 'hierarchical':
             self._pnt(

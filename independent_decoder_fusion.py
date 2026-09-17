@@ -12,7 +12,7 @@ from core.dataset import CompiledTestSampleDataset
 from trainer import Trainer
 from utils.artifact_identity import migrate_train_config_dict
 from utils.logging import setup_logging
-from utils.multi_decoding import fuse_candidate_scores
+from utils.multi_decoding import fuse_candidate_ranks, fuse_candidate_scores
 
 
 def _parse_weights(value):
@@ -20,6 +20,21 @@ def _parse_weights(value):
     if not weights or any(weight < 0.0 or weight > 1.0 for weight in weights):
         raise ValueError('--uid-weights must contain values in [0, 1]')
     return list(dict.fromkeys(weights))
+
+
+def _parse_fusion_methods(value):
+    aliases = {'score': 'fixed', 'fixed': 'fixed', 'rrf': 'rrf'}
+    methods = []
+    for part in str(value).split(','):
+        key = part.strip().lower()
+        if not key:
+            continue
+        if key not in aliases:
+            raise ValueError('--fusion-methods supports fixed and rrf')
+        methods.append(aliases[key])
+    if not methods:
+        raise ValueError('--fusion-methods requires at least one method')
+    return list(dict.fromkeys(methods))
 
 
 def _load_config(checkpoint_path, device):
@@ -128,6 +143,8 @@ def main():
     parser.add_argument('--uid-checkpoint', required=True)
     parser.add_argument('--sid-checkpoint', required=True)
     parser.add_argument('--uid-weights', default='0,0.25,0.5,0.75,1')
+    parser.add_argument('--fusion-methods', default='fixed,rrf')
+    parser.add_argument('--rrf-k', type=float, default=60.0)
     parser.add_argument('--split', choices=('valid', 'test'), default='test')
     parser.add_argument('--candidate-topk', type=int, default=20)
     parser.add_argument('--output-topk', type=int, default=20)
@@ -143,9 +160,12 @@ def main():
         raise ValueError('candidate and output top-k must be positive')
     if args.temperature_uid <= 0 or args.temperature_sid <= 0:
         raise ValueError('temperatures must be positive')
+    if args.rrf_k < 0:
+        raise ValueError('--rrf-k must be non-negative')
 
     setup_logging()
     weights = _parse_weights(args.uid_weights)
+    fusion_methods = _parse_fusion_methods(args.fusion_methods)
     uid_trainer, uid_checkpoint = _load_model(args.uid_checkpoint, args.uid_device, 'uid')
     sid_trainer, sid_checkpoint = _load_model(args.sid_checkpoint, args.sid_device, 'sid')
     uid_model = uid_trainer.model_core
@@ -182,8 +202,12 @@ def main():
         ks.append(args.output_topk)
     totals_uid = uid_model._init_ranking_totals(ks)
     totals_sid = uid_model._init_ranking_totals(ks)
-    totals_fused = {weight: uid_model._init_ranking_totals(ks) for weight in weights}
-    candidate_counts = {weight: 0.0 for weight in weights}
+    totals_fused = {
+        (method, weight): uid_model._init_ranking_totals(ks)
+        for method in fusion_methods
+        for weight in weights
+    }
+    candidate_counts = {key: 0.0 for key in totals_fused}
 
     with torch.inference_mode():
         for uid_sample, sid_sample in tqdm(pairs, desc='independent-fusion'):
@@ -226,19 +250,30 @@ def main():
             )
             sid_ranked_uid_local = [uid_raw_to_local[raw_id] for raw_id in sid_top_raw[:args.output_topk]]
             uid_model._accumulate_ranking_metrics(totals_sid, ks, sid_ranked_uid_local, uid_sample)
-            for weight in weights:
-                fused = fuse_candidate_scores(
-                    uid_scores,
-                    sid_scores,
-                    uid_weight=weight,
-                    score_normalization=args.score_normalization,
-                    temperature_uid=args.temperature_uid,
-                    temperature_sid=args.temperature_sid,
-                    output_topk=args.output_topk,
-                )
-                ranked = [uid for uid, _ in fused]
-                uid_model._accumulate_ranking_metrics(totals_fused[weight], ks, ranked, uid_sample)
-                candidate_counts[weight] += len(union_raw)
+            for method in fusion_methods:
+                for weight in weights:
+                    if method == 'rrf':
+                        fused = fuse_candidate_ranks(
+                            uid_top_local,
+                            sid_ranked_uid_local,
+                            uid_weight=weight,
+                            rrf_k=args.rrf_k,
+                            output_topk=args.output_topk,
+                        )
+                    else:
+                        fused = fuse_candidate_scores(
+                            uid_scores,
+                            sid_scores,
+                            uid_weight=weight,
+                            score_normalization=args.score_normalization,
+                            temperature_uid=args.temperature_uid,
+                            temperature_sid=args.temperature_sid,
+                            output_topk=args.output_topk,
+                        )
+                    ranked = [uid for uid, _ in fused]
+                    key = (method, weight)
+                    uid_model._accumulate_ranking_metrics(totals_fused[key], ks, ranked, uid_sample)
+                    candidate_counts[key] += len(union_raw)
 
     sample_count = len(pairs)
     denominator = max(sample_count, 1)
@@ -255,14 +290,17 @@ def main():
             'candidates': float(args.candidate_topk),
         },
     ]
-    for weight in weights:
-        rows.append({
-            'model': 'Independent fusion',
-            'uid_weight': weight,
-            'sid_weight': 1.0 - weight,
-            **{key: value / denominator for key, value in totals_fused[weight].items()},
-            'candidates': candidate_counts[weight] / denominator,
-        })
+    for method in fusion_methods:
+        for weight in weights:
+            key = (method, weight)
+            rows.append({
+                'model': 'RRF' if method == 'rrf' else 'Score fusion',
+                'fusion_method': method,
+                'uid_weight': weight,
+                'sid_weight': 1.0 - weight,
+                **{metric: value / denominator for metric, value in totals_fused[key].items()},
+                'candidates': candidate_counts[key] / denominator,
+            })
 
     selection_metric = next(
         (name for name in str(uid_trainer.config.main_metric).split('|') if name in rows[-1]),
@@ -285,9 +323,12 @@ def main():
         'candidate_topk_per_branch': args.candidate_topk,
         'output_topk': args.output_topk,
         'score_normalization': args.score_normalization,
+        'fusion_methods': fusion_methods,
+        'rrf_k': args.rrf_k,
         'selection_metric': selection_metric,
         'best_uid_weight': best['uid_weight'],
         'best_sid_weight': best['sid_weight'],
+        'best_fusion_method': best['fusion_method'],
         'results': rows,
     }
     output_path.write_text(json.dumps(report, indent=2) + '\n')
@@ -300,7 +341,8 @@ def main():
     print('=' * 100)
     print(_format_table(rows, metric_names))
     print(
-        f'\nbest by {selection_metric}: UID={best["uid_weight"]:.2f} '
+        f'\nbest by {selection_metric}: method={best["fusion_method"]} '
+        f'UID={best["uid_weight"]:.2f} '
         f'SID={best["sid_weight"]:.2f} {selection_metric}={best[selection_metric]:.4f}'
     )
     print(f'JSON: {output_path}')
