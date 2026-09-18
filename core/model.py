@@ -77,8 +77,9 @@ class SequentialRecModel(nn.Module):
         }
         num_representations = len(self.attention_representation_names)
         self.representation_pair_bias_head_residual = None
+        residual_scale = getattr(config, 'representation_pair_bias_residual_scale', 0.1)
         self.representation_pair_bias_residual_scale = float(
-            getattr(config, 'representation_pair_bias_residual_scale', 0.1)
+            0.1 if residual_scale is None else residual_scale
         )
         if self.representation_pair_bias_mode in {'shared', 'head'}:
             pair_bias_shape = (num_representations, num_representations)
