@@ -326,6 +326,53 @@ def build_beauty_multi_representation_grid():
     return build_multi_representation_grid('beauty')
 
 
+def build_beauty_multi_decoder_training_grid():
+    """Strengthen non-UID supervision before tuning inference-only fusion."""
+    jobs = []
+    loss_weights = (
+        (1.0, 1.0),
+        (0.75, 1.25),
+        (0.5, 1.5),
+        (0.25, 1.75),
+    )
+    alignment_weights = (0.0, 0.05, 0.1)
+    for uid_loss_weight, sid_loss_weight in loss_weights:
+        loss_label = f'u{uid_loss_weight:g}_s{sid_loss_weight:g}'.replace('.', 'p')
+        for alignment_weight in alignment_weights:
+            alignment_label = f'a{alignment_weight:g}'.replace('.', 'p')
+            jobs.append(
+                Job(f'beauty_multi_train_{loss_label}_{alignment_label}')
+                .trainer_config(MULTI_DECODER_CONFIG)
+                .data('beauty')
+                .model('scratch')
+                .main_metric('ndcg@10|loss')
+                .maxitems(256)
+                .batch_size(16)
+                .accumulate_batch(4)
+                .batch_size_cap(16)
+                .code_beam_chunk_size(80)
+                .multi_uid_weight(0.5)
+                .representation_pair_bias(True)
+                .representation_pair_bias_mode('head')
+                .representation_pair_bias_residual_scale(0.03)
+                .seed(42)
+                .args(
+                    sid_codebook_size=128,
+                    content_embedding_normalize=False,
+                    content_embedding_dim=0,
+                    multi_uid_loss_weight=uid_loss_weight,
+                    multi_sid_loss_weight=sid_loss_weight,
+                    alignment_weight=alignment_weight,
+                )
+            )
+
+    return Schedule(
+        jobs=jobs,
+        name='beauty_multi_decoder_training_grid',
+        effective_batch_size=64,
+    ).export(Path('config/beauty_multi_decoder_training_grid_scheduler.yaml'))
+
+
 def build_mindf_multi_representation_grid():
     return build_multi_representation_grid('mindf')
 
