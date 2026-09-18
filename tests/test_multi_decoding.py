@@ -58,6 +58,13 @@ class MultiDecodingTests(unittest.TestCase):
         self.assertAlmostEqual(float(fused[0, 0]), float(fused[0, 3]), places=6)
         self.assertAlmostEqual(float(fused[0, 1]), float(fused[0, 2]), places=6)
 
+    def test_full_catalog_ranks_keep_tied_items_equal(self):
+        ranks = SequentialRecModel._rank_score_tensor(
+            torch.tensor([[4.0, 2.0, 2.0, 1.0]]),
+        )
+
+        self.assertEqual(ranks.tolist(), [[1.0, 2.0, 2.0, 4.0]])
+
     def test_sequential_sid_rescores_every_union_candidate_with_teacher_forcing(self):
         model = SequentialRecModel.__new__(SequentialRecModel)
         torch.nn.Module.__init__(model)

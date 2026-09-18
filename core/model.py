@@ -1286,11 +1286,16 @@ class SequentialRecModel(nn.Module):
     @staticmethod
     def _rank_score_tensor(scores: torch.Tensor):
         order = torch.argsort(scores, dim=-1, descending=True)
-        ranks = torch.empty_like(order)
-        rank_values = torch.arange(
+        sorted_scores = scores.gather(dim=-1, index=order)
+        positions = torch.arange(
             1, scores.shape[-1] + 1, dtype=order.dtype, device=scores.device,
         ).expand_as(order)
-        ranks.scatter_(dim=-1, index=order, src=rank_values)
+        group_starts = torch.ones_like(sorted_scores, dtype=torch.bool)
+        group_starts[..., 1:] = sorted_scores[..., 1:] != sorted_scores[..., :-1]
+        competition_ranks = torch.where(group_starts, positions, torch.zeros_like(positions))
+        competition_ranks = torch.cummax(competition_ranks, dim=-1).values
+        ranks = torch.empty_like(competition_ranks)
+        ranks.scatter_(dim=-1, index=order, src=competition_ranks)
         return ranks.float()
 
     def _fuse_multi_score_tensors(self, uid_scores: torch.Tensor, sid_scores: torch.Tensor):
