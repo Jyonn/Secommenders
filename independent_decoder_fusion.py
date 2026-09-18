@@ -158,6 +158,7 @@ def main():
     parser.add_argument('--temperature-sid', type=float, default=1.0)
     parser.add_argument('--uid-device')
     parser.add_argument('--sid-device')
+    parser.add_argument('--sid-decoding', choices=('sequential', 'parallel', 'fast'), default='fast')
     parser.add_argument('--max-samples', type=int, default=0)
     parser.add_argument('--output')
     args = parser.parse_args()
@@ -173,6 +174,7 @@ def main():
     fusion_methods = _parse_fusion_methods(args.fusion_methods)
     uid_trainer, uid_checkpoint = _load_model(args.uid_checkpoint, args.uid_device, 'uid')
     sid_trainer, sid_checkpoint = _load_model(args.sid_checkpoint, args.sid_device, 'sid')
+    sid_trainer.config.test_sid_decoding = args.sid_decoding
     uid_model = uid_trainer.model_core
     sid_model = sid_trainer.model_core
     if uid_trainer.config.data != sid_trainer.config.data:
@@ -380,6 +382,7 @@ def main():
         'uid_checkpoint_epoch': uid_checkpoint.get('epoch'),
         'sid_checkpoint': str(args.sid_checkpoint),
         'sid_checkpoint_epoch': sid_checkpoint.get('epoch'),
+        'sid_decoding': sid_decoding_mode,
         'samples': sample_count,
         'candidate_topk_per_branch': args.candidate_topk,
         'output_topk': args.output_topk,

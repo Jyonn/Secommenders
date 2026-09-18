@@ -150,6 +150,7 @@ class TrainConfig:
     test_multi_fusion: Optional[str] = None
     test_multi_uid_weight: Optional[float] = None
     test_multi_rrf_k: Optional[float] = None
+    test_sid_decoding: Optional[str] = None
 
     @property
     def effective_batch_size(self):
@@ -400,6 +401,11 @@ class TrainConfig:
             test_multi_rrf_k = float(test_multi_rrf_k)
             if test_multi_rrf_k < 0:
                 raise ValueError('test_multi_rrf_k must be non-negative')
+        test_sid_decoding = _get(evaluator, 'sid_decoding_override', None)
+        if test_sid_decoding is not None:
+            test_sid_decoding = str(test_sid_decoding).strip().lower()
+            if test_sid_decoding not in {'sequential', 'parallel', 'fast'}:
+                raise ValueError('test_sid_decoding must be sequential, parallel, or fast')
         multi_temperature_uid = float(_get(multi_fusion, 'temperature_uid', 1.0))
         multi_temperature_sid = float(_get(multi_fusion, 'temperature_sid', 1.0))
         if multi_temperature_uid <= 0 or multi_temperature_sid <= 0:
@@ -509,6 +515,7 @@ class TrainConfig:
             test_multi_fusion=test_multi_fusion,
             test_multi_uid_weight=test_multi_uid_weight,
             test_multi_rrf_k=test_multi_rrf_k,
+            test_sid_decoding=test_sid_decoding,
             )
         if config.repr_combine == 'add':
             return config
@@ -767,6 +774,7 @@ class TrainConfig:
         payload.pop('test_multi_fusion', None)
         payload.pop('test_multi_uid_weight', None)
         payload.pop('test_multi_rrf_k', None)
+        payload.pop('test_sid_decoding', None)
         if self.representation_graph:
             for key in ('repr_source_model', 'repr_embedding', 'sid_export', 'sid_coder', 'hash_coder', 'upstreams'):
                 payload.pop(key, None)

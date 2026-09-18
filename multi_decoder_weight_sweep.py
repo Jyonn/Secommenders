@@ -9,10 +9,7 @@ from trainer import Trainer
 from utils import function
 from utils.config_init import ConfigInit
 from utils.logging import setup_logging
-from utils.multi_decoding import fuse_candidate_scores
-
-
-SWEEP_KEYS = {'uid_weights', 'output', 'max_batches'}
+SWEEP_KEYS = {'uid_weights', 'fusion_methods', 'rrf_k', 'output', 'max_batches'}
 
 
 def _parse_weights(value):
@@ -24,11 +21,27 @@ def _parse_weights(value):
     return list(dict.fromkeys(values))
 
 
+def _parse_fusion_methods(value):
+    aliases = {'score': 'fixed', 'fixed': 'fixed', 'rrf': 'rrf'}
+    methods = []
+    for part in str(value).split(','):
+        key = part.strip().lower()
+        if not key:
+            continue
+        if key not in aliases:
+            raise ValueError('--fusion_methods supports fixed and rrf')
+        methods.append(aliases[key])
+    if not methods:
+        raise ValueError('--fusion_methods requires at least one method')
+    return list(dict.fromkeys(methods))
+
+
 def _format_table(rows, metric_names):
-    headers = ['uid_weight', 'sid_weight', *metric_names, 'candidates']
+    headers = ['fusion', 'uid_weight', 'sid_weight', *metric_names, 'candidates']
     values = []
     for row in rows:
         values.append([
+            row['fusion_method'],
             f'{row["uid_weight"]:.2f}',
             f'{row["sid_weight"]:.2f}',
             *[f'{row.get(metric, 0.0):.4f}' for metric in metric_names],
@@ -41,21 +54,23 @@ def _format_table(rows, metric_names):
     return '\n'.join(lines)
 
 
-def _sweep_scored_unions(model, batch, scored_unions, weights, totals_by_weight, ks):
-    for sample, scores in zip(batch, scored_unions):
-        for weight in weights:
-            fused = fuse_candidate_scores(
-                scores['uid_scores'],
-                scores['sid_scores'],
-                uid_weight=weight,
-                score_normalization=model.config.multi_score_normalization,
-                temperature_uid=model.config.multi_temperature_uid,
-                temperature_sid=model.config.multi_temperature_sid,
-                output_topk=model.config.multi_output_topk,
+def _full_sid_scores(model, pooled, batch, sid_names):
+    spaces = []
+    for sid_name in sid_names:
+        mode = model._sid_decoding_mode(sid_name)
+        if mode == 'fast':
+            scores = model._sid_fast_item_scores(batch, sid_name)
+        elif mode == 'parallel':
+            semantic, collision = model._sid_parallel_item_scores(pooled, sid_name)
+            scores = semantic + collision
+        else:
+            raise ValueError(
+                'full-catalog fusion sweep requires test_sid_decoding=fast or parallel'
             )
-            totals = totals_by_weight[weight]
-            totals['multi_candidates'] += float(scores['candidate_count'])
-            model._accumulate_ranking_metrics(totals, ks, [uid for uid, _ in fused], sample)
+        spaces.append(model._normalize_score_tensor(
+            scores, model.config.multi_score_normalization,
+        ))
+    return torch.stack(spaces).mean(dim=0)
 
 
 def main():
@@ -73,6 +88,10 @@ def main():
         raise ValueError('weight sweep requires a SID+UID multi-decoder trainer config')
 
     weights = _parse_weights(sweep.get('uid_weights', '0,0.25,0.5,0.75,1'))
+    fusion_methods = _parse_fusion_methods(sweep.get('fusion_methods', 'fixed,rrf'))
+    rrf_k = float(sweep.get('rrf_k', config.multi_rrf_k))
+    if rrf_k < 0:
+        raise ValueError('--rrf_k must be non-negative')
     max_batches = int(sweep.get('max_batches', 0))
     output_path = Path(sweep.get('output') or f'reports/{config.data}_multi_decoder_weight_sweep.json')
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,8 +103,12 @@ def main():
     model.eval()
     sid_names = config.compile_config.names_for_kind('sid', targets=True)
     ks = model.ranking_ks()
-    totals_by_weight = {weight: model._init_ranking_totals(ks) for weight in weights}
-    for totals in totals_by_weight.values():
+    totals_by_setting = {
+        (method, weight): model._init_ranking_totals(ks)
+        for method in fusion_methods
+        for weight in weights
+    }
+    for totals in totals_by_setting.values():
         totals['multi_candidates'] = 0.0
 
     sample_count = 0
@@ -97,18 +120,54 @@ def main():
             inputs, attention_mask, lengths = model._build_batch_inputs(batch)
             hidden = model.encoder(inputs_embeds=inputs, attention_mask=attention_mask)
             pooled = hidden[torch.arange(len(batch), device=model.device), lengths - 1]
-            scored_unions = model._score_multi_candidate_unions(pooled, batch, sid_names)
-            _sweep_scored_unions(model, batch, scored_unions, weights, totals_by_weight, ks)
+            uid_scores = model._uid_logits(pooled).float()
+            sid_scores = _full_sid_scores(model, pooled, batch, sid_names)
+            uid_normalized = model._normalize_score_tensor(
+                uid_scores, config.multi_score_normalization,
+            )
+            sid_normalized = model._normalize_score_tensor(
+                sid_scores, config.multi_score_normalization,
+            )
+            uid_ranks = model._rank_score_tensor(uid_scores)
+            sid_ranks = model._rank_score_tensor(sid_scores)
+            for method in fusion_methods:
+                for weight in weights:
+                    if method == 'rrf':
+                        fused_scores = (
+                            weight / (rrf_k + uid_ranks)
+                            + (1.0 - weight) / (rrf_k + sid_ranks)
+                        )
+                    else:
+                        fused_scores = (
+                            weight * uid_normalized / config.multi_temperature_uid
+                            + (1.0 - weight) * sid_normalized / config.multi_temperature_sid
+                        )
+                    ranking = torch.topk(
+                        fused_scores,
+                        k=min(config.multi_output_topk, fused_scores.shape[-1]),
+                        dim=-1,
+                    ).indices
+                    totals = totals_by_setting[(method, weight)]
+                    totals['multi_candidates'] += float(fused_scores.shape[-1] * len(batch))
+                    for sample, ranked in zip(batch, ranking):
+                        model._accumulate_ranking_metrics(
+                            totals, ks, [int(uid) for uid in ranked.tolist()], sample,
+                        )
             sample_count += len(batch)
 
     rows = []
-    for weight in weights:
-        row = {
-            'uid_weight': weight,
-            'sid_weight': 1.0 - weight,
-            **{key: value / max(sample_count, 1) for key, value in totals_by_weight[weight].items()},
-        }
-        rows.append(row)
+    for method in fusion_methods:
+        for weight in weights:
+            row = {
+                'fusion_method': method,
+                'uid_weight': weight,
+                'sid_weight': 1.0 - weight,
+                **{
+                    key: value / max(sample_count, 1)
+                    for key, value in totals_by_setting[(method, weight)].items()
+                },
+            }
+            rows.append(row)
     metric_names = [name for name in ('ndcg@5', 'ndcg@10', 'ndcg@20', 'hr@5', 'hr@10', 'hr@20', 'mrr') if name in rows[0]]
     selection_metric = next(
         (name for name in str(config.main_metric).split('|') if name in rows[0]),
@@ -123,8 +182,11 @@ def main():
         'selection_metric': selection_metric,
         'best_uid_weight': best['uid_weight'],
         'best_sid_weight': best['sid_weight'],
+        'best_fusion_method': best['fusion_method'],
+        'fusion_methods': fusion_methods,
+        'rrf_k': rrf_k,
         'results': rows,
-        'note': 'Weights 0 and 1 rerank the shared UID/SID candidate union; they are not standalone branch retrieval.',
+        'note': 'Fast SID and UID are both ranked over the complete item catalog.',
     }
     output_path.write_text(json.dumps(report, indent=2) + '\n')
 
@@ -133,10 +195,11 @@ def main():
     print('=' * 100)
     print(_format_table(rows, metric_names))
     print(
-        f'\nbest by {selection_metric}: UID={best["uid_weight"]:.2f} '
+        f'\nbest by {selection_metric}: fusion={best["fusion_method"]} '
+        f'UID={best["uid_weight"]:.2f} '
         f'SID={best["sid_weight"]:.2f} {selection_metric}={best[selection_metric]:.4f}'
     )
-    print('Note: endpoint weights rerank the shared candidate union, not standalone branch retrieval.')
+    print('Note: Fast SID and UID are both ranked over the complete item catalog.')
     print(f'JSON: {output_path}')
 
 

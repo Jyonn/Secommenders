@@ -364,11 +364,13 @@ def test_rrf_test_override_does_not_change_training_signature():
         test_multi_fusion='rrf',
         test_multi_uid_weight=0.75,
         test_multi_rrf_k=10,
+        test_sid_decoding='fast',
     )
 
     assert rrf.test_multi_fusion == 'rrf'
     assert rrf.test_multi_uid_weight == pytest.approx(0.75)
     assert rrf.test_multi_rrf_k == pytest.approx(10.0)
+    assert rrf.test_sid_decoding == 'fast'
     assert trained_signature_from_config(rrf) == trained_signature_from_config(base)
 
 

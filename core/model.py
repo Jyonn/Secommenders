@@ -602,6 +602,12 @@ class SequentialRecModel(nn.Module):
         return weights
 
     def _sid_decoding_mode(self, representation=None):
+        override = getattr(self.config, 'test_sid_decoding', None)
+        if override is not None:
+            mode = str(override).strip().lower()
+            if mode not in {'sequential', 'parallel', 'fast'}:
+                raise ValueError(f'Unsupported test SID decoding override: {mode}')
+            return mode
         name = self._resolve_sid_name(representation)
         target = self.config.compile_config.target_spec(name) or {}
         decoding = target.get('decoding') or {}

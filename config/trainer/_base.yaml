@@ -50,3 +50,4 @@ evaluator:
   multi_fusion_override: ${test_multi_fusion:null}$
   multi_uid_weight_override: ${test_multi_uid_weight:null}$
   multi_rrf_k_override: ${test_multi_rrf_k:null}$
+  sid_decoding_override: ${test_sid_decoding:null}$
