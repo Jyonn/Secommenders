@@ -757,6 +757,8 @@ class Trainer:
                             for target in self.config.compile_config.target_names
                         )
                     else:
+                        if name not in current_graph['representations']:
+                            continue
                         legacy_name = self.config.compile_config.representation_kind(name)
                     if legacy_name in TYPE_MARKER_ORDER:
                         old_index = TYPE_MARKER_ORDER.index(legacy_name)
