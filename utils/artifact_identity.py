@@ -57,6 +57,8 @@ TRAIN_CONFIG_DEFAULTS = {
     'valid_only': 0,
     'test_only': False,
     'load_ckpt': None,
+    'frequency_breakdown': False,
+    'frequency_buckets': [0, 5, 20, 100],
     'overwrite': 'auto',
     'epochs': 0,
     'learning_rate': 0.0001,
@@ -97,6 +99,7 @@ TRAIN_CONFIG_DEFAULTS = {
     'test_multi_fusion': None,
     'test_multi_uid_weight': None,
     'test_multi_rrf_k': None,
+    'test_sid_decoding': None,
     'model_dtype': 'auto',
     'use_lora': 'auto',
     'lora_rank': 8,
@@ -1195,6 +1198,8 @@ def _config_sign_payload(config: Any):
     payload.pop('valid_only', None)
     payload.pop('test_only', None)
     payload.pop('load_ckpt', None)
+    payload.pop('frequency_breakdown', None)
+    payload.pop('frequency_buckets', None)
     payload.pop('overwrite', None)
     payload.pop('code_beam_chunk_size', None)
     payload.pop('multi_candidate_topk', None)
@@ -1202,6 +1207,7 @@ def _config_sign_payload(config: Any):
     payload.pop('test_multi_fusion', None)
     payload.pop('test_multi_uid_weight', None)
     payload.pop('test_multi_rrf_k', None)
+    payload.pop('test_sid_decoding', None)
     if payload.get('representation_graph'):
         for key in ('repr_source_model', 'repr_embedding', 'sid_export', 'sid_coder', 'hash_coder', 'upstreams'):
             payload.pop(key, None)

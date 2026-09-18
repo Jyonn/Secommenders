@@ -181,12 +181,16 @@ def semantic_graph_contract(graph):
         target = dict(target or {})
         name = target.pop('representation')
         targets.append({'encoder_index': index_by_name[name], **target})
+    multiple = deepcopy(decoder.get('multiple') or {})
+    fusion = multiple.get('fusion')
+    if isinstance(fusion, dict):
+        fusion.setdefault('rrf_k', 60.0)
     return {
         'representations': [deepcopy(catalog[name]) for name in encoder_names],
         'encoder': {'combine': encoder.get('combine') or 'concat'},
         'decoder': {
             'targets': targets,
-            'multiple': deepcopy(decoder.get('multiple') or {}),
+            'multiple': multiple,
         },
     }
 
