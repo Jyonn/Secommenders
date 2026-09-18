@@ -362,13 +362,13 @@ def build_beauty_multi_decoder_training_grid():
                     content_embedding_dim=0,
                     multi_uid_loss_weight=uid_loss_weight,
                     multi_sid_loss_weight=sid_loss_weight,
-                    alignment_weight=alignment_weight,
+                    alignment=alignment_weight,
                 )
             )
 
     return Schedule(
         jobs=jobs,
-        name='beauty_multi_decoder_training_grid',
+        name='beauty_multi_decoder_training_grid_v2',
         effective_batch_size=64,
     ).export(Path('config/beauty_multi_decoder_training_grid_scheduler.yaml'))
 

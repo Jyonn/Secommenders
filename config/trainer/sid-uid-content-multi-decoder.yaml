@@ -21,3 +21,8 @@ decoder:
       score_normalization: ${multi_score_normalization:zscore}$
       temperature_uid: ${multi_temperature_uid:1.0}$
       temperature_sid: ${multi_temperature_sid:1.0}$
+
+trainer:
+  multi:
+    uid_loss_weight: ${multi_uid_loss_weight:1.0}$
+    sid_loss_weight: ${multi_sid_loss_weight:1.0}$

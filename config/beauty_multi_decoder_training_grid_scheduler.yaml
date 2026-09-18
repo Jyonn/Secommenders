@@ -1,4 +1,4 @@
-name: beauty_multi_decoder_training_grid
+name: beauty_multi_decoder_training_grid_v2
 poll_interval_seconds: 15
 effective_batch_size: 64
 experiments:
@@ -22,7 +22,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 1
     multi_sid_loss_weight: 1
-    alignment_weight: 0
+    alignment: 0
   batch_size_cap: 16
 - name: beauty_multi_train_u1_s1_a0p05
   args:
@@ -44,7 +44,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 1
     multi_sid_loss_weight: 1
-    alignment_weight: 0.05
+    alignment: 0.05
   batch_size_cap: 16
 - name: beauty_multi_train_u1_s1_a0p1
   args:
@@ -66,7 +66,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 1
     multi_sid_loss_weight: 1
-    alignment_weight: 0.1
+    alignment: 0.1
   batch_size_cap: 16
 - name: beauty_multi_train_u0p75_s1p25_a0
   args:
@@ -88,7 +88,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 0.75
     multi_sid_loss_weight: 1.25
-    alignment_weight: 0
+    alignment: 0
   batch_size_cap: 16
 - name: beauty_multi_train_u0p75_s1p25_a0p05
   args:
@@ -110,7 +110,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 0.75
     multi_sid_loss_weight: 1.25
-    alignment_weight: 0.05
+    alignment: 0.05
   batch_size_cap: 16
 - name: beauty_multi_train_u0p75_s1p25_a0p1
   args:
@@ -132,7 +132,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 0.75
     multi_sid_loss_weight: 1.25
-    alignment_weight: 0.1
+    alignment: 0.1
   batch_size_cap: 16
 - name: beauty_multi_train_u0p5_s1p5_a0
   args:
@@ -154,7 +154,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 0.5
     multi_sid_loss_weight: 1.5
-    alignment_weight: 0
+    alignment: 0
   batch_size_cap: 16
 - name: beauty_multi_train_u0p5_s1p5_a0p05
   args:
@@ -176,7 +176,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 0.5
     multi_sid_loss_weight: 1.5
-    alignment_weight: 0.05
+    alignment: 0.05
   batch_size_cap: 16
 - name: beauty_multi_train_u0p5_s1p5_a0p1
   args:
@@ -198,7 +198,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 0.5
     multi_sid_loss_weight: 1.5
-    alignment_weight: 0.1
+    alignment: 0.1
   batch_size_cap: 16
 - name: beauty_multi_train_u0p25_s1p75_a0
   args:
@@ -220,7 +220,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 0.25
     multi_sid_loss_weight: 1.75
-    alignment_weight: 0
+    alignment: 0
   batch_size_cap: 16
 - name: beauty_multi_train_u0p25_s1p75_a0p05
   args:
@@ -242,7 +242,7 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 0.25
     multi_sid_loss_weight: 1.75
-    alignment_weight: 0.05
+    alignment: 0.05
   batch_size_cap: 16
 - name: beauty_multi_train_u0p25_s1p75_a0p1
   args:
@@ -264,6 +264,5 @@ experiments:
     content_embedding_dim: 0
     multi_uid_loss_weight: 0.25
     multi_sid_loss_weight: 1.75
-    alignment_weight: 0.1
+    alignment: 0.1
   batch_size_cap: 16
-
