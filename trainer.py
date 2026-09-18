@@ -665,6 +665,8 @@ class Trainer:
         # them to their historical defaults so we only reject true structural
         # mismatches instead of schema evolution.
         normalized_saved_config = dict(saved_config)
+        if normalized_saved_config.get('representation_pair_bias') is None:
+            normalized_saved_config['representation_pair_bias'] = False
         normalized_saved_config.setdefault(
             'representation_pair_bias_mode',
             'shared' if normalized_saved_config.get('representation_pair_bias') else 'none',
